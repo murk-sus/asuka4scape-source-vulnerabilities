@@ -107,9 +107,24 @@ final class AppState: ObservableObject {
         append("")
 
         Task.detached(priority: .userInitiated) {
+            let poller = Task.detached(priority: .background) {
+                while !Task.isCancelled {
+                    let s = g_nk.slide
+                    let b = g_nk.base
+                    if s != 0 {
+                        await MainActor.run {
+                            if self.slide != s { self.slide = s }
+                            if self.base != b { self.base = b }
+                        }
+                    }
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                }
+            }
+
             let r = nk_full_exploit()
             let sl = g_nk.slide
             let bs = g_nk.base
+            poller.cancel()
 
             await MainActor.run {
                 self.running = false
@@ -134,9 +149,24 @@ final class AppState: ObservableObject {
         append("")
 
         Task.detached(priority: .userInitiated) {
+            let poller = Task.detached(priority: .background) {
+                while !Task.isCancelled {
+                    let s = g_nk.slide
+                    let b = g_nk.base
+                    if s != 0 {
+                        await MainActor.run {
+                            if self.slide != s { self.slide = s }
+                            if self.base != b { self.base = b }
+                        }
+                    }
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                }
+            }
+
             let r = nk_detect_slide()
             let sl = g_nk.slide
             let bs = g_nk.base
+            poller.cancel()
 
             await MainActor.run {
                 self.running = false
