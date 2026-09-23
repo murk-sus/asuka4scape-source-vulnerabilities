@@ -57,6 +57,29 @@ struct AboutView: View {
             } header: {
                 Text(state.t("Open Source", "Открытый код"))
             }
+
+            Section {
+                NavigationLink {
+                    AcknowledgementsView().environmentObject(state)
+                } label: {
+                    HStack {
+                        Text(state.t("Acknowledgements", "Благодарности"))
+                            .foregroundColor(.primary)
+                        Spacer(minLength: 8)
+                    }
+                    .contentShape(Rectangle())
+                }
+            }
+
+            Section {
+            } footer: {
+                Text(state.t(
+                    "Not affiliated with Apple. Use at your own risk.",
+                    "Не связано с Apple. Используйте на свой риск."
+                ))
+                .font(.footnote)
+                .foregroundColor(.secondary)
+            }
         }
         .listStyle(.insetGrouped)
         .navigationTitle(state.t("About", "О программе"))
@@ -107,8 +130,8 @@ struct AboutView: View {
                 Divider().padding(.vertical, 4)
 
                 Text(state.t(
-                    "Research project for iOS.",
-                    "Исследовательский проект для iOS."
+                    "Research project for iOS. SwiftUI frontend, C backend, reproducible build pipeline.",
+                    "Исследовательский проект для iOS. SwiftUI-фронтенд, C-бэкенд, воспроизводимая сборка."
                 ))
                 .font(.footnote)
                 .foregroundColor(.secondary)
@@ -121,7 +144,7 @@ struct AboutView: View {
         Button {
             openURL(url)
         } label: {
-            HStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 Text(title)
                     .foregroundStyle(.tint)
                     .font(.body)
