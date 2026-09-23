@@ -74,13 +74,7 @@ struct ContentView: View {
                     HStack {
                         Text(state.t("Status", "Статус"))
                         Spacer()
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(state.status.color)
-                                .frame(width: 7, height: 7)
-                            Text(state.status.label)
-                                .foregroundColor(state.status.color)
-                        }
+                        statusBadge
                     }
 
                     Button {
@@ -138,5 +132,21 @@ struct ContentView: View {
                 DeviceInfoView()
             }
         }
+    }
+
+    private var statusBadge: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(state.status.color)
+                .frame(width: 7, height: 7)
+                .shadow(color: state.status.color.opacity(0.7), radius: 4)
+            Text(state.status.label)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundColor(state.status.color)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(state.status.color.opacity(0.12))
+        .clipShape(Capsule())
     }
 }
