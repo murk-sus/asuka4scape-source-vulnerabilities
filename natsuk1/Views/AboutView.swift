@@ -7,11 +7,6 @@ struct AboutView: View {
 
     private let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")!
 
-    private let tgChannelUser = "jailbreak_IOS_and_tweaks"
-    private let tgChatUser    = "IOS_pelmeshechnaia"
-    private let tgOwnerUser   = "eurogoth"
-    private let tgCoOwnerUser = "asuka4scape_developer"
-
     private var appName: String {
         Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
             ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
@@ -51,66 +46,38 @@ struct AboutView: View {
 
             Section {
                 actionRow(
-                    title: state.t("Channel", "Канал"),
-                    subtitle: state.t("Telegram channel", "Телеграм-канал"),
-                    symbol: "paperplane.fill",
-                    tint: Color(red: 0.15, green: 0.60, blue: 0.90)
+                    title: state.t("Report an Issue", "Сообщить о проблеме"),
+                    subtitle: "github.com",
+                    symbol: "exclamationmark.bubble.fill",
+                    tint: Color(red: 0.95, green: 0.45, blue: 0.35)
                 ) {
-                    openTelegram(user: tgChannelUser)
+                    openURL(repoURL.appendingPathComponent("issues/new"))
                 }
 
                 actionRow(
-                    title: state.t("Chat", "Чат"),
-                    subtitle: state.t("Telegram chat", "Телеграм-чат"),
-                    symbol: "bubble.left.and.bubble.right.fill",
+                    title: state.t("Releases", "Релизы"),
+                    subtitle: state.t("Changelog & downloads", "История версий и загрузки"),
+                    symbol: "tag.fill",
                     tint: Color(red: 0.20, green: 0.72, blue: 0.52)
                 ) {
-                    openTelegram(user: tgChatUser)
+                    openURL(repoURL.appendingPathComponent("releases"))
                 }
             } header: {
-                Text(state.t("Community", "Сообщество"))
+                Text(state.t("Support", "Поддержка"))
             }
 
             Section {
-                actionRow(
-                    title: state.t("Owner", "Владелец"),
-                    subtitle: state.t("Maintainer", "Сопровождающий"),
-                    symbol: "person.crop.circle.fill",
-                    tint: Color(red: 0.60, green: 0.40, blue: 0.90)
-                ) {
-                    openTelegram(user: tgOwnerUser)
-                }
-
-                actionRow(
-                    title: state.t("Co-Owner", "Со-владелец"),
-                    subtitle: state.t("Contributor", "Контрибьютор"),
-                    symbol: "person.2.fill",
-                    tint: Color(red: 0.95, green: 0.55, blue: 0.20)
-                ) {
-                    openTelegram(user: tgCoOwnerUser)
-                }
-            } header: {
-                Text(state.t("Thanks To", "Благодарности"))
-            }
-
-            Section {
-                actionRow(
+                gitHubRow(
                     title: state.t("Source Repository", "Исходный код"),
-                    subtitle: "github.com",
-                    symbol: "chevron.left.forwardslash.chevron.right",
-                    tint: Color(red: 0.20, green: 0.52, blue: 1.0)
-                ) {
-                    openURL(repoURL)
-                }
+                    subtitle: "murk-sus/natsuk1",
+                    url: repoURL
+                )
 
-                actionRow(
-                    title: state.t("License · MIT", "Лицензия · MIT"),
-                    subtitle: "MIT",
-                    symbol: "doc.text.fill",
-                    tint: .gray
-                ) {
-                    openURL(repoURL.appendingPathComponent("blob/main/LICENSE"))
-                }
+                gitHubRow(
+                    title: state.t("MIT License", "Лицензия MIT"),
+                    subtitle: state.t("Open source license", "Лицензия открытого кода"),
+                    url: repoURL.appendingPathComponent("blob/main/LICENSE")
+                )
             } header: {
                 Text(state.t("Open Source", "Открытый код"))
             }
@@ -208,6 +175,48 @@ struct AboutView: View {
         .buttonStyle(.plain)
     }
 
+    private func gitHubRow(title: String, subtitle: String, url: URL) -> some View {
+        Button {
+            openURL(url)
+        } label: {
+            HStack(spacing: 12) {
+                githubIcon
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .foregroundStyle(.tint)
+                        .font(.body)
+                        .fontWeight(.medium)
+
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.tint)
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var githubIcon: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(red: 0.11, green: 0.12, blue: 0.13))
+            Image(systemName: "cat.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+        }
+        .frame(width: 30, height: 30)
+    }
+
     private func iconBox(_ name: String, tint: Color) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -217,20 +226,5 @@ struct AboutView: View {
                 .foregroundStyle(.white)
         }
         .frame(width: 30, height: 30)
-    }
-
-    private func openTelegram(user: String) {
-        let appScheme = URL(string: "tg://resolve?domain=\(user)")!
-        let webScheme = URL(string: "https://t.me/\(user)")!
-
-        if UIApplication.shared.canOpenURL(appScheme) {
-            UIApplication.shared.open(appScheme, options: [:]) { ok in
-                if !ok {
-                    UIApplication.shared.open(webScheme)
-                }
-            }
-        } else {
-            UIApplication.shared.open(webScheme)
-        }
     }
 }
