@@ -31,12 +31,12 @@ enum DeviceName {
         return "\(friendly()) · \(chip()) · iOS \(v.majorVersion).\(v.minorVersion)"
     }
 
-    private static func machineID() -> String {
-        var sysinfo = utsname()
-        uname(&sysinfo)
-        return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
-            guard let v = el.value as? Int8, v != 0 else { return id }
-            return id + String(UnicodeScalar(UInt8(v)))
+    static func machineID() -> String {
+        var info = utsname()
+        uname(&info)
+        return withUnsafeBytes(of: &info.machine) { raw -> String in
+            let ptr = raw.baseAddress!.assumingMemoryBound(to: CChar.self)
+            return String(cString: ptr)
         }
     }
 
