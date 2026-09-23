@@ -65,19 +65,22 @@ struct ContentView: View {
                     Button {
                         show_device = true
                     } label: {
-                        HStack {
+                        HStack(spacing: 8) {
                             Text(state.t("Device", "Устройство"))
                                 .foregroundColor(.primary)
-                            Spacer()
+                            Spacer(minLength: 8)
                             Text(DeviceName.full())
-                                .font(.system(.body, design: .monospaced))
+                                .font(.system(size: 13, design: .monospaced))
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.7)
                             Image(systemName: "chevron.right")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color(UIColor.tertiaryLabel))
                         }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 } header: {
                     Label(state.t("Runtime", "Состояние"), systemImage: "waveform.path.ecg")
                 }
