@@ -85,8 +85,8 @@ struct AboutView: View {
                 Text(state.t("Disclaimer", "Дисклеймер"))
             } footer: {
                 Text(state.t(
-                    "natsuk1 is an independent research project and is not affiliated with, endorsed by, or sponsored by Apple Inc. The software is provided \"as is\", without warranty of any kind. You are solely responsible for how you use it and for any consequences that follow.",
-                    "natsuk1 — независимый исследовательский проект, не связанный с Apple Inc., не одобрен и не спонсируется ею. Программное обеспечение предоставляется «как есть», без каких-либо гарантий. Ответственность за использование и его последствия полностью лежит на вас."
+                    "This is an independent research project and is not affiliated with, endorsed by, or sponsored by Apple Inc. The software is provided \"as is\", without warranty of any kind. You are solely responsible for how you use it and for any consequences that follow.",
+                    "Это независимый исследовательский проект, не связанный с Apple Inc., не одобрен и не спонсируется ею. Программное обеспечение предоставляется «как есть», без каких-либо гарантий. Ответственность за использование и его последствия полностью лежит на вас."
                 ))
                 .font(.footnote)
                 .foregroundColor(.secondary)
@@ -141,8 +141,8 @@ struct AboutView: View {
                 Divider().padding(.vertical, 4)
 
                 Text(state.t(
-                    "Research project for iOS. SwiftUI frontend, C backend, reproducible build pipeline.",
-                    "Исследовательский проект для iOS. SwiftUI-фронтенд, C-бэкенд, воспроизводимая сборка."
+                    "Research project for iOS.",
+                    "Исследовательский проект для iOS."
                 ))
                 .font(.footnote)
                 .foregroundColor(.secondary)
