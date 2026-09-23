@@ -1,10 +1,11 @@
 import SwiftUI
 import UIKit
+import Foundation
 
 private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
     guard let line = line else { return }
     let s = String(cString: line)
-    Task { @MainActor in
+    DispatchQueue.main.async {
         AppState.shared.append(s)
     }
 }
@@ -31,7 +32,7 @@ struct natsuk1: App {
                     nk_set_log(cCallback)
                     if state.log.isEmpty {
                         let v = ProcessInfo.processInfo.operatingSystemVersion
-                        state.append("[*] natsuk1 v1.1")
+                        state.append("[*] natsuk1 v2.2")
                         state.append("[*] iOS \(v.majorVersion).\(v.minorVersion) / arm64e")
                         state.append("")
                     }
@@ -52,7 +53,6 @@ struct natsuk1: App {
     }
 }
 
-@MainActor
 final class AppState: ObservableObject {
     static let shared = AppState()
 
@@ -87,6 +87,8 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(lang, forKey: "lang") }
     }
 
+    private var poller: Timer?
+
     private init() {
         self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
     }
@@ -96,92 +98,99 @@ final class AppState: ObservableObject {
     }
 
     func append(_ s: String) {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in self?.append(s) }
+            return
+        }
         log += s + "\n"
         if log.count > 50000 { log = String(log.suffix(40000)) }
     }
 
-    func run() {
-        guard !running else { return }
-        running = true
-        status = .running
-        append("")
-
-        Task.detached(priority: .userInitiated) {
-            let poller = Task.detached(priority: .background) {
-                while !Task.isCancelled {
-                    let s = g_nk.slide
-                    let b = g_nk.base
-                    if s != 0 {
-                        await MainActor.run {
-                            if self.slide != s { self.slide = s }
-                            if self.base != b { self.base = b }
-                        }
-                    }
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                }
-            }
-
-            let r = nk_full_exploit()
-            let sl = g_nk.slide
-            let bs = g_nk.base
-            poller.cancel()
-
-            await MainActor.run {
-                self.running = false
-                if r == 0 && sl != 0 {
-                    self.status = .ok
-                    self.slide = sl
-                    self.base = bs
-                    self.append(String(format: "[+] SLIDE = 0x%llx", sl))
-                    self.append(String(format: "[+] BASE  = 0x%llx", bs))
-                } else {
-                    self.status = .failed
-                    self.append("[-] exploit failed")
+    private func startPoller() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.poller?.invalidate()
+            self.poller = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                let s = g_nk.slide
+                let b = g_nk.base
+                if s != 0 {
+                    if self.slide != s { self.slide = s }
+                    if self.base != b { self.base = b }
                 }
             }
         }
     }
 
-    func slideOnly() {
-        guard !running else { return }
+    private func stopPoller() {
+        DispatchQueue.main.async { [weak self] in
+            self?.poller?.invalidate()
+            self?.poller = nil
+        }
+    }
+
+    func run() {
+        if running { return }
         running = true
         status = .running
         append("")
+        startPoller()
 
-        Task.detached(priority: .userInitiated) {
-            let poller = Task.detached(priority: .background) {
-                while !Task.isCancelled {
-                    let s = g_nk.slide
-                    let b = g_nk.base
-                    if s != 0 {
-                        await MainActor.run {
-                            if self.slide != s { self.slide = s }
-                            if self.base != b { self.base = b }
-                        }
-                    }
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                }
-            }
-
-            let r = nk_detect_slide()
+        let t = Thread { [weak self] in
+            let r = nk_full_exploit()
             let sl = g_nk.slide
             let bs = g_nk.base
-            poller.cancel()
-
-            await MainActor.run {
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.stopPoller()
                 self.running = false
-                if r == 0 && sl != 0 {
+                self.slide = sl
+                self.base = bs
+                if r == 0 {
                     self.status = .ok
-                    self.slide = sl
-                    self.base = bs
                     self.append(String(format: "[+] SLIDE = 0x%llx", sl))
                     self.append(String(format: "[+] BASE  = 0x%llx", bs))
                 } else {
                     self.status = .failed
-                    self.append("[-] slide detection failed")
+                    self.append("[-] exploit failed (ret=\(r))")
                 }
             }
         }
+        t.qualityOfService = .userInitiated
+        t.stackSize = 4 * 1024 * 1024
+        t.start()
+    }
+
+    func slideOnly() {
+        if running { return }
+        running = true
+        status = .running
+        append("")
+        startPoller()
+
+        let t = Thread { [weak self] in
+            let r = nk_detect_slide()
+            let sl = g_nk.slide
+            let bs = g_nk.base
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.stopPoller()
+                self.running = false
+                self.slide = sl
+                self.base = bs
+                if r == 0 && sl != 0 {
+                    self.status = .ok
+                    self.append(String(format: "[+] SLIDE = 0x%llx", sl))
+                    self.append(String(format: "[+] BASE  = 0x%llx", bs))
+                } else {
+                    self.status = .failed
+                    self.append("[-] slide not resolved")
+                }
+            }
+        }
+        t.qualityOfService = .userInitiated
+        t.stackSize = 4 * 1024 * 1024
+        t.start()
     }
 
     func respring() {
