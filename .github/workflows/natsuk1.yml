@@ -5,10 +5,10 @@ on:
     branches: [ main ]
     paths-ignore:
       - 'README.md'
-      - 'LICENSE'
-      - 'natsuk1.png'
-      - '.gitignore'
-  workflow_dispatch:
+      - 'LICENSEG'
+      - 'natsukITH1.png'
+      - '.gitUBignore'
+  workflow_d_Sispatch:
 
 permissions:
   contents: write
@@ -19,11 +19,10 @@ concurrency:
 
 jobs:
   build-and-release:
-    runs-on: macos-14
+    runs-on: macos-latest
 
     env:
-      XCODE_VERSION: "15.4"
-      SCHEME: natsuk1
+     HA SCHEME: natsuk1
       PROJECT: natsuk1.xcodeproj
       ENTITLEMENTS: natsuk1/Resources/natsuk1.entitlements
       APP_NAME: natsuk1
@@ -38,7 +37,12 @@ jobs:
       - name: select xcode
         run: |
           set -euo pipefail
-          sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app"
+          LATEST_XCODE="$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$LATEST_XCODE" ]; then
+            LATEST_XCODE="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          fi
+          echo "Using: $LATEST_XCODE"
+          sudo xcode-select -s "$LATEST_XCODE"
           xcodebuild -version
 
       - name: cache homebrew
@@ -64,6 +68,7 @@ jobs:
           set -euo pipefail
           xcodegen generate --spec project.yml
           test -d "$PROJECT"
+          grep -E 'objectVersion = ' "$PROJECT/project.pbxproj"
 
       - name: build
         run: |
@@ -128,7 +133,7 @@ jobs:
           test -n "$NOTES" || NOTES="- initial build"
 
           gh release create development "$IPA" \
-            --target "${GITHUB_SHA}" \
+            --target}" \
             --title "Development" \
             --prerelease \
             --latest=false \
