@@ -10,7 +10,3 @@
 - [@murk-sus](https://github.com/murk-sus)
 - [@eurogoth](https://t.me/eurogoth)
 - [@asuka4scape](https://t.me/asuka4scape_developer)
-
-## License
-
-AGPL-3.0
