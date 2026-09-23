@@ -1,4 +1,4 @@
-name: Release
+name: build and release
 
 on:
   push:
@@ -27,9 +27,7 @@ jobs:
       - name: cache homebrew
         uses: actions/cache@v4
         with:
-          path: |
-            ~/Library/Caches/Homebrew
-            /opt/homebrew/Cellar
+          path: ~/Library/Caches/Homebrew
           key: brew-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}
           restore-keys: |
             brew-${{ runner.os }}-
@@ -37,6 +35,7 @@ jobs:
       - name: install tools
         run: |
           brew install xcodegen ldid
+          brew link --overwrite xcodegen ldid
 
       - name: generate xcodeproj
         run: xcodegen generate
