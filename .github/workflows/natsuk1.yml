@@ -5,10 +5,10 @@ on:
     branches: [ main ]
     paths-ignore:
       - 'README.md'
-      - 'LICENSEG'
-      - 'natsukITH1.png'
-      - '.gitUBignore'
-  workflow_d_Sispatch:
+      - 'LICENSE'
+      - 'natsuk1.png'
+      - '.gitignore'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,11 +22,11 @@ jobs:
     runs-on: macos-latest
 
     env:
-     HA SCHEME: natsuk1
-      PROJECT: natsuk1.xcodeproj
-      ENTITLEMENTS: natsuk1/Resources/natsuk1.entitlements
-      APP_NAME: natsuk1
-      IPA: natsuk1.ipa
+      SCHEME: "natsuk1"
+      PROJECT: "natsuk1.xcodeproj"
+      ENTITLEMENTS: "natsuk1/Resources/natsuk1.entitlements"
+      APP_NAME: "natsuk1"
+      IPA: "natsuk1.ipa"
 
     steps:
       - name: checkout
@@ -133,7 +133,7 @@ jobs:
           test -n "$NOTES" || NOTES="- initial build"
 
           gh release create development "$IPA" \
-            --target}" \
+            --target "${GITHUB_SHA}" \
             --title "Development" \
             --prerelease \
             --latest=false \
