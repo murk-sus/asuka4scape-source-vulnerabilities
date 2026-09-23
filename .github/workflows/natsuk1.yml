@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   build-and-release:
-    runs-on: macos-latest
+    runs-on: macos-14
 
     steps:
       - name: checkout
@@ -27,14 +27,13 @@ jobs:
       - name: install tools
         run: |
           brew install xcodegen ldid
-          sudo gem install xcpretty
 
       - name: generate xcodeproj
         run: xcodegen generate
 
       - name: build
         run: |
-          set -euo pipefail
+          set -uo pipefail
           xcodebuild \
             -project natsuk1.xcodeproj \
             -scheme natsuk1 \
@@ -43,8 +42,18 @@ jobs:
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
-            build | xcpretty
+            build 2>&1 | tee build.log
 
+      - name: show errors
+        if: always()
+        run: |
+          echo "=== ERRORS ==="
+          grep -iE "error:|fatal error" build.log || echo "no error lines"
+
+      - name: sign + package
+        if: success()
+        run: |
+          set -euo pipefail
           APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
           ldid -Snatsuk1/Resources/natsuk1.entitlements "$APP_PATH/natsuk1"
 
@@ -55,7 +64,15 @@ jobs:
           ditto -c -k --keepParent Payload natsuk1.ipa
           rm -rf Payload
 
+      - name: upload ipa
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: natsuk1-ipa
+          path: natsuk1.ipa
+
       - name: release
+        if: success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
