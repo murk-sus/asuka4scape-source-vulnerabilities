@@ -1,0 +1,7 @@
+natsuk1.xcodeproj/
+build/
+DerivedData/
+*.ipa
+.DS_Store
+xcuserdata/
+*.xcuserstate
