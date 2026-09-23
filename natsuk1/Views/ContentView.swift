@@ -114,16 +114,6 @@ struct ContentView: View {
                 } header: {
                     Label(state.t("Logs", "Логи"), systemImage: "apple.terminal")
                 }
-
-                Section {
-                    Toggle(state.t("Auto Run on Launch", "Автозапуск при открытии"), isOn: $auto_run)
-                    Toggle(state.t("Verbose Output", "Подробный вывод"), isOn: $verbose)
-                } header: {
-                    Label(state.t("Options", "Опции"), systemImage: "gearshape")
-                } footer: {
-                    Text(state.t("Auto Run executes the exploit automatically when the app opens. Verbose shows detailed kernel logs.",
-                                 "Автозапуск выполняет эксплойт сразу при открытии. Подробный вывод показывает детальные логи ядра."))
-                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("natsuk1")
