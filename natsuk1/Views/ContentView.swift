@@ -16,15 +16,37 @@ struct ContentView: View {
                     Button {
                         state.run()
                     } label: {
-                        Label(state.t("Run Exploit", "Запустить эксплойт"), systemImage: "bolt.fill")
+                        HStack(spacing: 10) {
+                            Image(systemName: "bolt.fill")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            Text(state.t("Run Exploit", "Запустить эксплойт"))
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                            if state.running {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            }
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                     .disabled(state.running)
 
                     Button {
                         state.slideOnly()
                     } label: {
-                        Label(state.t("Slide Only", "Только слайд"), systemImage: "scope")
+                        HStack(spacing: 10) {
+                            Image(systemName: "scope")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            Text(state.t("Slide Only", "Только слайд"))
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                     .disabled(state.running)
                 } header: {
                     Label(state.t("Actions", "Действия"), systemImage: "play.circle")
