@@ -1,0 +1,44 @@
+name: natsuk1
+options:
+  bundleIdPrefix: com.natsuk1
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    CLANG_ENABLE_MODULES: YES
+    CLANG_ENABLE_OBJC_ARC: YES
+    ENABLE_BITCODE: NO
+    ONLY_ACTIVE_ARCH: NO
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGNING_ALLOWED: NO
+
+targets:
+  natsuk1:
+    type: application
+    platform: iOS
+    sources:
+      - path: natsuk1/natsuk1.swift
+      - path: natsuk1/bridging.h
+      - path: natsuk1/Helpers
+      - path: natsuk1/Views
+      - path: natsuk1/Exploit
+      - path: natsuk1/Resources/Assets.xcassets
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit
+        PRODUCT_NAME: natsuk1
+        INFOPLIST_FILE: natsuk1/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: natsuk1/Resources/natsuk1.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: natsuk1/bridging.h
+        OTHER_CFLAGS: -std=c17 -O2 -Wno-everything
+        OTHER_LDFLAGS: -lpthread
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
