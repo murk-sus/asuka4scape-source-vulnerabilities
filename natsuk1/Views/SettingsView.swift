@@ -5,9 +5,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var state: AppState
 
-    @AppStorage("auto_run")   private var auto_run: Bool = false
-    @AppStorage("verbose")    private var verbose: Bool = true
-    @AppStorage("kread_mode") private var kread_mode: String = "necp"
+    @AppStorage("auto_run") private var auto_run: Bool = false
+    @AppStorage("verbose")  private var verbose: Bool = true
 
     var body: some View {
         NavigationStack {
@@ -23,21 +22,13 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    LogView()
-                        .environmentObject(state)
-                        .modifier(TerminalPlatter())
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                    Toggle(state.t("Auto Run on Launch", "Автозапуск при открытии"), isOn: $auto_run)
+                    Toggle(state.t("Verbose Output", "Подробный вывод"), isOn: $verbose)
                 } header: {
-                    Label(state.t("Logs", "Логи"), systemImage: "apple.terminal")
+                    Label(state.t("Options", "Опции"), systemImage: "gearshape")
                 }
 
                 Section {
-                    Picker(state.t("Method", "Метод"), selection: $kread_mode) {
-                        Text("NECP").tag("necp")
-                        Text("MACH").tag("mach")
-                    }
-                    .pickerStyle(.segmented)
-
                     Button {
                         state.run()
                     } label: {
@@ -74,16 +65,6 @@ struct SettingsView: View {
                     .disabled(state.running)
                 } header: {
                     Label(state.t("Exploit", "Эксплойт"), systemImage: "wrench.and.screwdriver")
-                } footer: {
-                    Text(state.t("**NECP:** uses syscalls 501/502 for the read primitive. **MACH:** fallback via OOL spray.",
-                                 "**NECP:** использует syscall 501/502 для примитива чтения. **MACH:** запасной вариант через OOL spray."))
-                }
-
-                Section {
-                    Toggle(state.t("Auto Run on Launch", "Автозапуск при открытии"), isOn: $auto_run)
-                    Toggle(state.t("Verbose Output", "Подробный вывод"), isOn: $verbose)
-                } header: {
-                    Label(state.t("Options", "Опции"), systemImage: "gearshape")
                 }
 
                 Section {
