@@ -59,6 +59,15 @@ struct AboutView: View {
             }
 
             Section {
+                linkRow(
+                    state.t("Star on GitHub", "Звезда на GitHub"),
+                    url: repoURL.appendingPathComponent("stargazers")
+                )
+            } header: {
+                Text(state.t("Community", "Сообщество"))
+            }
+
+            Section {
                 NavigationLink {
                     AcknowledgementsView().environmentObject(state)
                 } label: {
@@ -72,10 +81,12 @@ struct AboutView: View {
             }
 
             Section {
+            } header: {
+                Text(state.t("Disclaimer", "Дисклеймер"))
             } footer: {
                 Text(state.t(
-                    "Not affiliated with Apple. Use at your own risk.",
-                    "Не связано с Apple. Используйте на свой риск."
+                    "natsuk1 is an independent research project and is not affiliated with, endorsed by, or sponsored by Apple Inc. The software is provided \"as is\", without warranty of any kind. You are solely responsible for how you use it and for any consequences that follow.",
+                    "natsuk1 — независимый исследовательский проект, не связанный с Apple Inc., не одобрен и не спонсируется ею. Программное обеспечение предоставляется «как есть», без каких-либо гарантий. Ответственность за использование и его последствия полностью лежит на вас."
                 ))
                 .font(.footnote)
                 .foregroundColor(.secondary)
