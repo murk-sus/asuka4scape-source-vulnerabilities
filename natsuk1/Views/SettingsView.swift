@@ -30,45 +30,6 @@ struct SettingsView: View {
 
                 Section {
                     Button {
-                        state.run()
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "bolt.fill")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 20)
-                            Text(state.t("Run Exploit", "Запустить эксплойт"))
-                                .foregroundStyle(.primary)
-                            Spacer(minLength: 8)
-                            if state.running {
-                                ProgressView().scaleEffect(0.8)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(state.running)
-
-                    Button {
-                        state.slideOnly()
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "scope")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 20)
-                            Text(state.t("Slide Only", "Только слайд"))
-                                .foregroundStyle(.primary)
-                            Spacer(minLength: 8)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(state.running)
-                } header: {
-                    Label(state.t("Exploit", "Эксплойт"), systemImage: "wrench.and.screwdriver")
-                }
-
-                Section {
-                    Button {
                         state.respring()
                     } label: {
                         HStack(spacing: 10) {
