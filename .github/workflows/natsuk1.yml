@@ -7,78 +7,45 @@ on:
       - 'README.md'
       - 'LICENSE'
       - 'natsuk1.png'
-      - '.gitignore'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ios-release-development
   cancel-in-progress: true
 
 jobs:
   build-and-release:
     runs-on: macos-latest
 
-    env:
-      SCHEME: "natsuk1"
-      PROJECT: "natsuk1.xcodeproj"
-      ENTITLEMENTS: "natsuk1/Resources/natsuk1.entitlements"
-      APP_NAME: "natsuk1"
-      IPA: "natsuk1.ipa"
-
     steps:
       - name: checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 10
-
-      - name: select xcode
-        run: |
-          set -euo pipefail
-          LATEST_XCODE="$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)"
-          if [ -z "$LATEST_XCODE" ]; then
-            LATEST_XCODE="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
-          fi
-          echo "Using: $LATEST_XCODE"
-          sudo xcode-select -s "$LATEST_XCODE"
-          xcodebuild -version
 
       - name: cache homebrew
         uses: actions/cache@v4
         with:
-          path: |
-            ~/Library/Caches/Homebrew
-            ~/Library/Caches/Homebrew/downloads
-          key: brew-${{ runner.os }}-${{ hashFiles('.github/workflows/natsuk1.yml') }}
+          path: ~/Library/Caches/Homebrew
+          key: brew-${{ runner.os }}-${{ hashFiles('project.yml') }}
           restore-keys: |
             brew-${{ runner.os }}-
 
       - name: install tools
         run: |
-          set -euo pipefail
-          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
-          brew list ldid     >/dev/null 2>&1 || brew install ldid
-          xcodegen --version
-          ldid -v || true
+          brew install xcodegen ldid
+          brew link --overwrite xcodegen ldid
 
       - name: generate xcodeproj
-        run: |
-          set -euo pipefail
-          xcodegen generate --spec project.yml
-          test -d "$PROJECT"
-          grep -E 'objectVersion = ' "$PROJECT/project.pbxproj"
+        run: xcodegen generate
 
       - name: build
         run: |
           set -euo pipefail
-
-          rm -rf build Payload "$IPA"
-
           xcodebuild \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
+            -project natsuk1.xcodeproj \
+            -scheme natsuk1 \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -86,53 +53,30 @@ jobs:
             -parallelizeTargets \
             -jobs "$(sysctl -n hw.ncpu)" \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
             build -quiet
 
           APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
-          test -n "$APP_PATH"
-          test -d "$APP_PATH"
+          ldid -Snatsuk1/Resources/natsuk1.entitlements "$APP_PATH/natsuk1"
 
-          BIN="$APP_PATH/$APP_NAME"
-          test -f "$BIN"
-
-          if [ -f "$ENTITLEMENTS" ]; then
-            ldid -S"$ENTITLEMENTS" "$BIN"
-          fi
-
+          rm -rf Payload natsuk1.ipa
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          ditto -c -k --keepParent Payload "$IPA"
+          ditto -c -k --keepParent Payload natsuk1.ipa
           rm -rf Payload
 
-          test -f "$IPA"
-          ls -la "$IPA"
-
-      - name: upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: natsuk1-ipa
-          path: natsuk1.ipa
-          if-no-files-found: error
-          retention-days: 14
-
       - name: release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test -f "$IPA"
 
           if gh release view development >/dev/null 2>&1; then
             gh release delete development --yes --cleanup-tag
           fi
 
           NOTES="$(git log -5 --pretty=format:'- %h %s')"
-          test -n "$NOTES" || NOTES="- initial build"
 
-          gh release create development "$IPA" \
+          gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" \
             --title "Development" \
             --prerelease \
