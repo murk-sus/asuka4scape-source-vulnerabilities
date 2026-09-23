@@ -7,6 +7,7 @@ struct ContentView: View {
     @AppStorage("auto_run") private var auto_run: Bool = false
 
     @State private var show_settings: Bool = false
+    @State private var show_device: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -61,12 +62,21 @@ struct ContentView: View {
                         }
                     }
 
-                    HStack {
-                        Text(state.t("Device", "Устройство"))
-                        Spacer()
-                        Text(device_info())
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(.secondary)
+                    Button {
+                        show_device = true
+                    } label: {
+                        HStack {
+                            Text(state.t("Device", "Устройство"))
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Text(DeviceName.full())
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundColor(.tertiary)
+                        }
                     }
                 } header: {
                     Label(state.t("Runtime", "Состояние"), systemImage: "waveform.path.ecg")
@@ -108,17 +118,9 @@ struct ContentView: View {
                 SettingsView()
                     .environmentObject(state)
             }
+            .sheet(isPresented: $show_device) {
+                DeviceInfoView()
+            }
         }
-    }
-
-    private func device_info() -> String {
-        var sysinfo = utsname()
-        uname(&sysinfo)
-        let machine = Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
-            guard let v = el.value as? Int8, v != 0 else { return id }
-            return id + String(UnicodeScalar(UInt8(v)))
-        }
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        return "\(machine) · iOS \(v.majorVersion).\(v.minorVersion)"
     }
 }
