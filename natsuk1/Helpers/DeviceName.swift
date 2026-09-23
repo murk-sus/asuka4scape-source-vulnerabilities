@@ -23,6 +23,11 @@ enum DeviceName {
 
     static func full() -> String {
         let v = ProcessInfo.processInfo.operatingSystemVersion
+        return "\(short()) · iOS \(v.majorVersion).\(v.minorVersion)"
+    }
+
+    static func fullWithChip() -> String {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
         return "\(friendly()) · \(chip()) · iOS \(v.majorVersion).\(v.minorVersion)"
     }
 
