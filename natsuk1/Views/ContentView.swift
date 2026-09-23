@@ -117,9 +117,7 @@ struct ContentView: View {
 
                 Section {
                     Toggle(state.t("Auto Run on Launch", "Автозапуск при открытии"), isOn: $auto_run)
-                        .tint(.green)
                     Toggle(state.t("Verbose Output", "Подробный вывод"), isOn: $verbose)
-                        .tint(.green)
                 } header: {
                     Label(state.t("Options", "Опции"), systemImage: "gearshape")
                 } footer: {
