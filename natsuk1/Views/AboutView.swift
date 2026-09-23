@@ -7,6 +7,11 @@ struct AboutView: View {
 
     private let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")!
 
+    private let tgChannelUser = "jailbreak_IOS_and_tweaks"
+    private let tgChatUser    = "IOS_pelmeshechnaia"
+    private let tgOwnerUser   = "eurogoth"
+    private let tgCoOwnerUser = "asuka4scape_developer"
+
     private var appName: String {
         Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
             ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
@@ -45,37 +50,15 @@ struct AboutView: View {
             }
 
             Section {
-                componentRow(
-                    name: "XNU",
-                    desc: state.t("Apple kernel target", "Целевое ядро Apple"),
-                    version: "iOS 16+",
-                    symbol: "cpu",
-                    tint: .blue,
-                    url: nil
-                )
-                componentRow(
-                    name: "XcodeGen",
-                    desc: state.t("Project generator", "Генератор проекта"),
-                    version: "2.46+",
-                    symbol: "hammer.fill",
-                    tint: .orange,
-                    url: URL(string: "https://github.com/yonaskolb/XcodeGen")
-                )
-                componentRow(
-                    name: "ldid",
-                    desc: state.t("Entitlements signer", "Подпись entitlements"),
-                    version: "2.1.5+",
-                    symbol: "signature",
-                    tint: .purple,
-                    url: URL(string: "https://github.com/ProcursusTeam/ldid")
-                )
+                telegramRow(state.t("Channel", "Канал"), user: tgChannelUser)
+                telegramRow(state.t("Chat", "Чат"),       user: tgChatUser)
             } header: {
-                Text(state.t("Components", "Компоненты"))
+                Text(state.t("Community", "Сообщество"))
             }
 
             Section {
-                creditRow("@eurogoth",             url: URL(string: "https://t.me/eurogoth"))
-                creditRow("@asuka4scape_developer", url: URL(string: "https://t.me/asuka4scape_developer"))
+                telegramRow(state.t("Owner", "Владелец"),        user: tgOwnerUser)
+                telegramRow(state.t("Co-Owner", "Со-владелец"), user: tgCoOwnerUser)
             } header: {
                 Text(state.t("Thanks To", "Благодарности"))
             }
@@ -95,15 +78,6 @@ struct AboutView: View {
                 )
             } header: {
                 Text(state.t("Open Source", "Открытый код"))
-            }
-
-            Section {
-            } footer: {
-                Text(state.t(
-                    "natsuk1 is a research project. Not a jailbreak, not a tool for compromising devices you do not own.",
-                    "natsuk1 — исследовательский проект. Не джейлбрейк и не инструмент для взлома чужих устройств."
-                ))
-                .font(.footnote)
             }
         }
         .listStyle(.insetGrouped)
@@ -165,56 +139,19 @@ struct AboutView: View {
         }
     }
 
-    private func componentRow(name: String, desc: String, version: String,
-                              symbol: String, tint: Color, url: URL?) -> some View {
+    private func telegramRow(_ title: String, user: String) -> some View {
         Button {
-            if let url { openURL(url) }
-        } label: {
-            HStack(spacing: 12) {
-                symbolBox(symbol, tint: tint)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name)
-                        .foregroundColor(.primary)
-                    Text(desc)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                }
-
-                Spacer(minLength: 8)
-
-                Text(version)
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundColor(.secondary)
-
-                if url != nil {
-                    Image(systemName: "link")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(UIColor.tertiaryLabel))
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(url == nil)
-    }
-
-    private func creditRow(_ name: String, url: URL?) -> some View {
-        Button {
-            if let url { openURL(url) }
+            openTelegram(user: user)
         } label: {
             HStack(spacing: 10) {
-                Text(name)
+                Text(title)
                     .foregroundColor(.primary)
 
                 Spacer(minLength: 8)
 
-                if url != nil {
-                    Image(systemName: "paperplane.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.15, green: 0.60, blue: 0.90))
-                }
+                Image(systemName: "paperplane.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.15, green: 0.60, blue: 0.90))
             }
             .contentShape(Rectangle())
         }
@@ -248,5 +185,20 @@ struct AboutView: View {
                 .foregroundStyle(.white)
         }
         .frame(width: 30, height: 30)
+    }
+
+    private func openTelegram(user: String) {
+        let appScheme = URL(string: "tg://resolve?domain=\(user)")!
+        let webScheme = URL(string: "https://t.me/\(user)")!
+
+        if UIApplication.shared.canOpenURL(appScheme) {
+            UIApplication.shared.open(appScheme, options: [:]) { ok in
+                if !ok {
+                    UIApplication.shared.open(webScheme)
+                }
+            }
+        } else {
+            UIApplication.shared.open(webScheme)
+        }
     }
 }
