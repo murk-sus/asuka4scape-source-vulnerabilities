@@ -3,6 +3,7 @@ import UIKit
 
 struct AboutView: View {
     @Environment(\.openURL) private var openURL
+    @EnvironmentObject var state: AppState
 
     private let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")!
 
@@ -46,7 +47,7 @@ struct AboutView: View {
             Section {
                 componentRow(
                     name: "XNU",
-                    desc: "Apple kernel target",
+                    desc: state.t("Apple kernel target", "Целевое ядро Apple"),
                     version: "iOS 16+",
                     symbol: "cpu",
                     tint: .blue,
@@ -54,7 +55,7 @@ struct AboutView: View {
                 )
                 componentRow(
                     name: "XcodeGen",
-                    desc: "Project generator",
+                    desc: state.t("Project generator", "Генератор проекта"),
                     version: "2.46+",
                     symbol: "hammer.fill",
                     tint: .orange,
@@ -62,14 +63,14 @@ struct AboutView: View {
                 )
                 componentRow(
                     name: "ldid",
-                    desc: "Entitlements signer",
+                    desc: state.t("Entitlements signer", "Подпись entitlements"),
                     version: "2.1.5+",
                     symbol: "signature",
                     tint: .purple,
                     url: URL(string: "https://github.com/ProcursusTeam/ldid")
                 )
             } header: {
-                Text("Components")
+                Text(state.t("Components", "Компоненты"))
             }
 
             Section {
@@ -78,34 +79,37 @@ struct AboutView: View {
                 creditRow("eurogoth",       url: URL(string: "https://t.me/eurogoth"))
                 creditRow("asuka4scape",    url: URL(string: "https://t.me/asuka4scape_developer"))
             } header: {
-                Text("Thanks To")
+                Text(state.t("Thanks To", "Благодарности"))
             }
 
             Section {
                 linkRow(
-                    "Source Repository",
+                    state.t("Source Repository", "Исходный код"),
                     symbol: "chevron.left.forwardslash.chevron.right",
                     tint: .blue,
                     url: repoURL
                 )
                 linkRow(
-                    "License · MIT",
+                    state.t("License · MIT", "Лицензия · MIT"),
                     symbol: "doc.text",
                     tint: .gray,
                     url: repoURL.appendingPathComponent("blob/main/LICENSE")
                 )
             } header: {
-                Text("Open Source")
+                Text(state.t("Open Source", "Открытый код"))
             }
 
             Section {
             } footer: {
-                Text("natsuk1 is a research scaffold. Not a jailbreak, not a tool for compromising devices you do not own.")
-                    .font(.footnote)
+                Text(state.t(
+                    "natsuk1 is a research scaffold. Not a jailbreak, not a tool for compromising devices you do not own.",
+                    "natsuk1 — исследовательский каркас. Не джейлбрейк и не инструмент для взлома чужих устройств."
+                ))
+                .font(.footnote)
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("About")
+        .navigationTitle(state.t("About", "О программе"))
         .navigationBarTitleDisplayMode(.inline)
         .tint(.blue)
     }
@@ -138,7 +142,7 @@ struct AboutView: View {
                     .font(.title3)
                     .fontWeight(.semibold)
 
-                Text("Version \(version) (\(build))")
+                Text("\(state.t("Version", "Версия")) \(version) (\(build))")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
 
@@ -152,10 +156,13 @@ struct AboutView: View {
 
                 Divider().padding(.vertical, 4)
 
-                Text("Research scaffold for iOS. SwiftUI frontend, C backend, reproducible CI build.")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(state.t(
+                    "Research scaffold for iOS. SwiftUI frontend, C backend, reproducible CI build.",
+                    "Исследовательский каркас для iOS. SwiftUI-фронтенд, C-бэкенд, воспроизводимая сборка в CI."
+                ))
+                .font(.footnote)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
