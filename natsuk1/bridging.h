@@ -2,6 +2,8 @@
 #define NATSUK1_BRIDGING_H
 
 #include <stdint.h>
+#include <stddef.h>
+#include <sys/types.h>
 
 typedef struct {
     uint64_t slide;
