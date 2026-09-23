@@ -1,1 +1,76 @@
+name: build and release
 
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+      - 'natsuk1.png'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-release-development
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: install tools
+        run: |
+          brew install xcodegen ldid
+          sudo gem install xcpretty
+
+      - name: generate xcodeproj
+        run: xcodegen generate
+
+      - name: build
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project natsuk1.xcodeproj \
+            -scheme natsuk1 \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build | xcpretty
+
+          APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
+          ldid -Snatsuk1/Resources/natsuk1.entitlements "$APP_PATH/natsuk1"
+
+          rm -rf Payload natsuk1.ipa
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+
+          ditto -c -k --keepParent Payload natsuk1.ipa
+          rm -rf Payload
+
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if gh release view development >/dev/null 2>&1; then
+            gh release delete development --yes --cleanup-tag
+          fi
+
+          NOTES="$(git log -5 --pretty=format:'- %h %s')"
+
+          gh release create development natsuk1.ipa \
+            --target "${GITHUB_SHA}" \
+            --title "Development" \
+            --prerelease \
+            --notes "automated build from ${GITHUB_SHA}
+
+          ${NOTES}"
