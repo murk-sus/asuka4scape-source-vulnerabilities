@@ -75,7 +75,7 @@ struct ContentView: View {
                                 .lineLimit(1)
                             Image(systemName: "chevron.right")
                                 .font(.caption2)
-                                .foregroundColor(.tertiary)
+                                .foregroundStyle(.tertiary)
                         }
                     }
                 } header: {
