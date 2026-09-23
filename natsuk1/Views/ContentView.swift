@@ -24,8 +24,7 @@ struct ContentView: View {
                                 .foregroundStyle(.primary)
                             Spacer(minLength: 8)
                             if state.running {
-                                ProgressView()
-                                    .scaleEffect(0.8)
+                                ProgressView().scaleEffect(0.8)
                             }
                         }
                         .contentShape(Rectangle())
@@ -118,7 +117,9 @@ struct ContentView: View {
 
                 Section {
                     Toggle(state.t("Auto Run on Launch", "Автозапуск при открытии"), isOn: $auto_run)
+                        .tint(.green)
                     Toggle(state.t("Verbose Output", "Подробный вывод"), isOn: $verbose)
+                        .tint(.green)
                 } header: {
                     Label(state.t("Options", "Опции"), systemImage: "gearshape")
                 } footer: {
@@ -136,7 +137,9 @@ struct ContentView: View {
                         show_settings = true
                     } label: {
                         Image(systemName: "gear")
+                            .foregroundStyle(Color(UIColor.tertiaryLabel))
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .sheet(isPresented: $show_settings) {
