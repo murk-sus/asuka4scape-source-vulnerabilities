@@ -71,6 +71,15 @@ struct ContentView: View {
                             .foregroundColor(state.base == 0 ? .secondary : .green)
                     }
 
+                    HStack {
+                        Text(state.t("Status", "Статус"))
+                        Spacer()
+                        Circle()
+                            .fill(state.status.color)
+                            .frame(width: 8, height: 8)
+                            .shadow(color: state.status.color.opacity(0.7), radius: 3)
+                    }
+
                     Button {
                         show_device = true
                     } label: {
@@ -108,14 +117,6 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .tint(.blue)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 8) {
-                        Text("natsuk1")
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                        statusPill
-                    }
-                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         show_settings = true
@@ -134,12 +135,5 @@ struct ContentView: View {
                 DeviceInfoView()
             }
         }
-    }
-
-    private var statusPill: some View {
-        Circle()
-            .fill(state.status.color)
-            .frame(width: 8, height: 8)
-            .shadow(color: state.status.color.opacity(0.7), radius: 3)
     }
 }
