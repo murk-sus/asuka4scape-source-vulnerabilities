@@ -74,10 +74,8 @@ struct AboutView: View {
             }
 
             Section {
-                creditRow("flong69zxc-max", url: URL(string: "https://github.com/flong69zxc-max"))
-                creditRow("murk-sus",       url: URL(string: "https://github.com/murk-sus"))
-                creditRow("eurogoth",       url: URL(string: "https://t.me/eurogoth"))
-                creditRow("asuka4scape",    url: URL(string: "https://t.me/asuka4scape_developer"))
+                creditRow("@eurogoth",             url: URL(string: "https://t.me/eurogoth"))
+                creditRow("@asuka4scape_developer", url: URL(string: "https://t.me/asuka4scape_developer"))
             } header: {
                 Text(state.t("Thanks To", "Благодарности"))
             }
@@ -102,8 +100,8 @@ struct AboutView: View {
             Section {
             } footer: {
                 Text(state.t(
-                    "natsuk1 is a research scaffold. Not a jailbreak, not a tool for compromising devices you do not own.",
-                    "natsuk1 — исследовательский каркас. Не джейлбрейк и не инструмент для взлома чужих устройств."
+                    "natsuk1 is a research project. Not a jailbreak, not a tool for compromising devices you do not own.",
+                    "natsuk1 — исследовательский проект. Не джейлбрейк и не инструмент для взлома чужих устройств."
                 ))
                 .font(.footnote)
             }
@@ -157,8 +155,8 @@ struct AboutView: View {
                 Divider().padding(.vertical, 4)
 
                 Text(state.t(
-                    "Research scaffold for iOS. SwiftUI frontend, C backend, reproducible CI build.",
-                    "Исследовательский каркас для iOS. SwiftUI-фронтенд, C-бэкенд, воспроизводимая сборка в CI."
+                    "Research project for iOS.",
+                    "Исследовательский проект для iOS."
                 ))
                 .font(.footnote)
                 .foregroundColor(.secondary)
@@ -206,14 +204,16 @@ struct AboutView: View {
         Button {
             if let url { openURL(url) }
         } label: {
-            HStack {
+            HStack(spacing: 10) {
                 Text(name)
                     .foregroundColor(.primary)
-                Spacer()
+
+                Spacer(minLength: 8)
+
                 if url != nil {
-                    Image(systemName: "link")
+                    Image(systemName: "paperplane.fill")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(UIColor.tertiaryLabel))
+                        .foregroundStyle(Color(red: 0.15, green: 0.60, blue: 0.90))
                 }
             }
             .contentShape(Rectangle())
