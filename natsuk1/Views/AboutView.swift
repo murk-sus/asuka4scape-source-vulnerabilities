@@ -45,37 +45,13 @@ struct AboutView: View {
             }
 
             Section {
-                actionRow(
-                    title: state.t("Report an Issue", "Сообщить о проблеме"),
-                    subtitle: "github.com",
-                    symbol: "exclamationmark.bubble.fill",
-                    tint: Color(red: 0.95, green: 0.45, blue: 0.35)
-                ) {
-                    openURL(repoURL.appendingPathComponent("issues/new"))
-                }
-
-                actionRow(
-                    title: state.t("Releases", "Релизы"),
-                    subtitle: state.t("Changelog & downloads", "История версий и загрузки"),
-                    symbol: "tag.fill",
-                    tint: Color(red: 0.20, green: 0.72, blue: 0.52)
-                ) {
-                    openURL(repoURL.appendingPathComponent("releases"))
-                }
-            } header: {
-                Text(state.t("Support", "Поддержка"))
-            }
-
-            Section {
-                gitHubRow(
-                    title: state.t("Source Repository", "Исходный код"),
-                    subtitle: "murk-sus/natsuk1",
+                linkRow(
+                    state.t("Source Repository", "Исходный код"),
                     url: repoURL
                 )
 
-                gitHubRow(
-                    title: state.t("MIT License", "Лицензия MIT"),
-                    subtitle: state.t("Open source license", "Лицензия открытого кода"),
+                linkRow(
+                    state.t("MIT License", "Лицензия MIT"),
                     url: repoURL.appendingPathComponent("blob/main/LICENSE")
                 )
             } header: {
@@ -141,90 +117,25 @@ struct AboutView: View {
         }
     }
 
-    private func actionRow(title: String,
-                           subtitle: String?,
-                           symbol: String,
-                           tint: Color,
-                           action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                iconBox(symbol, tint: tint)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .foregroundColor(.primary)
-                        .font(.body)
-
-                    if let subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-
-                Spacer(minLength: 8)
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color(UIColor.tertiaryLabel))
-            }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func gitHubRow(title: String, subtitle: String, url: URL) -> some View {
+    private func linkRow(_ title: String, url: URL) -> some View {
         Button {
             openURL(url)
         } label: {
-            HStack(spacing: 12) {
-                githubIcon
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .foregroundStyle(.tint)
-                        .font(.body)
-                        .fontWeight(.medium)
-
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                }
+            HStack(spacing: 8) {
+                Text(title)
+                    .foregroundStyle(.tint)
+                    .font(.body)
+                    .fontWeight(.medium)
 
                 Spacer(minLength: 8)
 
-                Image(systemName: "arrow.up.right")
-                    .font(.system(size: 12, weight: .bold))
+                Image(systemName: "link")
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.tint)
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 2)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    private var githubIcon: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(red: 0.11, green: 0.12, blue: 0.13))
-            Image(systemName: "cat.fill")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white)
-        }
-        .frame(width: 30, height: 30)
-    }
-
-    private func iconBox(_ name: String, tint: Color) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(tint.gradient)
-            Image(systemName: name)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
-        }
-        .frame(width: 30, height: 30)
     }
 }
