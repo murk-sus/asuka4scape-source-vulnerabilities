@@ -1,18 +1,43 @@
 import SwiftUI
 import UIKit
 
-struct ContentView: View {
+struct SettingsView: View {
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var state: AppState
-    @AppStorage("verbose")  private var verbose: Bool = true
-    @AppStorage("auto_run") private var auto_run: Bool = false
 
-    @State private var show_settings: Bool = false
-    @State private var show_device: Bool = false
+    @AppStorage("auto_run")   private var auto_run: Bool = false
+    @AppStorage("verbose")    private var verbose: Bool = true
+    @AppStorage("kread_mode") private var kread_mode: String = "necp"
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
+                    Picker(state.t("Language", "Язык"), selection: $state.lang) {
+                        Text("English").tag("en")
+                        Text("Русский").tag("ru")
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Label(state.t("Interface", "Интерфейс"), systemImage: "globe")
+                }
+
+                Section {
+                    LogView()
+                        .environmentObject(state)
+                        .modifier(TerminalPlatter())
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                } header: {
+                    Label(state.t("Logs", "Логи"), systemImage: "apple.terminal")
+                }
+
+                Section {
+                    Picker(state.t("Method", "Метод"), selection: $kread_mode) {
+                        Text("NECP").tag("necp")
+                        Text("MACH").tag("mach")
+                    }
+                    .pickerStyle(.segmented)
+
                     Button {
                         state.run()
                     } label: {
@@ -48,106 +73,47 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                     .disabled(state.running)
                 } header: {
-                    Label(state.t("Actions", "Действия"), systemImage: "play.circle")
+                    Label(state.t("Exploit", "Эксплойт"), systemImage: "wrench.and.screwdriver")
                 } footer: {
-                    Text(state.t("**Run Exploit** executes the full chain. **Slide Only** runs KASLR bypass in isolation.",
-                                 "**Запустить эксплойт** выполняет всю цепочку. **Только слайд** запускает только обход KASLR."))
+                    Text(state.t("**NECP:** uses syscalls 501/502 for the read primitive. **MACH:** fallback via OOL spray.",
+                                 "**NECP:** использует syscall 501/502 для примитива чтения. **MACH:** запасной вариант через OOL spray."))
                 }
 
                 Section {
-                    HStack {
-                        Text(state.t("Slide", "Слайд"))
-                        Spacer()
-                        Text(state.slide == 0 ? "—" : String(format: "0x%llx", state.slide))
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(state.slide == 0 ? .secondary : .green)
-                    }
+                    Toggle(state.t("Auto Run on Launch", "Автозапуск при открытии"), isOn: $auto_run)
+                    Toggle(state.t("Verbose Output", "Подробный вывод"), isOn: $verbose)
+                } header: {
+                    Label(state.t("Options", "Опции"), systemImage: "gearshape")
+                }
 
-                    HStack {
-                        Text(state.t("Base", "База"))
-                        Spacer()
-                        Text(state.base == 0 ? "—" : String(format: "0x%llx", state.base))
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(state.base == 0 ? .secondary : .green)
-                    }
-
-                    HStack {
-                        Text(state.t("Status", "Статус"))
-                        Spacer()
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(state.status.color)
-                                .frame(width: 7, height: 7)
-                            Text(state.status.label)
-                                .foregroundColor(state.status.color)
-                        }
-                    }
-
+                Section {
                     Button {
-                        show_device = true
+                        state.respring()
                     } label: {
-                        HStack(spacing: 8) {
-                            Text(state.t("Device", "Устройство"))
-                                .foregroundColor(.primary)
+                        HStack(spacing: 10) {
+                            Image(systemName: "arrow.clockwise")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            Text(state.t("Respring", "Респринг"))
+                                .foregroundStyle(.primary)
                             Spacer(minLength: 8)
-                            Text(DeviceName.full())
-                                .font(.system(size: 13, design: .monospaced))
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.7)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(Color(UIColor.tertiaryLabel))
                         }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 } header: {
-                    Label(state.t("Runtime", "Состояние"), systemImage: "waveform.path.ecg")
-                }
-
-                Section {
-                    LogView()
-                        .environmentObject(state)
-                        .modifier(TerminalPlatter())
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                } header: {
-                    Label(state.t("Logs", "Логи"), systemImage: "apple.terminal")
-                }
-
-                Section {
-                    Toggle(state.t("Auto Run on Launch", "Автозапуск при открытии"), isOn: $auto_run)
-                        .tint(.green)
-                    Toggle(state.t("Verbose Output", "Подробный вывод"), isOn: $verbose)
-                        .tint(.green)
-                } header: {
-                    Label(state.t("Options", "Опции"), systemImage: "gearshape")
-                } footer: {
-                    Text(state.t("Auto Run executes the exploit automatically when the app opens. Verbose shows detailed kernel logs.",
-                                 "Автозапуск выполняет эксплойт сразу при открытии. Подробный вывод показывает детальные логи ядра."))
+                    Label(state.t("Tools", "Инструменты"), systemImage: "wrench.and.screwdriver")
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("natsuk1")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationTitle(state.t("Settings", "Настройки"))
+            .navigationBarTitleDisplayMode(.inline)
             .tint(.blue)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        show_settings = true
-                    } label: {
-                        Image(systemName: "gear")
-                            .foregroundStyle(Color(UIColor.tertiaryLabel))
-                    }
-                    .buttonStyle(.plain)
+                    Button(state.t("Done", "Готово")) { dismiss() }
+                        .fontWeight(.semibold)
                 }
-            }
-            .sheet(isPresented: $show_settings) {
-                SettingsView()
-                    .environmentObject(state)
-            }
-            .sheet(isPresented: $show_device) {
-                DeviceInfoView()
             }
         }
     }
