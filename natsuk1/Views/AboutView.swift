@@ -50,32 +50,67 @@ struct AboutView: View {
             }
 
             Section {
-                telegramRow(state.t("Channel", "Канал"), user: tgChannelUser)
-                telegramRow(state.t("Chat", "Чат"),       user: tgChatUser)
+                actionRow(
+                    title: state.t("Channel", "Канал"),
+                    subtitle: state.t("Telegram channel", "Телеграм-канал"),
+                    symbol: "paperplane.fill",
+                    tint: Color(red: 0.15, green: 0.60, blue: 0.90)
+                ) {
+                    openTelegram(user: tgChannelUser)
+                }
+
+                actionRow(
+                    title: state.t("Chat", "Чат"),
+                    subtitle: state.t("Telegram chat", "Телеграм-чат"),
+                    symbol: "bubble.left.and.bubble.right.fill",
+                    tint: Color(red: 0.20, green: 0.72, blue: 0.52)
+                ) {
+                    openTelegram(user: tgChatUser)
+                }
             } header: {
                 Text(state.t("Community", "Сообщество"))
             }
 
             Section {
-                telegramRow(state.t("Owner", "Владелец"),        user: tgOwnerUser)
-                telegramRow(state.t("Co-Owner", "Со-владелец"), user: tgCoOwnerUser)
+                actionRow(
+                    title: state.t("Owner", "Владелец"),
+                    subtitle: state.t("Maintainer", "Сопровождающий"),
+                    symbol: "person.crop.circle.fill",
+                    tint: Color(red: 0.60, green: 0.40, blue: 0.90)
+                ) {
+                    openTelegram(user: tgOwnerUser)
+                }
+
+                actionRow(
+                    title: state.t("Co-Owner", "Со-владелец"),
+                    subtitle: state.t("Contributor", "Контрибьютор"),
+                    symbol: "person.2.fill",
+                    tint: Color(red: 0.95, green: 0.55, blue: 0.20)
+                ) {
+                    openTelegram(user: tgCoOwnerUser)
+                }
             } header: {
                 Text(state.t("Thanks To", "Благодарности"))
             }
 
             Section {
-                linkRow(
-                    state.t("Source Repository", "Исходный код"),
+                actionRow(
+                    title: state.t("Source Repository", "Исходный код"),
+                    subtitle: "github.com",
                     symbol: "chevron.left.forwardslash.chevron.right",
-                    tint: .blue,
-                    url: repoURL
-                )
-                linkRow(
-                    state.t("License · MIT", "Лицензия · MIT"),
-                    symbol: "doc.text",
-                    tint: .gray,
-                    url: repoURL.appendingPathComponent("blob/main/LICENSE")
-                )
+                    tint: Color(red: 0.20, green: 0.52, blue: 1.0)
+                ) {
+                    openURL(repoURL)
+                }
+
+                actionRow(
+                    title: state.t("License · MIT", "Лицензия · MIT"),
+                    subtitle: "MIT",
+                    symbol: "doc.text.fill",
+                    tint: .gray
+                ) {
+                    openURL(repoURL.appendingPathComponent("blob/main/LICENSE"))
+                }
             } header: {
                 Text(state.t("Open Source", "Открытый код"))
             }
@@ -139,44 +174,41 @@ struct AboutView: View {
         }
     }
 
-    private func telegramRow(_ title: String, user: String) -> some View {
-        Button {
-            openTelegram(user: user)
-        } label: {
-            HStack(spacing: 10) {
-                Text(title)
-                    .foregroundColor(.primary)
+    private func actionRow(title: String,
+                           subtitle: String?,
+                           symbol: String,
+                           tint: Color,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                iconBox(symbol, tint: tint)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .foregroundColor(.primary)
+                        .font(.body)
+
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                }
 
                 Spacer(minLength: 8)
 
-                Image(systemName: "paperplane.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.15, green: 0.60, blue: 0.90))
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func linkRow(_ title: String, symbol: String, tint: Color, url: URL?) -> some View {
-        Button {
-            if let url { openURL(url) }
-        } label: {
-            HStack(spacing: 12) {
-                symbolBox(symbol, tint: tint)
-                Text(title)
-                    .foregroundColor(.primary)
-                Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color(UIColor.tertiaryLabel))
             }
+            .padding(.vertical, 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
-    private func symbolBox(_ name: String, tint: Color) -> some View {
+    private func iconBox(_ name: String, tint: Color) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(tint.gradient)
