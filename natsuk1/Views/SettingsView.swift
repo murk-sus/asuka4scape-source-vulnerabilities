@@ -85,6 +85,22 @@ struct SettingsView: View {
                 } header: {
                     Label(state.t("Tools", "Инструменты"), systemImage: "wrench.and.screwdriver")
                 }
+
+                Section {
+                    NavigationLink {
+                        AboutView().environmentObject(state)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            Text(state.t("About", "О программе"))
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle(state.t("Settings", "Настройки"))
