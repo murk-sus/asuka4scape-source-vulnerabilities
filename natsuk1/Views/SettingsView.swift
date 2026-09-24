@@ -6,24 +6,65 @@ struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var offsets: OffsetsStore
 
-    @AppStorage("auto_run") private var auto_run: Bool = false
-    @AppStorage("verbose")  private var verbose: Bool = true
-    @AppStorage("keep_alive") private var keep_alive: Bool = false
+    @AppStorage("auto_run")     private var auto_run: Bool = false
+    @AppStorage("verbose")      private var verbose: Bool = true
+    @AppStorage("keep_alive")   private var keep_alive: Bool = false
+    @AppStorage("exploit_mode") private var exploit_mode: String = "Hybrid"
+
+    private var appName: String {
+        Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+            ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+            ?? "natsuk1"
+    }
+
+    private var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+    }
+
+    private var appIcon: UIImage? {
+        if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+           let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+           let files = primary["CFBundleIconFiles"] as? [String],
+           let last = files.last {
+            return UIImage(named: last)
+        }
+        return UIImage(named: "AppIcon")
+    }
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
                     HStack(spacing: 14) {
-                        appIcon
-                            .frame(width: 56, height: 56)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        Group {
+                            if let icon = appIcon {
+                                Image(uiImage: icon)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            } else {
+                                ZStack {
+                                    LinearGradient(
+                                        colors: [
+                                            Color(red: 0.65, green: 0.30, blue: 0.90),
+                                            Color(red: 0.30, green: 0.65, blue: 0.95)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                    Image(systemName: "bolt.fill")
+                                        .font(.system(size: 26, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                }
+                            }
+                        }
+                        .frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("natsuk1")
+                            Text(appName)
                                 .font(.title3)
                                 .fontWeight(.semibold)
-                            Text("Version 4.1 (Release)")
+                            Text("Version \(version) (Release)")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                         }
@@ -38,75 +79,72 @@ struct SettingsView: View {
                             Image(systemName: "info.circle")
                                 .foregroundStyle(.secondary)
                                 .frame(width: 20)
-                            Text(state.t("Credits", "Авторы"))
+                            Text("Credits")
                                 .foregroundStyle(.primary)
                             Spacer(minLength: 8)
                         }
                         .contentShape(Rectangle())
                     }
                 } header: {
-                    Label(state.t("About", "О программе"), systemImage: "info.circle")
+                    Label("About", systemImage: "info.circle")
                 }
 
                 Section {
+                    Picker("", selection: $exploit_mode) {
+                        Text("VFS").tag("VFS")
+                        Text("SBX").tag("SBX")
+                        Text("Hybrid").tag("Hybrid")
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+
                     NavigationLink {
-                        OffsetsView()
-                            .environmentObject(offsets)
+                        OffsetsView().environmentObject(offsets)
                     } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: "list.number")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 20)
-                            Text(state.t("Modify Offsets", "Изменить оффсеты"))
+                            Text("Modify Offsets")
                                 .foregroundStyle(.primary)
                             Spacer(minLength: 8)
-                            Text("\(offsets.filledCount())/\(offsets.totalCount())")
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundColor(.secondary)
                         }
                         .contentShape(Rectangle())
                     }
                 } header: {
-                    Label(state.t("Exploit", "Эксплойт"), systemImage: "cpu")
+                    Label("Exploit", systemImage: "cpu")
                 }
 
                 Section {
                     HStack(spacing: 10) {
-                        Image(systemName: "doc.text")
-                            .foregroundStyle(.secondary)
-                            .frame(width: 20)
-                        Text(state.t("Kernelcache", "Kernelcache"))
+                        Text("Fetch Kernelcache")
                             .foregroundStyle(.secondary)
                         Spacer(minLength: 8)
-                        Text(state.t("Not loaded", "Не загружен"))
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(.secondary)
                     }
+                    Button {
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text("Import Kernelcache")
+                                .foregroundStyle(.tint)
+                            Spacer(minLength: 8)
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.tint)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 } header: {
-                    Label(state.t("Kernelcache", "Kernelcache"), systemImage: "shippingbox")
+                    Label("Kernelcache", systemImage: "shippingbox")
                 } footer: {
-                    Text(state.t(
-                        "Kernelcache loading is not implemented in this build.",
-                        "Загрузка kernelcache в этой сборке не реализована."
-                    ))
-                }
-
-                Section {
-                    Picker(state.t("Language", "Язык"), selection: $state.lang) {
-                        Text("English").tag("en")
-                        Text("Русский").tag("ru")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("NOTE: You will have to click \"Run Exploit\" before you can fetch kernelcache.")
+                        Text("Deleting and refetching kernelcache may fix some issues. Try doing this before opening a GitHub issue or asking for support in our Discord server.")
                     }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Label(state.t("Interface", "Интерфейс"), systemImage: "globe")
                 }
 
                 Section {
-                    Toggle(state.t("Auto Run on Launch", "Автозапуск при открытии"), isOn: $auto_run)
-                    Toggle(state.t("Verbose Output", "Подробный вывод"), isOn: $verbose)
-                    Toggle(state.t("Keep Alive", "Не выгружать"), isOn: $keep_alive)
+                    Toggle("Auto Run on Launch", isOn: $auto_run)
+                    Toggle("Verbose Output", isOn: $verbose)
+                    Toggle("Keep Alive", isOn: $keep_alive)
                 } header: {
-                    Label(state.t("Options", "Опции"), systemImage: "gearshape")
+                    Label("Options", systemImage: "gearshape")
                 }
 
                 Section {
@@ -117,7 +155,7 @@ struct SettingsView: View {
                             Image(systemName: "arrow.clockwise")
                                 .foregroundStyle(.secondary)
                                 .frame(width: 20)
-                            Text(state.t("Respring", "Респринг"))
+                            Text("Respring")
                                 .foregroundStyle(.primary)
                             Spacer(minLength: 8)
                         }
@@ -132,7 +170,7 @@ struct SettingsView: View {
                             Image(systemName: "trash")
                                 .foregroundStyle(.secondary)
                                 .frame(width: 20)
-                            Text(state.t("Clear Log", "Очистить лог"))
+                            Text("Clear Log")
                                 .foregroundStyle(.primary)
                             Spacer(minLength: 8)
                         }
@@ -140,35 +178,19 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.plain)
                 } header: {
-                    Label(state.t("Tools", "Инструменты"), systemImage: "wrench.and.screwdriver")
+                    Label("Tools", systemImage: "wrench.and.screwdriver")
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle(state.t("Settings", "Настройки"))
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.large)
             .tint(.blue)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(state.t("Done", "Готово")) { dismiss() }
+                    Button("Done") { dismiss() }
                         .fontWeight(.semibold)
                 }
             }
-        }
-    }
-
-    private var appIcon: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.65, green: 0.30, blue: 0.90),
-                    Color(red: 0.30, green: 0.65, blue: 0.95)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            Image(systemName: "ladybug.fill")
-                .font(.system(size: 26, weight: .semibold))
-                .foregroundStyle(.white)
         }
     }
 }
