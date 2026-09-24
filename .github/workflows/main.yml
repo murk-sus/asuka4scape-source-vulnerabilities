@@ -1,4 +1,4 @@
-name: Add kernel R/W primitive
+name: Final fix - kernel R/W, Run Exploit, inspect nk_api
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-  add:
+  fix:
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -15,6 +15,20 @@ jobs:
 
       - name: Install tools
         run: brew install xcodegen ldid
+
+      - name: Inspect nk_api.c
+        run: |
+          echo "=== nk_api.c ==="
+          cat natsuk1/Exploit/nk_api.c || echo "not found"
+          echo ""
+          echo "=== nk_api.h ==="
+          cat natsuk1/Exploit/nk_api.h || echo "not found"
+          echo ""
+          echo "=== nk_offsets.h (first 60 lines) ==="
+          head -60 natsuk1/Exploit/nk_offsets.h || echo "not found"
+          echo ""
+          echo "=== nk_syscalls.c ==="
+          cat natsuk1/Exploit/nk_syscalls.c || echo "not found"
 
       - name: Write nk_krw.h
         run: |
@@ -61,17 +75,14 @@ jobs:
             '' \
             'int nk_krw_init(void) {' \
             '    if (g_ready) return 0;' \
-            '' \
             '    mach_port_t kt = MACH_PORT_NULL;' \
             '    kern_return_t kr = task_for_pid(mach_task_self(), 0, &kt);' \
-            '' \
             '    if (kr != KERN_SUCCESS || kt == MACH_PORT_NULL) {' \
             '        snprintf(g_error, sizeof(g_error),' \
             '                 "task_for_pid(0) failed: %s (0x%x)",' \
             '                 mach_error_string(kr), kr);' \
             '        return -1;' \
             '    }' \
-            '' \
             '    g_kernel_task = kt;' \
             '    g_ready = 1;' \
             '    snprintf(g_error, sizeof(g_error), "ready");' \
@@ -80,7 +91,6 @@ jobs:
             '' \
             'int nk_kread(uint64_t addr, void *buf, size_t size) {' \
             '    if (!g_ready && nk_krw_init() != 0) return -1;' \
-            '' \
             '    mach_vm_size_t out_size = 0;' \
             '    kern_return_t kr = mach_vm_read_overwrite(' \
             '        g_kernel_task,' \
@@ -89,7 +99,6 @@ jobs:
             '        (mach_vm_address_t)(uintptr_t)buf,' \
             '        &out_size' \
             '    );' \
-            '' \
             '    if (kr != KERN_SUCCESS) {' \
             '        snprintf(g_error, sizeof(g_error),' \
             '                 "read 0x%llX failed: %s",' \
@@ -109,14 +118,12 @@ jobs:
             '' \
             'int nk_kwrite(uint64_t addr, const void *buf, size_t size) {' \
             '    if (!g_ready && nk_krw_init() != 0) return -1;' \
-            '' \
             '    kern_return_t kr = mach_vm_write(' \
             '        g_kernel_task,' \
             '        (mach_vm_address_t)addr,' \
             '        (vm_offset_t)(uintptr_t)buf,' \
             '        (mach_msg_type_number_t)size' \
             '    );' \
-            '' \
             '    if (kr != KERN_SUCCESS) {' \
             '        snprintf(g_error, sizeof(g_error),' \
             '                 "write 0x%llX failed: %s",' \
@@ -170,8 +177,7 @@ jobs:
             '' \
             '    @discardableResult' \
             '    func bootstrap() -> Bool {' \
-            '        let rc = nk_krw_init()' \
-            '        return rc == 0' \
+            '        return nk_krw_init() == 0' \
             '    }' \
             '' \
             '    func read64(_ addr: UInt64) -> UInt64? {' \
@@ -199,26 +205,21 @@ jobs:
             '        guard bootstrap() else {' \
             '            return "bootstrap failed: \\(lastError)"' \
             '        }' \
-            '' \
             '        let baseStr = OffsetsStore.shared.value(for: "off_kernel_base")' \
             '        guard baseStr.hasPrefix("0x"),' \
             '              let baseAddr = UInt64(baseStr.dropFirst(2), radix: 16),' \
             '              baseAddr != 0 else {' \
             '            return "bad off_kernel_base value: \\(baseStr)"' \
             '        }' \
-            '' \
             '        guard let original = read64(baseAddr) else {' \
             '            return "read 0x\\(String(baseAddr, radix: 16)) failed: \\(lastError)"' \
             '        }' \
-            '' \
             '        guard write64(baseAddr, original) else {' \
             '            return "write 0x\\(String(baseAddr, radix: 16)) failed: \\(lastError)"' \
             '        }' \
-            '' \
             '        guard let verify = read64(baseAddr) else {' \
             '            return "re-read after write failed: \\(lastError)"' \
             '        }' \
-            '' \
             '        if verify == original {' \
             '            return String(format: "OK - read/write at 0x%llX value 0x%llX", baseAddr, original)' \
             '        } else {' \
@@ -229,7 +230,7 @@ jobs:
             > natsuk1/Helpers/KernelRW.swift
           cat natsuk1/Helpers/KernelRW.swift
 
-      - name: Patch ContentView (Run Exploit)
+      - name: Patch ContentView
         run: |
           sed -i '' 's|Run Offsets|Run Exploit|g' natsuk1/Views/ContentView.swift
           sed -i '' 's|Запустить оффсеты|Запустить эксплойт|g' natsuk1/Views/ContentView.swift
@@ -237,45 +238,43 @@ jobs:
           sed -i '' 's|Выводит оффсеты ядра, запускает NECP probe, syscall 525 probe и перечисляет SPTM-таргеты\.|Запускает эксплойт ядра, выводит оффсеты, NECP probe, syscall 525 probe и список SPTM-таргетов.|g' natsuk1/Views/ContentView.swift
           grep -n "Run Exploit\|Запустить эксплойт" natsuk1/Views/ContentView.swift
 
-      - name: Patch SettingsView (add Test R/W button)
+      - name: Patch SettingsView
         run: |
-          python3 - <<'PYEOF'
-          import re
-          path = 'natsuk1/Views/SettingsView.swift'
-          with open(path) as f:
-              src = f.read()
-
-          if 'Test R/W' in src:
-              print('already patched')
-              raise SystemExit(0)
-
-          marker = '                    Button {\n                        state.fetchImages()'
-          if marker not in src:
-              print('marker not found')
-              raise SystemExit(1)
-
-          button = '''                    Button {
-                        let r = KernelRW.shared.testRoundTrip()
-                        state.append("[/] Test R/W: \\(r)")
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "checkmark.shield")
-                                .foregroundStyle(.tint)
-                                .frame(width: 20)
-                            Text("Test R/W")
-                                .foregroundStyle(.tint)
-                            Spacer(minLength: 8)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-'''
-          src = src.replace(marker, button + marker, 1)
-          with open(path, 'w') as f:
-              f.write(src)
-          print('patched')
-          PYEOF
+          printf '%s\n' \
+            'import sys' \
+            'path = "natsuk1/Views/SettingsView.swift"' \
+            'with open(path) as f:' \
+            '    src = f.read()' \
+            'if "Test R/W" in src:' \
+            '    print("already patched")' \
+            '    sys.exit(0)' \
+            'marker = "                    Button {\n                        state.fetchImages()"' \
+            'if marker not in src:' \
+            '    print("marker not found")' \
+            '    sys.exit(1)' \
+            'button = """                    Button {' \
+            '                        let r = KernelRW.shared.testRoundTrip()' \
+            '                        state.append("[/] Test R/W: \\(r)")' \
+            '                    } label: {' \
+            '                        HStack(spacing: 10) {' \
+            '                            Image(systemName: "checkmark.shield")' \
+            '                                .foregroundStyle(.tint)' \
+            '                                .frame(width: 20)' \
+            '                            Text("Test R/W")' \
+            '                                .foregroundStyle(.tint)' \
+            '                            Spacer(minLength: 8)' \
+            '                        }' \
+            '                        .contentShape(Rectangle())' \
+            '                    }' \
+            '                    .buttonStyle(.plain)' \
+            '' \
+            '"""' \
+            'src = src.replace(marker, button + marker, 1)' \
+            'with open(path, "w") as f:' \
+            '    f.write(src)' \
+            'print("patched")' \
+            > /tmp/patch.py
+          python3 /tmp/patch.py
           grep -n "Test R" natsuk1/Views/SettingsView.swift || true
 
       - name: Generate xcodeproj
@@ -298,10 +297,10 @@ jobs:
 
       - name: Commit and push
         if: success()
-        run: |
+        run: 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add natsuk1/Exploit/nk_krw.c natsuk1/Exploit/nk_krw.h natsuk1/bridging.h natsuk1/Helpers/KernelRW.swift natsuk1/Views/ContentView.swift natsuk1/Views/SettingsView.swift
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "Add kernel R/W via mach API, rename Run Offsets -> Run Exploit"
+          git commit -m "Add kernel R/W via mach API, rename Run Offsets to Run Exploit"
           git push
