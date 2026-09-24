@@ -7,11 +7,9 @@ final class KernelcacheParser {
 
     func parse(url: URL) throws -> [String: String] {
         let kernelPath = url.path
-
         let docs = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents")
         let sptmPath = docs.appendingPathComponent("images/sptm.im4p").path
         let txmPath  = docs.appendingPathComponent("images/txm.im4p").path
-
         let hasSptm = FileManager.default.fileExists(atPath: sptmPath)
         let hasTxm  = FileManager.default.fileExists(atPath: txmPath)
 
@@ -65,14 +63,11 @@ final class KernelcacheParser {
             ("kernelBase",                              "off_kernel_base"),
             ("kernelEntry",                             "off_kernel_entry"),
             ("kernelConstant.nsysent",                  "off_sysent_count"),
-            ("kernelConstant.cpu_ttep",                 "off_cpu_ttep"),
             ("kernelSymbol.kernproc",                   "off_g_kernproc"),
             ("kernelSymbol.allproc",                    "off_g_allproc"),
             ("kernelSymbol.rootvnode",                  "off_g_rootvnode"),
             ("kernelSymbol.kernel_task",                "off_g_kernel_task"),
             ("kernelSymbol.zone_map",                   "off_g_zone_map"),
-            ("kernelSymbol.cdevsw",                     "off_g_cdevsw"),
-            ("kernelSymbol.pv_head_table",              "off_g_pv_head_table"),
             ("kernelSymbol.cs_enforcement",             "off_g_cs_enforcement"),
             ("kernelSymbol.mac_policy",                 "off_g_mac_policy"),
             ("translation.t1sz_boot",                   "t1sz_boot"),
@@ -90,7 +85,6 @@ final class KernelcacheParser {
             ("kernelStruct.task.itk_space",             "off_task_itk_space"),
             ("kernelStruct.task.itk_self",              "off_task_itk_self"),
             ("kernelStruct.task.bsd_info",              "off_task_bsd_info"),
-            ("kernelStruct.task.t_flags",               "off_task_t_flags"),
             ("kernelStruct.thread.threads_next",        "off_thread_task_threads_next"),
             ("kernelStruct.thread.ast",                 "off_thread_ast"),
             ("kernelStruct.thread.ctid",                "off_thread_ctid"),
@@ -98,8 +92,6 @@ final class KernelcacheParser {
             ("kernelStruct.thread.machine_upcb",        "off_thread_machine_upcb"),
             ("kernelStruct.thread.machine_contextdata", "off_thread_machine_contextdata"),
             ("kernelStruct.thread.machine_kstackptr",   "off_thread_machine_kstackptr"),
-            ("kernelStruct.thread.machine_jop_pid",     "off_thread_machine_jop_pid"),
-            ("kernelStruct.thread.machine_rop_pid",     "off_thread_machine_rop_pid"),
             ("kernelStruct.ucred.cr_label",             "off_ucred_cr_label"),
             ("kernelStruct.ipc_space.is_table",         "off_ipc_space_is_table"),
             ("kernelStruct.ipc_entry.ie_object",        "off_ipc_entry_ie_object"),
