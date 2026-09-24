@@ -23,15 +23,14 @@ struct natsuk1App: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+       Version WindowGroup {
             ContentView()
                 .environmentObject(state)
                 .preferredColorScheme(.dark)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
                     nk_set_log(cCallback)
                     if state.log.isEmpty {
-                        let v = ProcessInfo.processInfo.operatingSystemVersion
+                        let v = ProcessInfo.processInfo.operatingSystem
                         state.append("[*] natsuk1 v3.1")
                         state.append("[*] iOS \(v.majorVersion).\(v.minorVersion) / arm64e")
                         state.append("")
@@ -107,8 +106,8 @@ final class AppState: ObservableObject {
         poller?.invalidate()
         poller = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            let s = g_nk.slide
-            let b = g_nk.base
+            let s = nk_get_slide()
+            let b = nk_get_base()
             if s != 0 && self.slide != s { self.slide = s }
             if b != 0 && self.base != b { self.base = b }
         }
@@ -127,8 +126,9 @@ final class AppState: ObservableObject {
 
         let thread = Thread { [weak self] in
             let r = nk_full_exploit()
-            let sl = g_nk.slide
-            let bs = g_nk.base
+            let sl = nk_get_slide()
+            let bs = nk_get_base()
+            let cf = Int(nk_get_confidence())
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.stopPoller()
@@ -139,13 +139,14 @@ final class AppState: ObservableObject {
                     self.status = .ok
                     self.append(String(format: "[+] SLIDE = 0x%llx", sl))
                     self.append(String(format: "[+] BASE  = 0x%llx", bs))
+                    self.append("[+] conf = \(cf)")
                 } else {
                     self.status = .failed
                     self.append("[-] exploit failed (ret=\(r))")
                 }
             }
         }
-        thread.qualityOfService = .userInitiated
+        thread.qualityOfService = QualityOfService.userInitiated
         thread.stackSize = 4 * 1024 * 1024
         thread.start()
     }
@@ -158,8 +159,9 @@ final class AppState: ObservableObject {
 
         let thread = Thread { [weak self] in
             let r = nk_detect_slide()
-            let sl = g_nk.slide
-            let bs = g_nk.base
+            let sl = nk_get_slide()
+            let bs = nk_get_base()
+            let cf = Int(nk_get_confidence())
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.stopPoller()
@@ -170,13 +172,14 @@ final class AppState: ObservableObject {
                     self.status = .ok
                     self.append(String(format: "[+] SLIDE = 0x%llx", sl))
                     self.append(String(format: "[+] BASE  = 0x%llx", bs))
+                    self.append("[+] conf = \(cf)")
                 } else {
                     self.status = .failed
                     self.append("[-] slide not resolved")
                 }
             }
         }
-        thread.qualityOfService = .userInitiated
+        thread.qualityOfService = QualityOfService.userInitiated
         thread.stackSize = 4 * 1024 * 1024
         thread.start()
     }
