@@ -16,10 +16,15 @@ jobs:
       - name: Install tools
         run: brew install xcodegen ldid
 
-      - name: Patch project.yml
+      - name: Rewrite project.yml
         run: |
-          sed -i '' 's|-lpartial|-lpartial -Wl,-undefined,dynamic_lookup|g' project.yml
+          sed -i '' 's|^      - sdk: libz.tbd$||g' project.yml
+          sed -i '' 's|^      - sdk: libarchive.tbd$||g' project.yml
+          sed -i '' 's|^      - sdk: libcompression.tbd$||g' project.yml
+          sed -i '' 's|^      - sdk: libxpc.tbd$||g' project.yml
+          sed -i '' 's|OTHER_LDFLAGS: |OTHER_LDFLAGS: -Wl,-no_autolink -Wl,-undefined,dynamic_lookup |' project.yml
           grep OTHER_LDFLAGS project.yml
+          grep -n "libz\|libarchive\|libcompression\|libxpc" project.yml || true
 
       - name: Write KernelcacheParser.swift
         run: |
@@ -151,5 +156,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add project.yml natsuk1/Helpers/KernelcacheParser.swift natsuk1/bridging.h
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "Fix XPF parser and linker flags"
+          git commit -m "Fix XPF linker flags with no_autolink"
           git push
