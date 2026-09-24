@@ -74,6 +74,7 @@ final class AppState: ObservableObject {
     @Published var show_respring: Bool = false
     @Published var kernelcachePath: String?
     @Published var fetchingKernelcache: Bool = false
+    @Published var parsingKernelcache: Bool = false
 
     @Published var lang: String {
         didSet { UserDefaults.standard.set(lang, forKey: "lang") }
@@ -160,6 +161,39 @@ final class AppState: ObservableObject {
                     self.append("[+] Saved: \(url.path)")
                 case .failure(let error):
                     self.append("[-] Fetch failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    func parseKernelcache() {
+        guard let path = kernelcachePath else {
+            append("[-] No kernelcache loaded")
+            return
+        }
+        if parsingKernelcache { return }
+        parsingKernelcache = true
+        append("[*] Parsing kernelcache...")
+
+        let url = URL(fileURLWithPath: path)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let found = try KernelcacheParser.shared.parse(url: url)
+                DispatchQueue.main.async {
+                    self.parsingKernelcache = false
+                    for (key, value) in found {
+                        OffsetsStore.shared.update(key, value: value)
+                    }
+                    self.append("[+] Parsed \(found.count) offsets")
+                    for (key, value) in found.sorted(by: { $0.key < $1.key }) {
+                        self.append("    \(key) = \(value)")
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.parsingKernelcache = false
+                    self.append("[-] Parse failed: \(error)")
                 }
             }
         }
