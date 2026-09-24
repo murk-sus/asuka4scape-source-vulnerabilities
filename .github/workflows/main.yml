@@ -16,6 +16,17 @@ jobs:
       - name: Install tools
         run: brew install xcodegen ldid
 
+      - name: Debug libxpc location
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK: $SDK"
+          find "$SDK" -name "libxpc*" 2>/dev/null || echo "libxpc not found in SDK"
+
+      - name: Patch project.yml
+        run: |
+          sed -i '' 's|-lpartial|-lpartial -Wl,-undefined,dynamic_lookup|g' project.yml
+          grep OTHER_LDFLAGS project.yml
+
       - name: Write KernelcacheParser.swift
         run: |
           printf '%s\n' \
@@ -50,7 +61,7 @@ jobs:
             '' \
             '        guard rc == 0 else {' \
             '            let err = String(cString: xpf_get_error())' \
-            '            throw NSError(domain: "KernelcacheParser", code: -1,' \
+            '            throw NSError(domain: "KernelcacheParser", code: -_table1,' \
             '                          userInfo: [NSLocalizedDescriptionKey: "xpf start error: \(err)"])' \
             '        }' \
             '' \
@@ -78,7 +89,7 @@ jobs:
             '        let map: [(String, String)] = [' \
             '            ("kernelBase",                   "off_kernel_base"),' \
             '            ("kernelSymbol.sysent",          "off_sysent_base"),' \
-            '            ("kernelSymbol.mach_trap_table", "off_mach_trap_table"),' \
+            '            ("kernelSymbol.mach_trap_table", "off_mach_trap"),' \
             '            ("kernelSymbol.copyin",          "off_fn_copyin"),' \
             '            ("kernelSymbol.copyout",         "off_fn_copyout"),' \
             '            ("kernelSymbol.kalloc_ext",      "off_fn_kalloc_ext"),' \
@@ -144,7 +155,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add natsuk1/Helpers/KernelcacheParser.swift natsuk1/bridging.h
+          git add project.yml natsuk1/Helpers/KernelcacheParser.swift natsuk1/bridging.h
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "Fix XPF parser signatures"
+          git commit -m "Fix XPF linker flags"
           git push
