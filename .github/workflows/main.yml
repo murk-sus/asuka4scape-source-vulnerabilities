@@ -65,20 +65,13 @@ jobs:
             '            nil' \
             '        ]' \
             '' \
-            '        let dict = sets.withUnsafeMutableBufferPointer { buf -> xpc_object_t? in' \
+            '        _ = sets.withUnsafeMutableBufferPointer { buf -> xpc_object_t? in' \
             '            return xpf_construct_offset_dictionary(buf.baseAddress!)' \
             '        }' \
             '' \
             '        free(basePtr)' \
             '        free(transPtr)' \
             '        free(structPtr)' \
-            '' \
-            '        guard let dict = dict else {' \
-            '            let err = String(cString: xpf_get_error())' \
-            '            xpf_stop()' \
-            '            throw NSError(domain: "KernelcacheParser", code: -2,' \
-            '                          userInfo: [NSLocalizedDescriptionKey: "xpf dict failed: \(err)"])' \
-            '        }' \
             '' \
             '        var result: [String: String] = [:]' \
             '' \
@@ -100,7 +93,7 @@ jobs:
             '        ]' \
             '' \
             '        for (xpfKey, ourKey) in map {' \
-            '            let v = xpfKey.withCString { xpf_item_resolve(dict, $0) }' \
+            '            let v = xpfKey.withCString { xpf_item_resolve($0) }' \
             '            if v != 0 {' \
             '                result[ourKey] = String(format: "0x%llX", v)' \
             '            }' \
