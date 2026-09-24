@@ -57,23 +57,21 @@ final class AppState: ObservableObject {
     static let shared = AppState()
 
     enum Status {
-        case idle, running, ok, failed, patched
+        case idle, running, ok, failed
         var label: String {
             switch self {
             case .idle:    return "idle"
             case .running: return "running"
             case .ok:      return "ok"
             case .failed:  return "failed"
-            case .patched: return "patched"
             }
         }
         var color: Color {
             switch self {
             case .idle:    return .secondary
-            case .running: return .yellow
+            case .running: return .orange
             case .ok:      return .green
             case .failed:  return .red
-            case .patched: return .orange
             }
         }
     }
@@ -139,7 +137,7 @@ final class AppState: ObservableObject {
         startPoller()
 
         let t = Thread { [weak self] in
-            let r = nk_full_exploit()
+            _ = nk_full_exploit()
             let sl = nk_get_slide()
             let bs = nk_get_base()
             DispatchQueue.main.async {
@@ -153,10 +151,9 @@ final class AppState: ObservableObject {
                     self.append(String(format: "[+] SLIDE = 0x%llx", sl))
                     self.append(String(format: "[+] BASE  = 0x%llx", bs))
                 } else {
-                    self.status = .patched
-                    self.append("[!] KASLR not resolved — primitive unavailable on this build")
+                    self.status = .failed
+                    self.append("[-] KASLR not resolved")
                 }
-                _ = r
             }
         }
         t.qualityOfService = .userInitiated
@@ -172,7 +169,7 @@ final class AppState: ObservableObject {
         startPoller()
 
         let t = Thread { [weak self] in
-            let r = nk_detect_slide()
+            _ = nk_detect_slide()
             let sl = nk_get_slide()
             let bs = nk_get_base()
             DispatchQueue.main.async {
@@ -186,10 +183,9 @@ final class AppState: ObservableObject {
                     self.append(String(format: "[+] SLIDE = 0x%llx", sl))
                     self.append(String(format: "[+] BASE  = 0x%llx", bs))
                 } else {
-                    self.status = .patched
-                    self.append("[!] slide not resolved — no leak primitive on this build")
+                    self.status = .failed
+                    self.append("[-] slide not resolved")
                 }
-                _ = r
             }
         }
         t.qualityOfService = .userInitiated
