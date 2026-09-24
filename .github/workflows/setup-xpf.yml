@@ -23,31 +23,53 @@ jobs:
           cd /tmp/XPF
           git submodule update --init --recursive
 
-      - name: Build ChOma
+      - name: Build ChOma static lib
         run: |
           cd /tmp/XPF/external/ChOma
-          make TARGET=ios
+          mkdir -p build/ios output/ios/lib output/ios/include/choma
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          OPENSSL=$(ls -d /opt/homebrew/Cellar/openssl@3/*/include | head -1)
+          CFLAGS="-Wall -Wno-everything -fPIC -framework CoreFoundation -arch arm64 -arch arm64e -isysroot $SDK -miphoneos-version-min=11.0 -I$OPENSSL"
+          for f in src/*.c; do
+            name=$(basename "$f" .c)
+            clang $CFLAGS -c "$f" -o "build/ios/$name.o"
+          done
+          libtool -static build/ios/*.o -o output/ios/lib/libchoma.a
+          cp include/choma/*.h output/ios/include/choma/ 2>/dev/null || true
+          ls -la output/ios/lib/
 
-      - name: Build XPF
+      - name: Build XPF static lib
         run: |
           cd /tmp/XPF
-          make TARGET=ios
+          mkdir -p build/ios output/ios/lib output/ios/include
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          CHOMA=/tmp/XPF/external/ChOma
+          CFLAGS="-Wall -Wno-everything -fPIC -framework CoreFoundation -arch arm64 -arch arm64e -isysroot $SDK -miphoneos-version-min=11.0 -I$CHOMA/output/ios/include -I$CHOMA/output/ios/include/choma -Iinclude"
+          for f in src/*.c; do
+            name=$(basename "$f" .c)
+            clang $CFLAGS -c "$f" -o "build/ios/$name.o"
+          done
+          libtool -static build/ios/*.o $CHOMA/output/ios/lib/libchoma.a -o output/ios/lib/libxpf.a
+          cp include/*.h output/ios/include/ 2>/dev/null || true
+          ls -la output/ios/lib/
 
       - name: Locate artifacts
         run: |
           echo "=== .a files ==="
           find /tmp/XPF -name "*.a" -type f
           echo "=== headers ==="
-          find /tmp/XPF -name "xpf.h" -type f
-          find /tmp/XPF -name "choma.h" -type f
+          find /tmp/XPF -name "*.h" -path "*output*"
+          find /tmp/XPF -name "xpf.h"
 
       - name: Copy artifacts
         run: |
           mkdir -p natsuk1/External
-          find /tmp/XPF -name "libxpf.a" -exec cp {} natsuk1/External/ \;
-          find /tmp/XPF -name "libchoma.a" -exec cp {} natsuk1/External/ \;
-          find /tmp/XPF -name "xpf.h" -exec cp {} natsuk1/External/ \;
-          find /tmp/XPF -name "choma.h" -exec cp {} natsuk1/External/ \; || true
+          cp /tmp/XPF/output/ios/lib/libxpf.a natsuk1/External/
+          cp /tmp/XPF/external/ChOma/output/ios/lib/libchoma.a natsuk1/External/
+          cp /tmp/XPF/include/xpf.h natsuk1/External/ 2>/dev/null || find /tmp/XPF -name "xpf.h" -exec cp {} natsuk1/External/ \;
+          cp /tmp/XPF/include/kernel.h natsuk1/External/ 2>/dev/null || true
+          cp /tmp/XPF/include/offset.h natsuk1/External/ 2>/dev/null || true
+          cp -r /tmp/XPF/external/ChOma/output/ios/include/choma natsuk1/External/ 2>/dev/null || true
           ls -la natsuk1/External/
 
       - name: Update bridging.h
@@ -59,7 +81,7 @@ jobs:
             '#include <stdint.h>' \
             '#include "Exploit/nk_api.h"' \
             '#import "External/libgrabkernel2.h"' \
-            '#import "xpf.h"' \
+            '#import "External/xpf.h"' \
             '' \
             '#endif' \
             > natsuk1/bridging.h
