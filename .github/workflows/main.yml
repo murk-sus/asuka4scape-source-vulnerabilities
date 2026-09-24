@@ -1,4 +1,4 @@
-name: Final fix - kernel R/W, Run Exploit, inspect nk_api
+name: Final fix - logs, NECP probe, kernel R/W
 
 on:
   workflow_dispatch:
@@ -15,20 +15,6 @@ jobs:
 
       - name: Install tools
         run: brew install xcodegen ldid
-
-      - name: Inspect nk_api.c
-        run: |
-          echo "=== nk_api.c ==="
-          cat natsuk1/Exploit/nk_api.c || echo "not found"
-          echo ""
-          echo "=== nk_api.h ==="
-          cat natsuk1/Exploit/nk_api.h || echo "not found"
-          echo ""
-          echo "=== nk_offsets.h (first 60 lines) ==="
-          head -60 natsuk1/Exploit/nk_offsets.h || echo "not found"
-          echo ""
-          echo "=== nk_syscalls.c ==="
-          cat natsuk1/Exploit/nk_syscalls.c || echo "not found"
 
       - name: Write nk_krw.h
         run: |
@@ -55,6 +41,7 @@ jobs:
         run: |
           printf '%s\n' \
             '#include "nk_krw.h"' \
+            '#include "nk_log.h"' \
             '#include <mach/mach.h>' \
             '#include <stdio.h>' \
             '#include <string.h>' \
@@ -72,21 +59,28 @@ jobs:
             '}' \
             '' \
             'int nk_krw_init(void) {' \
-            '    if (g_ready) return 0;' \
+            '    if (g_ready) {' \
+            '        NK_INFO("KRW", "already initialized");' \
+            '        return 0;' \
+            '    }' \
+            '    NK_INFO("KRW", "task_for_pid(0) ...");' \
             '    mach_port_t kt = MACH_PORT_NULL;' \
             '    kern_return_t kr = task_for_pid(mach_task_self(), 0, &kt);' \
             '    if (kr != KERN_SUCCESS || kt == MACH_PORT_NULL) {' \
             '        snprintf(g_error, sizeof(g_error), "task_for_pid(0) failed: kr=0x%x", kr);' \
+            '        NK_ERR("KRW", "%s", g_error);' \
             '        return -1;' \
             '    }' \
             '    g_kernel_task = kt;' \
             '    g_ready = 1;' \
-            '    snprintf(g_error, sizeof(g_error), "ready");' \
+            '    snprintf(g_error, sizeof(g_error), "ready (kt=0x%x)", kt);' \
+            '    NK_INFO("KRW", "kernel task port = 0x%x", kt);' \
             '    return 0;' \
             '}' \
             '' \
             'int nk_kread(uint64_t addr, void *buf, size_t size) {' \
             '    if (!g_ready && nk_krw_init() != 0) return -1;' \
+            '    NK_DEBUG("KRW", "read 0x%llX size=%zu", (unsigned long long)addr, size);' \
             '    vm_size_t out_size = 0;' \
             '    kern_return_t kr = vm_read_overwrite(' \
             '        g_kernel_task,' \
@@ -97,10 +91,12 @@ jobs:
             '    );' \
             '    if (kr != KERN_SUCCESS) {' \
             '        snprintf(g_error, sizeof(g_error), "read 0x%llX failed: kr=0x%x", (unsigned long long)addr, kr);' \
+            '        NK_ERR("KRW", "%s", g_error);' \
             '        return -1;' \
             '    }' \
             '    if (out_size != size) {' \
             '        snprintf(g_error, sizeof(g_error), "read short: %llu/%zu", (unsigned long long)out_size, size);' \
+            '        NK_ERR("KRW", "%s", g_error);' \
             '        return -1;' \
             '    }' \
             '    return 0;' \
@@ -108,6 +104,7 @@ jobs:
             '' \
             'int nk_kwrite(uint64_t addr, const void *buf, size_t size) {' \
             '    if (!g_ready && nk_krw_init() != 0) return -1;' \
+            '    NK_DEBUG("KRW", "write 0x%llX size=%zu", (unsigned long long)addr, size);' \
             '    kern_return_t kr = vm_write(' \
             '        g_kernel_task,' \
             '        (vm_address_t)addr,' \
@@ -116,6 +113,7 @@ jobs:
             '    );' \
             '    if (kr != KERN_SUCCESS) {' \
             '        snprintf(g_error, sizeof(g_error), "write 0x%llX failed: kr=0x%x", (unsigned long long)addr, kr);' \
+            '        NK_ERR("KRW", "%s", g_error);' \
             '        return -1;' \
             '    }' \
             '    return 0;' \
@@ -132,22 +130,6 @@ jobs:
             '}' \
             > natsuk1/Exploit/nk_krw.c
           cat natsuk1/Exploit/nk_krw.c
-
-      - name: Write bridging.h
-        run: |
-          printf '%s\n' \
-            '#ifndef NATSUK1_BRIDGING_H' \
-            '#define NATSUK1_BRIDGING_H' \
-            '' \
-            '#include <stdint.h>' \
-            '#include "Exploit/nk_api.h"' \
-            '#include "Exploit/nk_krw.h"' \
-            '#import "External/libgrabkernel2.h"' \
-            '#import "xpf.h"' \
-            '' \
-            '#endif' \
-            > natsuk1/bridging.h
-          cat natsuk1/bridging.h
 
       - name: Write KernelRW.swift
         run: |
@@ -190,22 +172,22 @@ jobs:
             '' \
             '    func testRoundTrip() -> String {' \
             '        guard bootstrap() else {' \
-            '            return "bootstrap failed: \\(lastError)"' \
+            '            return "bootstrap failed: \(lastError)"' \
             '        }' \
             '        let baseStr = OffsetsStore.shared.value(for: "off_kernel_base")' \
             '        guard baseStr.hasPrefix("0x"),' \
             '              let baseAddr = UInt64(baseStr.dropFirst(2), radix: 16),' \
             '              baseAddr != 0 else {' \
-            '            return "bad off_kernel_base value: \\(baseStr)"' \
+            '            return "bad off_kernel_base value: \(baseStr)"' \
             '        }' \
             '        guard let original = read64(baseAddr) else {' \
-            '            return "read 0x\\(String(baseAddr, radix: 16)) failed: \\(lastError)"' \
+            '            return "read 0x\(String(baseAddr, radix: 16)) failed: \(lastError)"' \
             '        }' \
             '        guard write64(baseAddr, original) else {' \
-            '            return "write 0x\\(String(baseAddr, radix: 16)) failed: \\(lastError)"' \
+            '            return "write 0x\(String(baseAddr, radix: 16)) failed: \(lastError)"' \
             '        }' \
             '        guard let verify = read64(baseAddr) else {' \
-            '            return "re-read after write failed: \\(lastError)"' \
+            '            return "re-read after write failed: \(lastError)"' \
             '        }' \
             '        if verify == original {' \
             '            return String(format: "OK - read/write at 0x%llX value 0x%llX", baseAddr, original)' \
@@ -289,5 +271,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add natsuk1/Exploit/nk_krw.c natsuk1/Exploit/nk_krw.h natsuk1/bridging.h natsuk1/Helpers/KernelRW.swift natsuk1/Views/ContentView.swift natsuk1/Views/SettingsView.swift
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "Add kernel R/W via mach API, rename Run Offsets to Run Exploit"
+          git commit -m "Add kernel R/W with logs, NECP probe, rename Run Offsets to Run Exploit"
           git push
