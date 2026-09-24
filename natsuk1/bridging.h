@@ -15,4 +15,8 @@ int      nk_get_has_root(void);
 
 int      nk_detect_slide(void);
 
+void        nk_log_capture_begin(void);
+void        nk_log_capture_end(void);
+const char *nk_log_poll(void);
+
 #endif
