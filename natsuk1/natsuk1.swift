@@ -105,11 +105,13 @@ final class AppState: ObservableObject {
     private func startPoller() {
         poller?.invalidate()
         poller = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            let s = nk_get_slide()
-            let b = nk_get_base()
-            if s != 0 && self.slide != s { self.slide = s }
-            if b != 0 && self.base != b { self.base = b }
+            Task { @MainActor in
+                guard let self = self else { return }
+                let s = nk_get_slide()
+                let b = nk_get_base()
+                if s != 0 && self.slide != s { self.slide = s }
+                if b != 0 && self.base != b { self.base = b }
+            }
         }
     }
 
