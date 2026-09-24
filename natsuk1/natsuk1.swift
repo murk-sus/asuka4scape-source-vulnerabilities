@@ -4,9 +4,7 @@ import UIKit
 enum Lang: String, CaseIterable, Hashable, Identifiable {
     case en
     case ru
-
     var id: String { rawValue }
-
     var label: String {
         switch self {
         case .en: return "English"
@@ -16,11 +14,7 @@ enum Lang: String, CaseIterable, Hashable, Identifiable {
 }
 
 enum RunStatus {
-    case idle
-    case running
-    case done
-    case failed
-
+    case idle, running, done, failed
     var color: Color {
         switch self {
         case .idle:    return .gray
@@ -34,11 +28,9 @@ enum RunStatus {
 @main
 struct natsuk1App: App {
     @StateObject private var state = AppState()
-
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(state)
+            ContentView().environmentObject(state)
         }
     }
 }
@@ -57,8 +49,27 @@ final class AppState: ObservableObject {
     @Published var hasKwrite: Bool = false
     @Published var hasRoot: Bool = false
 
+    private var timer: Timer?
+
     init() {
         nk_set_log(2)
+        nk_log_capture_begin()
+        startPolling()
+    }
+
+    deinit {
+        timer?.invalidate()
+    }
+
+    private func startPolling() {
+        timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            let c = nk_log_poll()
+            let s = String(cString: c)
+            if !s.isEmpty && s != self.log {
+                self.log = s
+            }
+        }
     }
 
     func t(_ en: String, _ ru: String) -> String {
@@ -66,14 +77,11 @@ final class AppState: ObservableObject {
     }
 
     func append(_ s: String) {
-        if log.isEmpty {
-            log = s
-        } else {
-            log += "\n" + s
-        }
+        if log.isEmpty { log = s } else { log += "\n" + s }
     }
 
     func clearLog() {
+        nk_log_capture_begin()
         log = ""
     }
 
@@ -84,7 +92,6 @@ final class AppState: ObservableObject {
 
     func respring() {
         append("[+] respring requested")
-        // Respring disabled on this build
     }
 
     func run() {
@@ -92,21 +99,16 @@ final class AppState: ObservableObject {
         running = true
         status = .running
         clearLog()
-        append("[+] natsuk1 v3.1")
-        append("[+] target iOS 27.0 / arm64e")
 
         Thread.detachNewThread { [weak self] in
             Thread.current.qualityOfService = .userInitiated
-
             _ = nk_full_exploit()
-
             let s  = nk_get_slide()
             let b  = nk_get_base()
             let c  = Int(nk_get_confidence())
             let kr = nk_get_has_kread()
             let kw = nk_get_has_kwrite()
             let rt = nk_get_has_root()
-
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.slide = s
@@ -115,9 +117,6 @@ final class AppState: ObservableObject {
                 self.hasKread = kr != 0
                 self.hasKwrite = kw != 0
                 self.hasRoot = rt != 0
-                self.append("[+] slide = 0x\(String(s, radix: 16))")
-                self.append("[+] base  = 0x\(String(b, radix: 16))")
-                self.append("[+] conf = \(c)")
                 self.status = (s != 0) ? .done : .failed
                 self.running = false
             }
@@ -129,25 +128,18 @@ final class AppState: ObservableObject {
         running = true
         status = .running
         clearLog()
-        append("[+] natsuk1 KASLR detect")
 
         Thread.detachNewThread { [weak self] in
             Thread.current.qualityOfService = .userInitiated
-
             _ = nk_detect_slide()
-
             let s = nk_get_slide()
             let b = nk_get_base()
             let c = Int(nk_get_confidence())
-
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.slide = s
                 self.base = b
                 self.confidence = c
-                self.append("[+] slide = 0x\(String(s, radix: 16))")
-                self.append("[+] base  = 0x\(String(b, radix: 16))")
-                self.append("[+] conf = \(c)")
                 self.status = (s != 0) ? .done : .failed
                 self.running = false
             }
