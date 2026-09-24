@@ -155,7 +155,7 @@ final class AppState: ObservableObject {
                     self.kernelcachePath = url.path
                     UserDefaults.standard.set(url.path, forKey: "kernelcache_path")
                     let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-                    let mb = Double(size ?? 0) / 1024.0 / 1024.0
+                    let mb = Double(size) / 1024.0 / 1024.0
                     self.append(String(format: "[+] Kernelcache: %.1f MB", mb))
                     self.append("[+] Saved: \(url.path)")
                 case .failure(let error):
@@ -181,7 +181,7 @@ final class AppState: ObservableObject {
                         for f in files {
                             let full = url.path + "/" + f
                             let size = (try? FileManager.default.attributesOfItem(atPath: full)[.size] as? Int) ?? 0
-                            let kb = Double(size ?? 0) / 1024.0
+                            let kb = Double(size) / 1024.0
                             self.append(String(format: "    %@ — %.0f KB", f, kb))
                         }
                     }
