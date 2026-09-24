@@ -6,11 +6,15 @@ final class KernelcacheFetcher {
     static let shared = KernelcacheFetcher()
     private init() {}
 
+    private var documentsURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+
     func fetch(completion: @escaping (Result<URL, Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let tmp = FileManager.default.temporaryDirectory
-            let rawURL = tmp.appendingPathComponent("kernelcache.raw")
-            let outURL = tmp.appendingPathComponent("kernelcache")
+            let docs = self.documentsURL
+            let rawURL = docs.appendingPathComponent("kernelcache.raw")
+            let outURL = docs.appendingPathComponent("kernelcache")
 
             if FileManager.default.fileExists(atPath: rawURL.path) {
                 try? FileManager.default.removeItem(at: rawURL)
@@ -42,8 +46,7 @@ final class KernelcacheFetcher {
 
     func fetchImages(completion: @escaping (Result<URL, Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let dir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("images", isDirectory: true)
+            let dir = self.documentsURL.appendingPathComponent("images", isDirectory: true)
 
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
