@@ -51,22 +51,22 @@ jobs:
           INCLUDES="-Iinclude -I$CHOMA/output/ios/include -I$CHOMA/output/ios/include/choma"
           INCLUDES="$INCLUDES -I$IMG4 -I$IMG4/libvfs -I$IMG4/libDER"
           CFLAGS="-Wall -Wno-everything -fPIC -framework CoreFoundation -arch arm64 -arch arm64e -isysroot $SDK -miphoneos-version-min=11.0 $INCLUDES"
-          CFLAGS="$CFLAGS -DUSE_COMMONCRYPTO -DUSE_LIBCOMPRESSION -DiOS10 -DDER_M;ULTIBYTE_TAGS=1 -D__unused=\"__attribute__((unused))\" -DDER_TAG_SIZE=8 -Wno-variadic-macros -Wno-multichar -Wno-four-char-constants -Wno-unused-parameter"
-          LDFLAGS="-lcompression -framework Security"
+          CFLAGS="$CFLAGS -DUSE_COMMONCRYPTO -DUSE_LIBCOMPRESSION -DiOS10 -DDER_MULTIBYTE_TAGS=1 -DDER_TAG_SIZE=8"
 
           for f in src/*.c; do
             name=$(basename "$f" .c)
             clang $CFLAGS -c "$f" -o "build/ios/$name.o" || exit 1
           done
 
-          for f in $IMG4/*.c do
+          for f in $IMG4/*.c; do
             [ -f "$f" ] || continue
             name="img4_$(basename "$f" .c)"
             clang $CFLAGS -c "$f" -o "build/ios/$name.o" || exit 1
           done
 
           for f in $IMG4/libvfs/*.c; do
-            [ "$(basename "$f")" = "vfs_lzvn.c" ] && continue
+            base=$(basename "$f")
+            [ "$base" = "vfs_lzvn.c" ] && continue
             name="vfs_$(basename "$f" .c)"
             clang $CFLAGS -c "$f" -o "build/ios/$name.o" || exit 1
           done
