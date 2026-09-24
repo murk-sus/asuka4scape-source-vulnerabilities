@@ -72,6 +72,8 @@ final class AppState: ObservableObject {
     @Published var status: Status = .idle
     @Published var running: Bool = false
     @Published var show_respring: Bool = false
+    @Published var kernelcachePath: String?
+    @Published var fetchingKernelcache: Bool = false
 
     @Published var lang: String {
         didSet { UserDefaults.standard.set(lang, forKey: "lang") }
@@ -83,6 +85,7 @@ final class AppState: ObservableObject {
 
     private init() {
         self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
+        self.kernelcachePath = UserDefaults.standard.string(forKey: "kernelcache_path")
         startFlusher()
     }
 
@@ -136,6 +139,27 @@ final class AppState: ObservableObject {
         t.qualityOfService = .userInitiated
         t.stackSize = 16 * 1024 * 1024
         t.start()
+    }
+
+    func fetchKernelcache() {
+        if fetchingKernelcache { return }
+        fetchingKernelcache = true
+        append("[*] Fetching kernelcache for \(DeviceName.machineID())...")
+
+        KernelcacheFetcher.shared.fetch { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.fetchingKernelcache = false
+                switch result {
+                case .success(let url):
+                    self.kernelcachePath = url.path
+                    UserDefaults.standard.set(url.path, forKey: "kernelcache_path")
+                    self.append("[+] Kernelcache saved: \(url.lastPathComponent)")
+                case .failure(let error):
+                    self.append("[-] Fetch failed: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     func respring() {
