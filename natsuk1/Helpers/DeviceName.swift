@@ -3,9 +3,57 @@ import UIKit
 
 enum DeviceName {
 
+    private struct Device {
+        let id: String
+        let name: String
+        let chip: String
+    }
+
+    private static let devices: [Device] = [
+        Device(id: "iPhone11,2", name: "iPhone XS",           chip: "A12 Bionic"),
+        Device(id: "iPhone11,4", name: "iPhone XS Max",       chip: "A12 Bionic"),
+        Device(id: "iPhone11,6", name: "iPhone XS Max",       chip: "A12 Bionic"),
+        Device(id: "iPhone11,8", name: "iPhone XR",           chip: "A12 Bionic"),
+        Device(id: "iPhone12,1", name: "iPhone 11",           chip: "A13 Bionic"),
+        Device(id: "iPhone12,3", name: "iPhone 11 Pro",       chip: "A13 Bionic"),
+        Device(id: "iPhone12,5", name: "iPhone 11 Pro Max",   chip: "A13 Bionic"),
+        Device(id: "iPhone12,8", name: "iPhone SE (2nd gen)", chip: "A13 Bionic"),
+        Device(id: "iPhone13,1", name: "iPhone 12 mini",      chip: "A14 Bionic"),
+        Device(id: "iPhone13,2", name: "iPhone 12",           chip: "A14 Bionic"),
+        Device(id: "iPhone13,3", name: "iPhone 12 Pro",       chip: "A14 Bionic"),
+        Device(id: "iPhone13,4", name: "iPhone 12 Pro Max",   chip: "A14 Bionic"),
+        Device(id: "iPhone14,2", name: "iPhone 13 Pro",       chip: "A15 Bionic"),
+        Device(id: "iPhone14,3", name: "iPhone 13 Pro Max",   chip: "A15 Bionic"),
+        Device(id: "iPhone14,4", name: "iPhone 13 mini",      chip: "A15 Bionic"),
+        Device(id: "iPhone14,5", name: "iPhone 13",           chip: "A15 Bionic"),
+        Device(id: "iPhone14,6", name: "iPhone SE (3rd gen)", chip: "A15 Bionic"),
+        Device(id: "iPhone14,7", name: "iPhone 14",           chip: "A15 Bionic"),
+        Device(id: "iPhone14,8", name: "iPhone 14 Plus",      chip: "A15 Bionic"),
+        Device(id: "iPhone15,2", name: "iPhone 14 Pro",       chip: "A16 Bionic"),
+        Device(id: "iPhone15,3", name: "iPhone 14 Pro Max",   chip: "A16 Bionic"),
+        Device(id: "iPhone15,4", name: "iPhone 15",           chip: "A16 Bionic"),
+        Device(id: "iPhone15,5", name: "iPhone 15 Plus",      chip: "A16 Bionic"),
+        Device(id: "iPhone16,1", name: "iPhone 15 Pro",       chip: "A17 Pro"),
+        Device(id: "iPhone16,2", name: "iPhone 15 Pro Max",   chip: "A17 Pro"),
+        Device(id: "iPhone17,1", name: "iPhone 16 Pro",       chip: "A18 Pro"),
+        Device(id: "iPhone17,2", name: "iPhone 16 Pro Max",   chip: "A18 Pro"),
+        Device(id: "iPhone17,3", name: "iPhone 16",           chip: "A18"),
+        Device(id: "iPhone17,4", name: "iPhone 16 Plus",      chip: "A18"),
+        Device(id: "iPhone17,5", name: "iPhone 16e",          chip: "A18"),
+        Device(id: "iPhone18,1", name: "iPhone 17 Pro",       chip: "A19 Pro"),
+        Device(id: "iPhone18,2", name: "iPhone 17 Pro Max",   chip: "A19 Pro"),
+        Device(id: "iPhone18,3", name: "iPhone 17",           chip: "A19"),
+        Device(id: "iPhone18,4", name: "iPhone Air",          chip: "A19 Pro"),
+        Device(id: "iPhone18,5", name: "iPhone 17e",          chip: "A19"),
+    ]
+
+    private static let byID: [String: Device] = Dictionary(
+        uniqueKeysWithValues: devices.map { ($0.id, $0) }
+    )
+
     static func friendly() -> String {
         let id = machineID()
-        return map[id] ?? id
+        return byID[id]?.name ?? id
     }
 
     static func short() -> String {
@@ -17,8 +65,7 @@ enum DeviceName {
     }
 
     static func chip() -> String {
-        let id = machineID()
-        return chipMap[id] ?? "unknown"
+        byID[machineID()]?.chip ?? "unknown"
     }
 
     static func full() -> String {
@@ -39,80 +86,4 @@ enum DeviceName {
             return String(cString: ptr)
         }
     }
-
-    private static let map: [String: String] = [
-        "iPhone11,2": "iPhone XS",
-        "iPhone11,4": "iPhone XS Max",
-        "iPhone11,6": "iPhone XS Max",
-        "iPhone11,8": "iPhone XR",
-        "iPhone12,1": "iPhone 11",
-        "iPhone12,3": "iPhone 11 Pro",
-        "iPhone12,5": "iPhone 11 Pro Max",
-        "iPhone12,8": "iPhone SE (2nd gen)",
-        "iPhone13,1": "iPhone 12 mini",
-        "iPhone13,2": "iPhone 12",
-        "iPhone13,3": "iPhone 12 Pro",
-        "iPhone13,4": "iPhone 12 Pro Max",
-        "iPhone14,2": "iPhone 13 Pro",
-        "iPhone14,3": "iPhone 13 Pro Max",
-        "iPhone14,4": "iPhone 13 mini",
-        "iPhone14,5": "iPhone 13",
-        "iPhone14,6": "iPhone SE (3rd gen)",
-        "iPhone14,7": "iPhone 14",
-        "iPhone14,8": "iPhone 14 Plus",
-        "iPhone15,2": "iPhone 14 Pro",
-        "iPhone15,3": "iPhone 14 Pro Max",
-        "iPhone15,4": "iPhone 15",
-        "iPhone15,5": "iPhone 15 Plus",
-        "iPhone16,1": "iPhone 15 Pro",
-        "iPhone16,2": "iPhone 15 Pro Max",
-        "iPhone17,1": "iPhone 16 Pro",
-        "iPhone17,2": "iPhone 16 Pro Max",
-        "iPhone17,3": "iPhone 16",
-        "iPhone17,4": "iPhone 16 Plus",
-        "iPhone17,5": "iPhone 16e",
-        "iPhone18,1": "iPhone 17 Pro",
-        "iPhone18,2": "iPhone 17 Pro Max",
-        "iPhone18,3": "iPhone 17",
-        "iPhone18,4": "iPhone Air",
-        "iPhone18,5": "iPhone 17e",
-    ]
-
-    private static let chipMap: [String: String] = [
-        "iPhone11,2": "A12 Bionic",
-        "iPhone11,4": "A12 Bionic",
-        "iPhone11,6": "A12 Bionic",
-        "iPhone11,8": "A12 Bionic",
-        "iPhone12,1": "A13 Bionic",
-        "iPhone12,3": "A13 Bionic",
-        "iPhone12,5": "A13 Bionic",
-        "iPhone12,8": "A13 Bionic",
-        "iPhone13,1": "A14 Bionic",
-        "iPhone13,2": "A14 Bionic",
-        "iPhone13,3": "A14 Bionic",
-        "iPhone13,4": "A14 Bionic",
-        "iPhone14,2": "A15 Bionic",
-        "iPhone14,3": "A15 Bionic",
-        "iPhone14,4": "A15 Bionic",
-        "iPhone14,5": "A15 Bionic",
-        "iPhone14,6": "A15 Bionic",
-        "iPhone14,7": "A15 Bionic",
-        "iPhone14,8": "A15 Bionic",
-        "iPhone15,2": "A16 Bionic",
-        "iPhone15,3": "A16 Bionic",
-        "iPhone15,4": "A16 Bionic",
-        "iPhone15,5": "A16 Bionic",
-        "iPhone16,1": "A17 Pro",
-        "iPhone16,2": "A17 Pro",
-        "iPhone17,1": "A18 Pro",
-        "iPhone17,2": "A18 Pro",
-        "iPhone17,3": "A18",
-        "iPhone17,4": "A18",
-        "iPhone17,5": "A18",
-        "iPhone18,1": "A19 Pro",
-        "iPhone18,2": "A19 Pro",
-        "iPhone18,3": "A19",
-        "iPhone18,4": "A19 Pro",
-        "iPhone18,5": "A19",
-    ]
 }
