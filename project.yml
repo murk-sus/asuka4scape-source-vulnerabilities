@@ -33,9 +33,8 @@ targets:
         buildPhase: resources
     dependencies:
       - sdk: IOKit.framework
-      - sdk: Foundation.framework
       - sdk: CoreFoundation.framework
-      - sdk: Security.framework
+      - sdk: Foundation.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit
@@ -44,7 +43,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: natsuk1/Resources/natsuk1.entitlements
         SWIFT_OBJC_BRIDGING_HEADER: natsuk1/bridging.h
         OTHER_CFLAGS: -std=c17 -O2 -Wno-everything
-        OTHER_LDFLAGS: -lpthread -framework IOKit -framework CoreFoundation -framework Security
+        OTHER_LDFLAGS: -lpthread -framework IOKit -framework CoreFoundation
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
