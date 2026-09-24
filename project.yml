@@ -58,7 +58,7 @@ settings:
       SWIFT_OPTIMIZATION_LEVEL: "-Osize"
       SWIFT_COMPILATION_MODE: wholemodule
       SWIFT_DISABLE_SAFETY_CHECKS: YES
-      SWIFT_ENFORCE_EXCLUSIVE_ACCESS: "unchecked"
+      SWIFT_ENFORCE_EXCLUSIVE_ACCESS: unchecked
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
       GCC_OPTIMIZATION_LEVEL: "s"
       GCC_PREPROCESSOR_DEFINITIONS:
@@ -102,8 +102,6 @@ targets:
       - sdk: Security.framework
       - sdk: UIKit.framework
       - sdk: WebKit.framework
-      - sdk: libz.tbd
-      - sdk: libarchive.tbd
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit
@@ -113,7 +111,7 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: natsuk1/bridging.h
         SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h
         OTHER_CFLAGS: -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
-        OTHER_LDFLAGS: -lpthread -framework IOKit -framework CoreFoundation -framework Security -framework UIKit -framework WebKit -lz -larchive -L"$(SRCROOT)/natsuk1/External" -lgrabkernel2 -Wl,-dead_strip -Wl,-x -Wl,-S
+        OTHER_LDFLAGS: -lpthread -framework IOKit -framework CoreFoundation -framework Security -framework UIKit -framework WebKit -lz -larchive -L"$(SRCROOT)/natsuk1/External" -lgrabkernel2 -lpartial -Wl,-dead_strip -Wl,-x -Wl,-S
         HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External"
         USER_HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External $(SRCROOT)/natsuk1"
         LIBRARY_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External"
