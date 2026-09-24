@@ -15,6 +15,22 @@ enum Lang: String, CaseIterable, Hashable, Identifiable {
     }
 }
 
+enum RunStatus {
+    case idle
+    case running
+    case done
+    case failed
+
+    var color: Color {
+        switch self {
+        case .idle:    return .gray
+        case .running: return .yellow
+        case .done:    return .green
+        case .failed:  return .red
+        }
+    }
+}
+
 @main
 struct natsuk1App: App {
     @StateObject private var state = AppState()
@@ -32,6 +48,7 @@ final class AppState: ObservableObject {
     @Published var log: String = ""
     @Published var running: Bool = false
     @Published var lang: Lang = .en
+    @Published var status: RunStatus = .idle
 
     @Published var slide: UInt64 = 0
     @Published var base: UInt64 = 0
@@ -62,11 +79,18 @@ final class AppState: ObservableObject {
 
     func clear() {
         clearLog()
+        status = .idle
+    }
+
+    func respring() {
+        append("[+] respring requested")
+        // Respring disabled on this build
     }
 
     func run() {
         guard !running else { return }
         running = true
+        status = .running
         clearLog()
         append("[+] natsuk1 v3.1")
         append("[+] target iOS 27.0 / arm64e")
@@ -94,6 +118,7 @@ final class AppState: ObservableObject {
                 self.append("[+] slide = 0x\(String(s, radix: 16))")
                 self.append("[+] base  = 0x\(String(b, radix: 16))")
                 self.append("[+] conf = \(c)")
+                self.status = (s != 0) ? .done : .failed
                 self.running = false
             }
         }
@@ -102,6 +127,7 @@ final class AppState: ObservableObject {
     func detectOnly() {
         guard !running else { return }
         running = true
+        status = .running
         clearLog()
         append("[+] natsuk1 KASLR detect")
 
@@ -122,6 +148,7 @@ final class AppState: ObservableObject {
                 self.append("[+] slide = 0x\(String(s, radix: 16))")
                 self.append("[+] base  = 0x\(String(b, radix: 16))")
                 self.append("[+] conf = \(c)")
+                self.status = (s != 0) ? .done : .failed
                 self.running = false
             }
         }
@@ -129,10 +156,5 @@ final class AppState: ObservableObject {
 
     func slideOnly() {
         detectOnly()
-    }
-
-    func respring() {
-        append("[+] respring requested")
-        Respring.run()
     }
 }
