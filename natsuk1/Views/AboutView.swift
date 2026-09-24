@@ -27,36 +27,46 @@ struct AboutView: View {
         return raw
     }
 
-    private var appIcon: UIImage? {
-        if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
-           let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
-           let files = primary["CFBundleIconFiles"] as? [String],
-           let last = files.last {
-            return UIImage(named: last)
-        }
-        return UIImage(named: "AppIcon")
-    }
-
     var body: some View {
         List {
             Section {
-                header
-                    .listRowInsets(EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(appName)
+                        .font(.title2)
+                        .fontWeight(.semibold)
+
+                    Text("Version \(version) (\(build))")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+
+                    if let commit {
+                        Text(commit)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                    }
+
+                    Text("Research project for iOS. Kernel offset viewer, NECP probe, syscall 525 probe and SPTM target listing.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                }
+                .padding(.vertical, 6)
             }
 
             Section {
-                linkRow(state.t("Source Repository", "Исходный код"), url: repoURL)
-                linkRow(state.t("MIT License", "Лицензия MIT"),
-                        url: repoURL.appendingPathComponent("blob/main/LICENSE"))
+                linkRow("Source Repository", url: repoURL)
+                linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
             } header: {
-                Text(state.t("Open Source", "Открытый код"))
+                Text("Open Source")
             }
 
             Section {
-                linkRow(state.t("Star on GitHub", "Звезда на GitHub"),
-                        url: repoURL.appendingPathComponent("stargazers"))
+                linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
             } header: {
-                Text(state.t("Community", "Сообщество"))
+                Text("Community")
             }
 
             Section {
@@ -64,7 +74,7 @@ struct AboutView: View {
                     AcknowledgementsView().environmentObject(state)
                 } label: {
                     HStack {
-                        Text(state.t("Acknowledgements", "Благодарности"))
+                        Text("Acknowledgements")
                             .foregroundColor(.primary)
                         Spacer(minLength: 8)
                     }
@@ -74,64 +84,17 @@ struct AboutView: View {
 
             Section {
             } header: {
-                Text(state.t("Disclaimer", "Дисклеймер"))
+                Text("Disclaimer")
             } footer: {
-                Text(state.t(
-                    "This is an independent research project and is not affiliated with, endorsed by, or sponsored by Apple Inc. The software is provided \"as is\", without warranty of any kind. You are solely responsible for how you use it and for any consequences that follow.",
-                    "Это независимый исследовательский проект, не связанный с Apple Inc., не одобрен и не спонсируется ею. Программное обеспечение предоставляется «как есть», без каких-либо гарантий. Ответственность за использование и его последствия полностью лежит на вас."
-                ))
-                .font(.footnote)
-                .foregroundColor(.secondary)
+                Text("This is an independent research project and is not affiliated with, endorsed by, or sponsored by Apple Inc. The software is provided \"as is\", without warranty of any kind. You are solely responsible for how you use it and for any consequences that follow.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle(state.t("About", "О программе"))
+        .navigationTitle("About")
         .navigationBarTitleDisplayMode(.inline)
         .tint(.blue)
-    }
-
-    private var header: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Group {
-                if let icon = appIcon {
-                    Image(uiImage: icon).resizable().aspectRatio(contentMode: .fill)
-                } else {
-                    ZStack {
-                        LinearGradient(
-                            colors: [Color(red: 0.20, green: 0.52, blue: 1.0),
-                                     Color(red: 0.30, green: 0.25, blue: 0.85)],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                        Image(systemName: "bolt.fill")
-                            .font(.system(size: 26, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
-                }
-            }
-            .frame(width: 64, height: 64)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(appName).font(.title3).fontWeight(.semibold)
-                Text("\(state.t("Version", "Версия")) \(version) (\(build))")
-                    .font(.subheadline).foregroundColor(.secondary)
-
-                if let commit {
-                    Text(commit)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                }
-
-                Divider().padding(.vertical, 4)
-
-                Text(state.t("Research project for iOS.", "Исследовательский проект для iOS."))
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
     }
 
     private func linkRow(_ title: String, url: URL) -> some View {
@@ -194,11 +157,11 @@ struct AcknowledgementsView: View {
                     .buttonStyle(.plain)
                 }
             } header: {
-                Text(state.t("Libraries", "Библиотеки"))
+                Text("Libraries")
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle(state.t("Acknowledgements", "Благодарности"))
+        .navigationTitle("Acknowledgements")
         .navigationBarTitleDisplayMode(.inline)
         .tint(.blue)
     }
