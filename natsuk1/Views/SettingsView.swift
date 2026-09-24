@@ -150,6 +150,25 @@ struct SettingsView: View {
                     .disabled(state.fetchingKernelcache)
 
                     Button {
+                        state.parseKernelcache()
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "wand.and.stars")
+                                .foregroundStyle(.tint)
+                                .frame(width: 20)
+                            Text("Auto-Detect Offsets")
+                                .foregroundStyle(.tint)
+                            Spacer(minLength: 8)
+                            if state.parsingKernelcache {
+                                ProgressView().scaleEffect(0.8)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(state.kernelcachePath == nil || state.parsingKernelcache)
+
+                    Button {
                         state.fetchImages()
                     } label: {
                         HStack(spacing: 10) {
