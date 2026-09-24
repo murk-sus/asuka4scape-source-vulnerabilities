@@ -30,6 +30,21 @@ struct SettingsView: View {
 
                 Section {
                     Button {
+                        state.respring()
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "arrow.clockwise")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            Text(state.t("Respring", "Респринг"))
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
                         state.clear()
                     } label: {
                         HStack(spacing: 10) {
