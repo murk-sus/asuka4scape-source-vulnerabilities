@@ -1,152 +1,192 @@
 import SwiftUI
 import UIKit
+import Foundation
 
-enum Lang: String, CaseIterable, Hashable, Identifiable {
-    case en
-    case ru
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .en: return "English"
-        case .ru: return "Русский"
-        }
-    }
-}
-
-enum RunStatus {
-    case idle, running, done, failed
-    var color: Color {
-        switch self {
-        case .idle:    return .gray
-        case .running: return .yellow
-        case .done:    return .green
-        case .failed:  return .red
-        }
+private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
+    guard let line = line else { return }
+    let s = String(cString: line)
+    DispatchQueue.main.async {
+        AppState.shared.append(s)
     }
 }
 
 @main
 struct natsuk1App: App {
-    @StateObject private var state = AppState()
+    @StateObject private var state = AppState.shared
+    @AppStorage("auto_run") private var auto_run = false
+
+    init() {
+        UserDefaults.standard.register(defaults: [
+            "auto_run": false,
+            "lang": "en",
+        ])
+    }
+
     var body: some Scene {
         WindowGroup {
-            ContentView().environmentObject(state)
+            ContentView()
+                .environmentObject(state)
+                .preferredColorScheme(.dark)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onAppear {
+                    nk_set_log(cCallback)
+                    if state.log.isEmpty {
+                        let v = ProcessInfo.processInfo.operatingSystemVersion
+                        state.append("[*] natsuk1 v3.1")
+                        state.append("[*] iOS \(v.majorVersion).\(v.minorVersion) / arm64e")
+                        state.append("")
+                    }
+                    if auto_run {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            state.run()
+                        }
+                    }
+                }
+                .overlay {
+                    if state.show_respring {
+                        RespringView()
+                            .ignoresSafeArea()
+                    }
+                }
         }
     }
 }
 
 @MainActor
 final class AppState: ObservableObject {
-    @Published var log: String = ""
-    @Published var running: Bool = false
-    @Published var lang: Lang = .en
-    @Published var status: RunStatus = .idle
+    static let shared = AppState()
 
-    @Published var slide: UInt64 = 0
-    @Published var base: UInt64 = 0
-    @Published var confidence: Int = 0
-    @Published var hasKread: Bool = false
-    @Published var hasKwrite: Bool = false
-    @Published var hasRoot: Bool = false
-
-    private var timer: Timer?
-
-    init() {
-        nk_set_log(2)
-        nk_log_capture_begin()
-        startPolling()
-    }
-
-    deinit {
-        timer?.invalidate()
-    }
-
-    private func startPolling() {
-        timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            let c = nk_log_poll()
-            let s = String(cString: c)
-            if !s.isEmpty && s != self.log {
-                self.log = s
+    enum Status {
+        case idle, running, ok, failed
+        var label: String {
+            switch self {
+            case .idle:    return "idle"
+            case .running: return "running"
+            case .ok:      return "ok"
+            case .failed:  return "failed"
+            }
+        }
+        var color: Color {
+            switch self {
+            case .idle:    return .secondary
+            case .running: return .yellow
+            case .ok:      return .green
+            case .failed:  return .red
             }
         }
     }
 
+    @Published var log: String = ""
+    @Published var slide: UInt64 = 0
+    @Published var base: UInt64 = 0
+    @Published var status: Status = .idle
+    @Published var running: Bool = false
+    @Published var show_respring: Bool = false
+    @Published var lang: String = "en" {
+        didSet { UserDefaults.standard.set(lang, forKey: "lang") }
+    }
+
+    private var poller: Timer?
+
+    private init() {
+        self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
+    }
+
     func t(_ en: String, _ ru: String) -> String {
-        lang == .ru ? ru : en
+        lang == "ru" ? ru : en
     }
 
     func append(_ s: String) {
-        if log.isEmpty { log = s } else { log += "\n" + s }
+        log += s + "\n"
+        if log.count > 50000 {
+            log = String(log.suffix(40000))
+        }
     }
 
-    func clearLog() {
-        nk_log_capture_begin()
-        log = ""
+    private func startPoller() {
+        poller?.invalidate()
+        poller = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            let s = g_nk.slide
+            let b = g_nk.base
+            if s != 0 && self.slide != s { self.slide = s }
+            if b != 0 && self.base != b { self.base = b }
+        }
     }
 
-    func clear() {
-        clearLog()
-        status = .idle
-    }
-
-    func respring() {
-        append("[+] respring requested")
+    private func stopPoller() {
+        poller?.invalidate()
+        poller = nil
     }
 
     func run() {
         guard !running else { return }
         running = true
         status = .running
-        clearLog()
+        startPoller()
 
-        Thread.detachNewThread { [weak self] in
-            Thread.current.qualityOfService = .userInitiated
-            _ = nk_full_exploit()
-            let s  = nk_get_slide()
-            let b  = nk_get_base()
-            let c  = Int(nk_get_confidence())
-            let kr = nk_get_has_kread()
-            let kw = nk_get_has_kwrite()
-            let rt = nk_get_has_root()
+        let thread = Thread { [weak self] in
+            let r = nk_full_exploit()
+            let sl = g_nk.slide
+            let bs = g_nk.base
             DispatchQueue.main.async {
                 guard let self = self else { return }
-                self.slide = s
-                self.base = b
-                self.confidence = c
-                self.hasKread = kr != 0
-                self.hasKwrite = kw != 0
-                self.hasRoot = rt != 0
-                self.status = (s != 0) ? .done : .failed
+                self.stopPoller()
                 self.running = false
+                self.slide = sl
+                self.base = bs
+                if r == 0 && sl != 0 {
+                    self.status = .ok
+                    self.append(String(format: "[+] SLIDE = 0x%llx", sl))
+                    self.append(String(format: "[+] BASE  = 0x%llx", bs))
+                } else {
+                    self.status = .failed
+                    self.append("[-] exploit failed (ret=\(r))")
+                }
             }
         }
-    }
-
-    func detectOnly() {
-        guard !running else { return }
-        running = true
-        status = .running
-        clearLog()
-
-        Thread.detachNewThread { [weak self] in
-            Thread.current.qualityOfService = .userInitiated
-            _ = nk_detect_slide()
-            let s = nk_get_slide()
-            let b = nk_get_base()
-            let c = Int(nk_get_confidence())
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.slide = s
-                self.base = b
-                self.confidence = c
-                self.status = (s != 0) ? .done : .failed
-                self.running = false
-            }
-        }
+        thread.qualityOfService = .userInitiated
+        thread.stackSize = 4 * 1024 * 1024
+        thread.start()
     }
 
     func slideOnly() {
-        detectOnly()
+        guard !running else { return }
+        running = true
+        status = .running
+        startPoller()
+
+        let thread = Thread { [weak self] in
+            let r = nk_detect_slide()
+            let sl = g_nk.slide
+            let bs = g_nk.base
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.stopPoller()
+                self.running = false
+                self.slide = sl
+                self.base = bs
+                if r == 0 && sl != 0 {
+                    self.status = .ok
+                    self.append(String(format: "[+] SLIDE = 0x%llx", sl))
+                    self.append(String(format: "[+] BASE  = 0x%llx", bs))
+                } else {
+                    self.status = .failed
+                    self.append("[-] slide not resolved")
+                }
+            }
+        }
+        thread.qualityOfService = .userInitiated
+        thread.stackSize = 4 * 1024 * 1024
+        thread.start()
     }
+
+    func respring() {
+        show_respring = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            RespringView.attemptSystemRespring()
+        }
+    }
+
+    func clear() { log = "" }
 }
