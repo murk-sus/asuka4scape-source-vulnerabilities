@@ -45,24 +45,16 @@ struct AboutView: View {
             }
 
             Section {
-                linkRow(
-                    state.t("Source Repository", "Исходный код"),
-                    url: repoURL
-                )
-
-                linkRow(
-                    state.t("MIT License", "Лицензия MIT"),
-                    url: repoURL.appendingPathComponent("blob/main/LICENSE")
-                )
+                linkRow(state.t("Source Repository", "Исходный код"), url: repoURL)
+                linkRow(state.t("MIT License", "Лицензия MIT"),
+                        url: repoURL.appendingPathComponent("blob/main/LICENSE"))
             } header: {
                 Text(state.t("Open Source", "Открытый код"))
             }
 
             Section {
-                linkRow(
-                    state.t("Star on GitHub", "Звезда на GitHub"),
-                    url: repoURL.appendingPathComponent("stargazers")
-                )
+                linkRow(state.t("Star on GitHub", "Звезда на GitHub"),
+                        url: repoURL.appendingPathComponent("stargazers"))
             } header: {
                 Text(state.t("Community", "Сообщество"))
             }
@@ -102,9 +94,7 @@ struct AboutView: View {
         HStack(alignment: .top, spacing: 14) {
             Group {
                 if let icon = appIcon {
-                    Image(uiImage: icon)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
+                    Image(uiImage: icon).resizable().aspectRatio(contentMode: .fill)
                 } else {
                     ZStack {
                         LinearGradient(
@@ -122,13 +112,9 @@ struct AboutView: View {
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(appName)
-                    .font(.title3)
-                    .fontWeight(.semibold)
-
+                Text(appName).font(.title3).fontWeight(.semibold)
                 Text("\(state.t("Version", "Версия")) \(version) (\(build))")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .font(.subheadline).foregroundColor(.secondary)
 
                 if let commit {
                     Text(commit)
@@ -140,13 +126,10 @@ struct AboutView: View {
 
                 Divider().padding(.vertical, 4)
 
-                Text(state.t(
-                    "Research project for iOS.",
-                    "Исследовательский проект для iOS."
-                ))
-                .font(.footnote)
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                Text(state.t("Research project for iOS.", "Исследовательский проект для iOS."))
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -156,13 +139,8 @@ struct AboutView: View {
             openURL(url)
         } label: {
             HStack(alignment: .top, spacing: 8) {
-                Text(title)
-                    .foregroundStyle(.tint)
-                    .font(.body)
-                    .fontWeight(.medium)
-
+                Text(title).foregroundStyle(.tint).font(.body).fontWeight(.medium)
                 Spacer(minLength: 8)
-
                 Image(systemName: "link")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.tint)
@@ -171,5 +149,59 @@ struct AboutView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Acknowledgements
+
+struct AcknowledgementsView: View {
+    @Environment(\.openURL) private var openURL
+    @EnvironmentObject var state: AppState
+
+    private struct Entry {
+        let name: String
+        let license: String
+        let url: URL
+    }
+
+    private let entries: [Entry] = [
+        Entry(name: "XcodeGen", license: "MIT",
+              url: URL(string: "https://github.com/yonaskolb/XcodeGen")!),
+        Entry(name: "ldid", license: "GPL-3.0",
+              url: URL(string: "https://github.com/ProcursusTeam/ldid")!),
+        Entry(name: "libplist", license: "LGPL-2.1",
+              url: URL(string: "https://github.com/libimobiledevice/libplist")!),
+    ]
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(entries, id: \.name) { entry in
+                    Button {
+                        openURL(entry.url)
+                    } label: {
+                        HStack(alignment: .top, spacing: 8) {
+                            Text(entry.name).foregroundStyle(.tint).font(.body).fontWeight(.medium)
+                            Spacer(minLength: 8)
+                            Text(entry.license)
+                                .font(.system(.footnote, design: .monospaced))
+                                .foregroundColor(.secondary)
+                            Image(systemName: "link")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.tint)
+                        }
+                        .padding(.vertical, 2)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            } header: {
+                Text(state.t("Libraries", "Библиотеки"))
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(state.t("Acknowledgements", "Благодарности"))
+        .navigationBarTitleDisplayMode(.inline)
+        .tint(.blue)
     }
 }
