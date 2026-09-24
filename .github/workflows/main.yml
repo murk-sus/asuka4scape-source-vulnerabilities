@@ -65,7 +65,7 @@ jobs:
             '            nil' \
             '        ]' \
             '' \
-            '        let dict = sets.withUnsafeMutableBufferPointer { buf -> OpaquePointer? in' \
+            '        let dict = sets.withUnsafeMutableBufferPointer { buf -> xpc_object_t? in' \
             '            return xpf_construct_offset_dictionary(buf.baseAddress!)' \
             '        }' \
             '' \
@@ -100,7 +100,7 @@ jobs:
             '        ]' \
             '' \
             '        for (xpfKey, ourKey) in map {' \
-            '            let v = xpfKey.withCString { xpf_item_resolve($0) }' \
+            '            let v = xpfKey.withCString { xpf_item_resolve(dict, $0) }' \
             '            if v != 0 {' \
             '                result[ourKey] = String(format: "0x%llX", v)' \
             '            }' \
