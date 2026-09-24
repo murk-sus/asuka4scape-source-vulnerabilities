@@ -154,7 +154,10 @@ final class AppState: ObservableObject {
                 case .success(let url):
                     self.kernelcachePath = url.path
                     UserDefaults.standard.set(url.path, forKey: "kernelcache_path")
-                    self.append("[+] Kernelcache saved: \(url.lastPathComponent)")
+                    let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+                    let mb = Double(size ?? 0) / 1024.0 / 1024.0
+                    self.append(String(format: "[+] Kernelcache: %.1f MB", mb))
+                    self.append("[+] Saved: \(url.path)")
                 case .failure(let error):
                     self.append("[-] Fetch failed: \(error.localizedDescription)")
                 }
@@ -174,6 +177,14 @@ final class AppState: ObservableObject {
                 switch result {
                 case .success(let url):
                     self.append("[+] Images saved to: \(url.path)")
+                    if let files = try? FileManager.default.contentsOfDirectory(atPath: url.path) {
+                        for f in files {
+                            let full = url.path + "/" + f
+                            let size = (try? FileManager.default.attributesOfItem(atPath: full)[.size] as? Int) ?? 0
+                            let kb = Double(size ?? 0) / 1024.0
+                            self.append(String(format: "    %@ — %.0f KB", f, kb))
+                        }
+                    }
                 case .failure(let error):
                     self.append("[-] Fetch failed: \(error.localizedDescription)")
                 }
