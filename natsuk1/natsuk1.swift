@@ -40,6 +40,13 @@ struct natsuk1App: App {
                         }
                     }
                 }
+                .overlay {
+                    if state.show_respring {
+                        RespringView()
+                            .brightness(-1.0)
+                            .ignoresSafeArea()
+                    }
+                }
         }
     }
 }
@@ -62,6 +69,7 @@ final class AppState: ObservableObject {
     @Published var log: String = ""
     @Published var status: Status = .idle
     @Published var running: Bool = false
+    @Published var show_respring: Bool = false
 
     @Published var lang: String {
         didSet { UserDefaults.standard.set(lang, forKey: "lang") }
@@ -126,6 +134,10 @@ final class AppState: ObservableObject {
         t.qualityOfService = .userInitiated
         t.stackSize = 16 * 1024 * 1024
         t.start()
+    }
+
+    func respring() {
+        show_respring = true
     }
 
     func clear() {
