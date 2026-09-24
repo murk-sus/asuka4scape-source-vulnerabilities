@@ -173,7 +173,7 @@ final class AppState: ObservableObject {
         }
         if parsingKernelcache { return }
         parsingKernelcache = true
-        append("[*] Parsing kernelcache...")
+        append("[*] Parsing kernelcache via XPF...")
 
         let url = URL(fileURLWithPath: path)
 
@@ -193,7 +193,7 @@ final class AppState: ObservableObject {
             } catch {
                 DispatchQueue.main.async {
                     self.parsingKernelcache = false
-                    self.append("[-] Parse failed: \(error)")
+                    self.append("[-] Parse failed: \(error.localizedDescription)")
                 }
             }
         }
