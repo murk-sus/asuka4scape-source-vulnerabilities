@@ -20,7 +20,7 @@ struct ContentView: View {
                             Image(systemName: "bolt.fill")
                                 .foregroundStyle(.secondary)
                                 .frame(width: 20)
-                            Text(state.t("Run Exploit", "Запустить эксплойт"))
+                            Text(state.t("Run Offsets", "Запустить оффсеты"))
                                 .foregroundStyle(.primary)
                             Spacer(minLength: 8)
                             if state.running {
@@ -31,46 +31,14 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(state.running)
-
-                    Button {
-                        state.slideOnly()
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "scope")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 20)
-                            Text(state.t("Slide Only", "Только слайд"))
-                                .foregroundStyle(.primary)
-                            Spacer(minLength: 8)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(state.running)
                 } header: {
                     Label(state.t("Actions", "Действия"), systemImage: "play.circle")
                 } footer: {
-                    Text(state.t("**Run Exploit** executes the full chain. **Slide Only** runs KASLR bypass in isolation.",
-                                 "**Запустить эксплойт** выполняет всю цепочку. **Только слайд** запускает только обход KASLR."))
+                    Text(state.t("Prints kernel offsets, runs NECP probe, syscall 525 probe, and lists SPTM patch targets.",
+                                 "Выводит оффсеты ядра, запускает NECP probe, syscall 525 probe и перечисляет SPTM-таргеты."))
                 }
 
                 Section {
-                    HStack {
-                        Text(state.t("Slide", "Слайд"))
-                        Spacer()
-                        Text(state.slide == 0 ? "—" : String(format: "0x%llx", state.slide))
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(state.slide == 0 ? .secondary : .green)
-                    }
-
-                    HStack {
-                        Text(state.t("Base", "База"))
-                        Spacer()
-                        Text(state.base == 0 ? "—" : String(format: "0x%llx", state.base))
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(state.base == 0 ? .secondary : .green)
-                    }
-
                     HStack {
                         Text(state.t("Status", "Статус"))
                         Spacer()
