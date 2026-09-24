@@ -91,6 +91,8 @@ targets:
       - path: natsuk1/Exploit
       - path: natsuk1/External/libgrabkernel2.h
         buildPhase: none
+      - path: natsuk1/External/partial.h
+        buildPhase: none
       - path: natsuk1/Resources/Offsets.json
         buildPhase: resources
       - path: natsuk1/Resources/Assets.xcassets
@@ -102,6 +104,7 @@ targets:
       - sdk: Security.framework
       - sdk: UIKit.framework
       - sdk: WebKit.framework
+      - sdk: Compression.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit
@@ -111,7 +114,7 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: natsuk1/bridging.h
         SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h
         OTHER_CFLAGS: -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
-        OTHER_LDFLAGS: -lpthread -framework IOKit -framework CoreFoundation -framework Security -framework UIKit -framework WebKit -lz -larchive -L"$(SRCROOT)/natsuk1/External" -lgrabkernel2 -lpartial -Wl,-dead_strip -Wl,-x -Wl,-S
+        OTHER_LDFLAGS: -lpthread -framework IOKit -framework CoreFoundation -framework Security -framework UIKit -framework WebKit -framework Compression -lz -larchive -L"$(SRCROOT)/natsuk1/External" -lgrabkernel2 -lpartial -Wl,-dead_strip -Wl,-x -Wl,-S
         HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External"
         USER_HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External $(SRCROOT)/natsuk1"
         LIBRARY_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External"
