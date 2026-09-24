@@ -16,7 +16,7 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Clone XPF
+      - name: Clone XPF with submodules
         run: |
           rm -rf /tmp/XPF
           git clone --recursive https://github.com/opa334/XPF.git /tmp/XPF
@@ -24,6 +24,7 @@ jobs:
           git submodule update --init --recursive
           echo "=== submodules ==="
           ls -la external/
+          ls -la external/img4lib/ 2>/dev/null || true
 
       - name: Build ChOma static lib
         run: |
@@ -40,54 +41,42 @@ jobs:
           cp include/choma/*.h output/ios/include/choma/ 2>/dev/null || true
           ls -la output/ios/lib/
 
-      - name: Build other externals
-        run: |
-          cd /tmp/XPF
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          for ext in external/*/; do
-            name=$(basename "$ext")
-            if [ "$name" = "ChOma" ]; then continue; fi
-            if [ -f "$ext/Makefile" ] && [ -d "$ext/src" ]; then
-              echo "=== building $name ==="
-              cd "$ext"
-              mkdir -p build/ios output/ios/lib output/ios/include
-              OPENSSL=$(ls -d /opt/homebrew/Cellar/openssl@3/*/include 2>/dev/null | head -1)
-              CFLAGS="-Wall -Wno-everything -fPIC -framework CoreFoundation -arch arm64 -arch arm64e -isysroot $SDK -miphoneos-version-min=11.0 -Iinclude -I../ChOma/output/ios/include -I../ChOma/output/ios/include/choma -I$OPENSSL"
-              ok=1
-              for f in src/*.c; do
-                [ -f "$f" ] || continue
-                bn=$(basename "$f" .c)
-                clang $CFLAGS -c "$f" -o "build/ios/$bn.o" || ok=0
-              done
-              if [ "$ok" = "1" ]; then
-                libtool -static build/ios/*.o -o "output/ios/lib/lib$name.a" 2>/dev/null || true
-                cp include/*.h output/ios/include/ 2>/dev/null || true
-                ls -la output/ios/lib/ || true
-              fi
-              cd /tmp/XPF
-            fi
-          done
-
       - name: Build XPF static lib
         run: |
           cd /tmp/XPF
           mkdir -p build/ios output/ios/lib output/ios/include
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           CHOMA=/tmp/XPF/external/ChOma
+          IMG4=/tmp/XPF/external/img4lib
           INCLUDES="-Iinclude -I$CHOMA/output/ios/include -I$CHOMA/output/ios/include/choma"
-          for d in external/*/include external/*/output/ios/include; do
-            [ -d "$d" ] && INCLUDES="$INCLUDES -I$d"
-          done
+          INCLUDES="$INCLUDES -I$IMG4 -I$IMG4/libvfs -I$IMG4/libDER"
           CFLAGS="-Wall -Wno-everything -fPIC -framework CoreFoundation -arch arm64 -arch arm64e -isysroot $SDK -miphoneos-version-min=11.0 $INCLUDES"
+          CFLAGS="$CFLAGS -DUSE_COMMONCRYPTO -DUSE_LIBCOMPRESSION -DiOS10 -DDER_M;ULTIBYTE_TAGS=1 -D__unused=\"__attribute__((unused))\" -DDER_TAG_SIZE=8 -Wno-variadic-macros -Wno-multichar -Wno-four-char-constants -Wno-unused-parameter"
+          LDFLAGS="-lcompression -framework Security"
+
           for f in src/*.c; do
             name=$(basename "$f" .c)
             clang $CFLAGS -c "$f" -o "build/ios/$name.o" || exit 1
           done
-          EXT_LIBS=""
-          for lib in external/*/output/ios/lib/*.a; do
-            [ -f "$lib" ] && EXT_LIBS="$EXT_LIBS $lib"
+
+          for f in $IMG4/*.c do
+            [ -f "$f" ] || continue
+            name="img4_$(basename "$f" .c)"
+            clang $CFLAGS -c "$f" -o "build/ios/$name.o" || exit 1
           done
-          libtool -static build/ios/*.o $EXT_LIBS -o output/ios/lib/libxpf.a
+
+          for f in $IMG4/libvfs/*.c; do
+            [ "$(basename "$f")" = "vfs_lzvn.c" ] && continue
+            name="vfs_$(basename "$f" .c)"
+            clang $CFLAGS -c "$f" -o "build/ios/$name.o" || exit 1
+          done
+
+          for f in $IMG4/libDER/*.c; do
+            name="der_$(basename "$f" .c)"
+            clang $CFLAGS -c "$f" -o "build/ios/$name.o" || exit 1
+          done
+
+          libtool -static build/ios/*.o $CHOMA/output/ios/lib/libchoma.a -o output/ios/lib/libxpf.a
           cp include/*.h output/ios/include/ 2>/dev/null || true
           ls -la output/ios/lib/
 
@@ -105,9 +94,6 @@ jobs:
           mkdir -p natsuk1/External
           cp /tmp/XPF/output/ios/lib/libxpf.a natsuk1/External/ 2>/dev/null || true
           find /tmp/XPF -name "libchoma.a" -exec cp {} natsuk1/External/ \;
-          for ext in /tmp/XPF/external/*/output/ios/lib/*.a; do
-            [ -f "$ext" ] && cp "$ext" natsuk1/External/
-          done
           find /tmp/XPF -name "xpf.h" -exec cp {} natsuk1/External/ \;
           find /tmp/XPF -name "*.h" -path "*output/ios/include*" -exec cp {} natsuk1/External/ \; 2>/dev/null || true
           cp -r /tmp/XPF/external/ChOma/output/ios/include/choma natsuk1/External/ 2>/dev/null || true
