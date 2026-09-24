@@ -60,6 +60,10 @@ final class AppState: ObservableObject {
         log = ""
     }
 
+    func clear() {
+        clearLog()
+    }
+
     func run() {
         guard !running else { return }
         running = true
@@ -121,5 +125,14 @@ final class AppState: ObservableObject {
                 self.running = false
             }
         }
+    }
+
+    func slideOnly() {
+        detectOnly()
+    }
+
+    func respring() {
+        append("[+] respring requested")
+        Respring.run()
     }
 }
