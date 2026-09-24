@@ -239,11 +239,44 @@ jobs:
 
       - name: Patch SettingsView (add Test R/W button)
         run: |
-          sed -i '' 's|                            Text("Fetch Images")|                            Text("Fetch Images")|g' natsuk1/Views/SettingsView.swift
-          MARKER='                            Text("Fetch Images")'
-          BUTTON='                    Button {\n                        let r = KernelRW.shared.testRoundTrip()\n                        state.append("[/] Test R\\/W: \\(r)")\n                    } label: {\n                        HStack(spacing: 10) {\n                            Image(systemName: "checkmark.shield")\n                                .foregroundStyle(.tint)\n                                .frame(width: 20)\n                            Text("Test R\\/W")\n                                .foregroundStyle(.tint)\n                            Spacer(minLength: 8)\n                        }\n                        .contentShape(Rectangle())\n                    }\n                    .buttonStyle(.plain)\n\n'
-          sed -i '' "s|${MARKER}|${BUTTON}${MARKER}|" natsuk1/Views/SettingsView.swift
-          grep -n "Test R" natsuk1/Views/SettingsView.swift || echo "marker not found"
+          python3 - <<'PYEOF'
+          import re
+          path = 'natsuk1/Views/SettingsView.swift'
+          with open(path) as f:
+              src = f.read()
+
+          if 'Test R/W' in src:
+              print('already patched')
+              raise SystemExit(0)
+
+          marker = '                    Button {\n                        state.fetchImages()'
+          if marker not in src:
+              print('marker not found')
+              raise SystemExit(1)
+
+          button = '''                    Button {
+                        let r = KernelRW.shared.testRoundTrip()
+                        state.append("[/] Test R/W: \\(r)")
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "checkmark.shield")
+                                .foregroundStyle(.tint)
+                                .frame(width: 20)
+                            Text("Test R/W")
+                                .foregroundStyle(.tint)
+                            Spacer(minLength: 8)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+'''
+          src = src.replace(marker, button + marker, 1)
+          with open(path, 'w') as f:
+              f.write(src)
+          print('patched')
+          PYEOF
+          grep -n "Test R" natsuk1/Views/SettingsView.swift || true
 
       - name: Generate xcodeproj
         run: xcodegen generate
