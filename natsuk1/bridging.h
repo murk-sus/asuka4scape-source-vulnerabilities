@@ -3,5 +3,6 @@
 
 #include <stdint.h>
 #include "Exploit/nk_api.h"
+#import "libgrabkernel2.h"
 
 #endif
