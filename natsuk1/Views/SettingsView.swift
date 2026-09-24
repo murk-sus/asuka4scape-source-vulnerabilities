@@ -169,6 +169,22 @@ struct SettingsView: View {
                     .disabled(state.kernelcachePath == nil || state.parsingKernelcache)
 
                     Button {
+                        let r = KernelRW.shared.testRoundTrip()
+                        state.append("[/] Test R/W: \(r)")
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "checkmark.shield")
+                                .foregroundStyle(.tint)
+                                .frame(width: 20)
+                            Text("Test R/W")
+                                .foregroundStyle(.tint)
+                            Spacer(minLength: 8)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
                         state.fetchImages()
                     } label: {
                         HStack(spacing: 10) {

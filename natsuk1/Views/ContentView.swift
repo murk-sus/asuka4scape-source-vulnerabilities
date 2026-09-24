@@ -20,7 +20,7 @@ struct ContentView: View {
                             Image(systemName: "bolt.fill")
                                 .foregroundStyle(.secondary)
                                 .frame(width: 20)
-                            Text(state.t("Run Offsets", "Запустить оффсеты"))
+                            Text(state.t("Run Exploit", "Запустить эксплойт"))
                                 .foregroundStyle(.primary)
                             Spacer(minLength: 8)
                             if state.running {
@@ -34,8 +34,8 @@ struct ContentView: View {
                 } header: {
                     Label(state.t("Actions", "Действия"), systemImage: "play.circle")
                 } footer: {
-                    Text(state.t("Prints kernel offsets, runs NECP probe, syscall 525 probe, and lists SPTM patch targets.",
-                                 "Выводит оффсеты ядра, запускает NECP probe, syscall 525 probe и перечисляет SPTM-таргеты."))
+                    Text(state.t("Runs kernel exploit, prints offsets, runs NECP probe, syscall 525 probe, and lists SPTM patch targets.",
+                                 "Запускает эксплойт ядра, выводит оффсеты, NECP probe, syscall 525 probe и список SPTM-таргетов."))
                 }
 
                 Section {
