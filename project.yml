@@ -30,6 +30,7 @@ targets:
       - path: natsuk1/Views
       - path: natsuk1/Exploit
       - path: natsuk1/Resources/Assets.xcassets
+      - path: natsuk1/Resources/Offsets.json
         buildPhase: resources
     dependencies:
       - sdk: IOKit.framework
