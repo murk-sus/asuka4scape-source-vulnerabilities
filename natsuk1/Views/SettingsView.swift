@@ -148,6 +148,22 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(state.fetchingKernelcache)
+
+                    Button {
+                        state.fetchImages()
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "square.stack.3d.down.right")
+                                .foregroundStyle(.tint)
+                                .frame(width: 20)
+                            Text("Fetch Images")
+                                .foregroundStyle(.tint)
+                            Spacer(minLength: 8)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(state.fetchingKernelcache)
                 } header: {
                     Label("Kernelcache", systemImage: "shippingbox")
                 }
