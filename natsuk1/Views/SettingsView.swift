@@ -6,10 +6,9 @@ struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var offsets: OffsetsStore
 
-    @AppStorage("auto_run")     private var auto_run: Bool = false
-    @AppStorage("verbose")      private var verbose: Bool = true
-    @AppStorage("keep_alive")   private var keep_alive: Bool = false
-    @AppStorage("exploit_mode") private var exploit_mode: String = "Hybrid"
+    @AppStorage("auto_run")   private var auto_run: Bool = false
+    @AppStorage("verbose")    private var verbose: Bool = true
+    @AppStorage("keep_alive") private var keep_alive: Bool = false
 
     private var appName: String {
         Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
@@ -90,21 +89,19 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Picker("", selection: $exploit_mode) {
-                        Text("VFS").tag("VFS")
-                        Text("SBX").tag("SBX")
-                        Text("Hybrid").tag("Hybrid")
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-
                     NavigationLink {
                         OffsetsView().environmentObject(offsets)
                     } label: {
                         HStack(spacing: 10) {
+                            Image(systemName: "list.number")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
                             Text("Modify Offsets")
                                 .foregroundStyle(.primary)
                             Spacer(minLength: 8)
+                            Text("\(offsets.filledCount())/\(offsets.totalCount())")
+                                .font(.system(size: 13, design: .monospaced))
+                                .foregroundColor(.secondary)
                         }
                         .contentShape(Rectangle())
                     }
@@ -114,29 +111,33 @@ struct SettingsView: View {
 
                 Section {
                     HStack(spacing: 10) {
-                        Text("Fetch Kernelcache")
+                        Image(systemName: "doc.text")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20)
+                        Text("Kernelcache")
                             .foregroundStyle(.secondary)
                         Spacer(minLength: 8)
+                        Text("Not loaded")
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundColor(.secondary)
                     }
+                    .padding(.vertical, 2)
+
                     Button {
                     } label: {
                         HStack(spacing: 10) {
-                            Text("Import Kernelcache")
+                            Image(systemName: "square.and.arrow.down")
+                                .foregroundStyle(.tint)
+                                .frame(width: 20)
+                            Text("Import")
                                 .foregroundStyle(.tint)
                             Spacer(minLength: 8)
-                            Image(systemName: "info.circle")
-                                .foregroundStyle(.tint)
                         }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 } header: {
                     Label("Kernelcache", systemImage: "shippingbox")
-                } footer: {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("NOTE: You will have to click \"Run Exploit\" before you can fetch kernelcache.")
-                        Text("Deleting and refetching kernelcache may fix some issues. Try doing this before opening a GitHub issue or asking for support in our Discord server.")
-                    }
                 }
 
                 Section {
