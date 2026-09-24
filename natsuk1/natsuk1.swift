@@ -11,6 +11,7 @@ private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line i
 @main
 struct natsuk1App: App {
     @StateObject private var state = AppState.shared
+    @StateObject private var offsets = OffsetsStore.shared
     @AppStorage("auto_run") private var auto_run = false
 
     init() {
@@ -24,13 +25,14 @@ struct natsuk1App: App {
         WindowGroup {
             ContentView()
                 .environmentObject(state)
+                .environmentObject(offsets)
                 .preferredColorScheme(.dark)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
                     nk_set_log(cCallback)
                     if state.log.isEmpty {
                         let v = ProcessInfo.processInfo.operatingSystemVersion
-                        state.append("[*] natsuk1 v4.0")
+                        state.append("[*] natsuk1 v4.1")
                         state.append("[*] iOS \(v.majorVersion).\(v.minorVersion) / arm64e")
                         state.append("")
                     }
