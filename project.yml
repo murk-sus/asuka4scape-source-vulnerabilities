@@ -17,6 +17,7 @@ settings:
     SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "16.0"
     CLANG_ENABLE_MODULES: YES
+    CLANG_MODULES_AUTOLINK: NO
     CLANG_ENABLE_OBJC_ARC: YES
     ENABLE_BITCODE: NO
     CODE_SIGN_IDENTITY: ""
@@ -93,6 +94,8 @@ targets:
         buildPhase: none
       - path: natsuk1/External/partial.h
         buildPhase: none
+      - path: natsuk1/External/xpf.h
+        buildPhase: none
       - path: natsuk1/Resources/Offsets.json
         buildPhase: resources
       - path: natsuk1/Resources/Assets.xcassets
@@ -104,10 +107,6 @@ targets:
       - sdk: Security.framework
       - sdk: UIKit.framework
       - sdk: WebKit.framework
-      - sdk: libcompression.tbd
-      - sdk: libz.tbd
-      - sdk: libarchive.tbd
-      - sdk: libxpc.tbd
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit
@@ -116,12 +115,12 @@ targets:
         CODE_SIGN_ENTITLEMENTS: natsuk1/Resources/natsuk1.entitlements
         SWIFT_OBJC_BRIDGING_HEADER: natsuk1/bridging.h
         SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h
-        OTHER_CFLAGS: -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
-        OTHER_LDFLAGS: -lpthread -framework IOKit -framework CoreFoundation -framework Security -framework UIKit -framework WebKit -lcompression -lz -larchive -L"$(SRCROOT)/natsuk1/External" -lgrabkernel2 -lpartial -Wl,-dead_strip -Wl,-x -Wl,-S
-        HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External $(SRCROOT)/natsuk1/External/XPF/include $(SRCROOT)/natsuk1/External/XPF/external/ChOma/include"
-        USER_HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External $(SRCROOT)/natsuk1/External/XPF/include $(SRCROOT)/natsuk1/External/XPF/external/ChOma/include $(SRCROOT)/natsuk1"
+        OTHER_CFLAGS: -fno-autolink -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
+        OTHER_LDFLAGS: -Wl,-undefined,dynamic_lookup -lpthread -framework IOKit -framework CoreFoundation -framework Security -framework UIKit -framework WebKit -lz -larchive -lcompression -lxpf -lchoma -L"$(SRCROOT)/natsuk1/External" -lgrabkernel2 -lpartial -Wl,-dead_strip -Wl,-x -Wl,-S
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External"
+        USER_HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External $(SRCROOT)/natsuk1"
         LIBRARY_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External"
-        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/natsuk1/External $(SRCROOT)/natsuk1/External/XPF/include"
+        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/natsuk1/External"
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

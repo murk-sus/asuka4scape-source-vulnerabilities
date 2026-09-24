@@ -6,32 +6,56 @@ final class KernelcacheParser {
     private init() {}
 
     func parse(url: URL) throws -> [String: String] {
-        guard xpf_start_with_kernel_path(url.path) == 0 else {
+        let kernelPath = url.path
+
+        let docs = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents")
+        let sptmPath = docs.appendingPathComponent("images/sptm.im4p").path
+        let txmPath  = docs.appendingPathComponent("images/txm.im4p").path
+
+        let hasSptm = FileManager.default.fileExists(atPath: sptmPath)
+        let hasTxm  = FileManager.default.fileExists(atPath: txmPath)
+
+        let rc: Int32 = kernelPath.withCString { kp in
+            if hasSptm && hasTxm {
+                return sptmPath.withCString { sp in
+                    txmPath.withCString { tp in
+                        xpf_start_with_kernel_path(kp, sp, tp)
+                    }
+                }
+            } else {
+                return xpf_start_with_kernel_path(kp, nil, nil)
+            }
+        }
+
+        guard rc == 0 else {
             let err = String(cString: xpf_get_error())
-            throw NSError(domain: "KernelcacheParser", code: -1,
+            throw NSError(domain: "KernelcacheParser", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "xpf start error: \(err)"])
         }
 
-        let sets: [UnsafePointer<CChar>?] = [
-            UnsafePointer(strdup("base")),
-            UnsafePointer(strdup("translation")),
-            UnsafePointer(strdup("struct")),
+        let basePtr = strdup("base")
+        let transPtr = strdup("translation")
+        let structPtr = strdup("struct")
+
+        var sets: [UnsafePointer<CChar>?] = [
+            UnsafePointer(basePtr),
+            UnsafePointer(transPtr),
+            UnsafePointer(structPtr),
             nil
         ]
 
-        guard let dict = xpf_construct_offset_dictionary(sets) else {
-            let err = String(cString: xpf_get_error())
-            xpf_stop()
-            throw NSError(domain: "KernelcacheParser", code: -2,
-                          userInfo: [NSLocalizedDescriptionKey: "xpf dict failed: \(err)"])
+        _ = sets.withUnsafeMutableBufferPointer { buf -> xpc_object_t? in
+            return xpf_construct_offset_dictionary(buf.baseAddress!)
         }
 
-        var result: [String: String] = [:]
-        let base = gXPF.kernelBase
+        free(basePtr)
+        free(transPtr)
+        free(structPtr)
 
-        result["off_kernel_base"] = String(format: "0x%llX", base)
+        var result: [String: String] = [:]
 
         let map: [(String, String)] = [
+            ("kernelBase",                   "off_kernel_base"),
             ("kernelSymbol.sysent",          "off_sysent_base"),
             ("kernelSymbol.mach_trap_table", "off_mach_trap_table"),
             ("kernelSymbol.copyin",          "off_fn_copyin"),
@@ -48,7 +72,7 @@ final class KernelcacheParser {
         ]
 
         for (xpfKey, ourKey) in map {
-            let v = xpf_item_resolve(xpfKey)
+            let v = xpfKey.withCString { xpf_item_resolve($0) }
             if v != 0 {
                 result[ourKey] = String(format: "0x%llX", v)
             }
