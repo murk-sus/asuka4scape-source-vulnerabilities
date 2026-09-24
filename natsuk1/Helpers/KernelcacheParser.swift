@@ -30,7 +30,7 @@ final class KernelcacheParser {
         guard rc == 0 else {
             let err = String(cString: xpf_get_error())
             throw NSError(domain: "KernelcacheParser", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "xpf start error: \(err)"])
+                          userInfo: [NSLocalizedDescriptionKey: "xpf start: \(err)"])
         }
 
         let basePtr = strdup("base")
@@ -44,13 +44,20 @@ final class KernelcacheParser {
             nil
         ]
 
-        _ = sets.withUnsafeMutableBufferPointer { buf -> xpc_object_t? in
+        let dict: xpc_object_t? = sets.withUnsafeMutableBufferPointer { buf -> xpc_object_t? in
             return xpf_construct_offset_dictionary(buf.baseAddress!)
         }
 
         free(basePtr)
         free(transPtr)
         free(structPtr)
+
+        guard dict != nil else {
+            let err = String(cString: xpf_get_error())
+            xpf_stop()
+            throw NSError(domain: "KernelcacheParser", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "xpf dict nil: \(err)"])
+        }
 
         var result: [String: String] = [:]
 
@@ -123,7 +130,10 @@ final class KernelcacheParser {
             }
         }
 
-        xpf_stop()
+        withExtendedLifetime(dict) {
+            xpf_stop()
+        }
+
         return result
     }
 }
