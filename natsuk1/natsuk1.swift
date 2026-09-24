@@ -23,14 +23,14 @@ struct natsuk1App: App {
     }
 
     var body: some Scene {
-       Version WindowGroup {
+        WindowGroup {
             ContentView()
                 .environmentObject(state)
                 .preferredColorScheme(.dark)
                 .onAppear {
                     nk_set_log(cCallback)
                     if state.log.isEmpty {
-                        let v = ProcessInfo.processInfo.operatingSystem
+                        let v = ProcessInfo.processInfo.operatingSystemVersion
                         state.append("[*] natsuk1 v3.1")
                         state.append("[*] iOS \(v.majorVersion).\(v.minorVersion) / arm64e")
                         state.append("")
