@@ -5,9 +5,7 @@ import Foundation
 private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
     guard let line = line else { return }
     let s = String(cString: line)
-    DispatchQueue.main.async {
-        AppState.shared.append(s)
-    }
+    AppState.shared.append(s)
 }
 
 @main
@@ -58,14 +56,6 @@ final class AppState: ObservableObject {
 
     enum Status {
         case idle, running, ok, failed
-        var label: String {
-            switch self {
-            case .idle:    return "idle"
-            case .running: return "running"
-            case .ok:      return "ok"
-            case .failed:  return "failed"
-            }
-        }
         var color: Color {
             switch self {
             case .idle:    return .secondary
@@ -88,29 +78,54 @@ final class AppState: ObservableObject {
     }
 
     private var poller: Timer?
+    private var flusher: Timer?
+    private var pending: String = ""
+    private let lock = NSLock()
 
     private init() {
         self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
+        startFlusher()
     }
 
     func t(_ en: String, _ ru: String) -> String {
         lang == "ru" ? ru : en
     }
 
-    func append(_ s: String) {
-        if !Thread.isMainThread {
-            DispatchQueue.main.async { [weak self] in self?.append(s) }
-            return
+    private func startFlusher() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                self.lock.lock()
+                let chunk = self.pending
+                self.pending = ""
+                self.lock.unlock()
+                guard !chunk.isEmpty else { return }
+                var newLog = self.log
+                newLog += chunk
+                if newLog.count > 30000 {
+                    newLog = String(newLog.suffix(20000))
+                }
+                self.log = newLog
+            }
         }
-        log += s + "\n"
-        if log.count > 50000 { log = String(log.suffix(40000)) }
+    }
+
+    func append(_ s: String) {
+        lock.lock()
+        pending += s
+        pending += "\n"
+        if pending.count > 10000 {
+            pending = String(pending.suffix(6000))
+        }
+        lock.unlock()
     }
 
     private func startPoller() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.poller?.invalidate()
-            self.poller = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+            self.poller = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
                 guard let self = self else { return }
                 let s = nk_get_slide()
                 let b = nk_get_base()
@@ -133,7 +148,6 @@ final class AppState: ObservableObject {
         if running { return }
         running = true
         status = .running
-        append("")
         startPoller()
 
         let t = Thread { [weak self] in
@@ -157,7 +171,7 @@ final class AppState: ObservableObject {
             }
         }
         t.qualityOfService = .userInitiated
-        t.stackSize = 4 * 1024 * 1024
+        t.stackSize = 16 * 1024 * 1024
         t.start()
     }
 
@@ -165,7 +179,6 @@ final class AppState: ObservableObject {
         if running { return }
         running = true
         status = .running
-        append("")
         startPoller()
 
         let t = Thread { [weak self] in
@@ -189,7 +202,7 @@ final class AppState: ObservableObject {
             }
         }
         t.qualityOfService = .userInitiated
-        t.stackSize = 4 * 1024 * 1024
+        t.stackSize = 16 * 1024 * 1024
         t.start()
     }
 
@@ -197,5 +210,10 @@ final class AppState: ObservableObject {
         show_respring = true
     }
 
-    func clear() { log = "" }
+    func clear() {
+        lock.lock()
+        pending = ""
+        lock.unlock()
+        log = ""
+    }
 }
