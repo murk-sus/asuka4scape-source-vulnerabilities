@@ -47,24 +47,55 @@ final class KernelcacheParser {
 
     private func walk(data: Data) throws -> Result {
         var result = Result()
+
         let magic: UInt32 = read(data, 0)
 
-        var headerOffset = 0
-        if magic == 0xCAFEBABE {
-            let nfat: UInt32 = read(data, 4)
-            if nfat > 0 {
-                headerOffset = Int(read(data, 8 + 8) as UInt32)
+        if magic == 0xCAFEBABE || magic == 0xBEBAFECA {
+            return try walkFat(data: data, result: &result)
+        }
+
+        if magic == 0xFEEDFACF {
+            try walkMachO(data: data, headerOffset: 0, result: &result)
+        } else {
+            throw ParseError.badMagic
+        }
+
+        guard result.kernelBase != 0 else { throw ParseError.noKernel }
+        return result
+    }
+
+    private func walkFat(data: Data, result: inout Result) throws -> Result {
+        let nfat: UInt32 = read(data, 4)
+
+        for i in 0..<Int(nfat) {
+            let archOff = 8 + i * 20
+            let cpuType: UInt32 = read(data, archOff)
+            let offset: UInt32 = read(data, archOff + 8)
+
+            if cpuType == 0x0100000C || cpuType == 0x01000007 {
+                let hMagic: UInt32 = read(data, Int(offset))
+                if hMagic == 0xFEEDFACF {
+                    try walkMachO(data: data, headerOffset: Int(offset), result: &result)
+                    break
+                }
             }
         }
 
-        let hMagic: UInt32 = read(data, headerOffset)
-        guard hMagic == 0xFEEDFACF else { throw ParseError.badMagic }
+        guard result.kernelBase != 0 else { throw ParseError.noKernel }
+        return result
+    }
 
+    private func walkMachO(data: Data, headerOffset: Int, result: inout Result) throws {
+        let hMagic: UInt32 = read(data, headerOffset)
+        guard hMagic == 0xFEEDFACF else { return }
+
+        let ncmds: UInt32 = read(data, headerOffset + 16)
         let sizeofcmds: UInt32 = read(data, headerOffset + 20)
         var lcOff = headerOffset + 32
         let lcEnd = lcOff + Int(sizeofcmds)
 
-        while lcOff < lcEnd {
+        var cmdIdx = 0
+        while lcOff < lcEnd && cmdIdx < Int(ncmds) {
             let cmd: UInt32 = read(data, lcOff)
             let cmdsize: UInt32 = read(data, lcOff + 4)
             guard cmdsize > 0 else { break }
@@ -78,19 +109,19 @@ final class KernelcacheParser {
                 if entryId == "com.apple.kernel" {
                     result.kernelBase = vmaddr
                 }
+
                 parseKext(data: data, fileoff: Int(fileoff), into: &result)
             }
             lcOff += Int(cmdsize)
+            cmdIdx += 1
         }
-
-        guard result.kernelBase != 0 else { throw ParseError.noKernel }
-        return result
     }
 
     private func parseKext(data: Data, fileoff: Int, into result: inout Result) {
         let magic: UInt32 = read(data, fileoff)
         guard magic == 0xFEEDFACF else { return }
 
+        let ncmds: UInt32 = read(data, fileoff + 16)
         let sizeofcmds: UInt32 = read(data, fileoff + 20)
         var lcOff = fileoff + 32
         let lcEnd = lcOff + Int(sizeofcmds)
@@ -100,7 +131,8 @@ final class KernelcacheParser {
         var stroff: UInt32 = 0
         var strsize: UInt32 = 0
 
-        while lcOff < lcEnd {
+        var cmdIdx = 0
+        while lcOff < lcEnd && cmdIdx < Int(ncmds) {
             let cmd: UInt32 = read(data, lcOff)
             let cmdsize: UInt32 = read(data, lcOff + 4)
             guard cmdsize > 0 else { break }
@@ -112,6 +144,7 @@ final class KernelcacheParser {
                 strsize = read(data, lcOff + 20)
             }
             lcOff += Int(cmdsize)
+            cmdIdx += 1
         }
 
         guard nsyms > 0, strsize > 0 else { return }
