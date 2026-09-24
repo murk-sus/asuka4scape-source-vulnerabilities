@@ -1,4 +1,4 @@
-name: Add kread/kwrite primitives
+name: Add kernel R/W primitive
 
 on:
   workflow_dispatch:
@@ -16,49 +16,6 @@ jobs:
       - name: Install tools
         run: brew install xcodegen ldid
 
-      - name: Write nk_krw.c
-        run: |
-          printf '%s\n' \
-            '#include "nk_krw.h"' \
-            '#include "nk_api.h"' \
-            '#include <string.h>' \
-            '#include <stdint.h>' \
-            '' \
-            'static int g_ready = 0;' \
-            '' \
-            'int nk_krw_init(void) {' \
-            '    if (g_ready) return 0;' \
-            '    int rc = nk_full_exploit();' \
-            '    if (rc == 0) g_ready = 1;' \
-            '    return rc;' \
-            '}' \
-            '' \
-            'int nk_kread(uint64_t addr, void *buf, size_t size) {' \
-            '    if (!g_ready) {' \
-            '        if (nk_krw_init() != 0) return -1;' \
-            '    }' \
-            '    return nk_read_kernel(addr, buf, size);' \
-            '}' \
-            '' \
-            'int nk_kwrite(uint64_t addr, const void *buf, size_t size) {' \
-            '    if (!g_ready) {' \
-            '        if (nk_krw_init() != 0) return -1;' \
-            '    }' \
-            '    return nk_write_kernel(addr, buf, size);' \
-            '}' \
-            '' \
-            'uint64_t nk_kread64(uint64_t addr) {' \
-            '    uint64_t v = 0;' \
-            '    nk_kread(addr, &v, sizeof(v));' \
-            '    return v;' \
-            '}' \
-            '' \
-            'int nk_kwrite64(uint64_t addr, uint64_t value) {' \
-            '    return nk_kwrite(addr, &value, sizeof(value));' \
-            '}' \
-            > natsuk1/Exploit/nk_krw.c
-          cat natsuk1/Exploit/nk_krw.c
-
       - name: Write nk_krw.h
         run: |
           printf '%s\n' \
@@ -69,16 +26,120 @@ jobs:
             '#include <stddef.h>' \
             '' \
             'int nk_krw_init(void);' \
+            'int nk_krw_ready(void);' \
             'int nk_kread(uint64_t addr, void *buf, size_t size);' \
             'int nk_kwrite(uint64_t addr, const void *buf, size_t size);' \
             'uint64_t nk_kread64(uint64_t addr);' \
             'int nk_kwrite64(uint64_t addr, uint64_t value);' \
+            'const char *nk_krw_error(void);' \
             '' \
             '#endif' \
             > natsuk1/Exploit/nk_krw.h
           cat natsuk1/Exploit/nk_krw.h
 
-      - name: Update bridging.h
+      - name: Write nk_krw.c
+        run: |
+          printf '%s\n' \
+            '#include "nk_krw.h"' \
+            '#include <mach/mach.h>' \
+            '#include <mach/mach_vm.h>' \
+            '#include <mach/mach_error.h>' \
+            '#include <stdio.h>' \
+            '#include <string.h>' \
+            '' \
+            'static mach_port_t g_kernel_task = MACH_PORT_NULL;' \
+            'static int g_ready = 0;' \
+            'static char g_error[256] = {0};' \
+            '' \
+            'const char *nk_krw_error(void) {' \
+            '    return g_error;' \
+            '}' \
+            '' \
+            'int nk_krw_ready(void) {' \
+            '    return g_ready;' \
+            '}' \
+            '' \
+            'int nk_krw_init(void) {' \
+            '    if (g_ready) return 0;' \
+            '' \
+            '    mach_port_t kt = MACH_PORT_NULL;' \
+            '    kern_return_t kr = task_for_pid(mach_task_self(), 0, &kt);' \
+            '' \
+            '    if (kr != KERN_SUCCESS || kt == MACH_PORT_NULL) {' \
+            '        snprintf(g_error, sizeof(g_error),' \
+            '                 "task_for_pid(0) failed: %s (0x%x)",' \
+            '                 mach_error_string(kr), kr);' \
+            '        return -1;' \
+            '    }' \
+            '' \
+            '    g_kernel_task = kt;' \
+            '    g_ready = 1;' \
+            '    snprintf(g_error, sizeof(g_error), "ready");' \
+            '    return 0;' \
+            '}' \
+            '' \
+            'int nk_kread(uint64_t addr, void *buf, size_t size) {' \
+            '    if (!g_ready && nk_krw_init() != 0) return -1;' \
+            '' \
+            '    mach_vm_size_t out_size = 0;' \
+            '    kern_return_t kr = mach_vm_read_overwrite(' \
+            '        g_kernel_task,' \
+            '        (mach_vm_address_t)addr,' \
+            '        (mach_vm_size_t)size,' \
+            '        (mach_vm_address_t)(uintptr_t)buf,' \
+            '        &out_size' \
+            '    );' \
+            '' \
+            '    if (kr != KERN_SUCCESS) {' \
+            '        snprintf(g_error, sizeof(g_error),' \
+            '                 "read 0x%llX failed: %s",' \
+            '                 (unsigned long long)addr,' \
+            '                 mach_error_string(kr));' \
+            '        return -1;' \
+            '    }' \
+            '    if (out_size != size) {' \
+            '        snprintf(g_error, sizeof(g_error),' \
+            '                 "read 0x%llX short: %llu/%zu",' \
+            '                 (unsigned long long)addr,' \
+            '                 (unsigned long long)out_size, size);' \
+            '        return -1;' \
+            '    }' \
+            '    return 0;' \
+            '}' \
+            '' \
+            'int nk_kwrite(uint64_t addr, const void *buf, size_t size) {' \
+            '    if (!g_ready && nk_krw_init() != 0) return -1;' \
+            '' \
+            '    kern_return_t kr = mach_vm_write(' \
+            '        g_kernel_task,' \
+            '        (mach_vm_address_t)addr,' \
+            '        (vm_offset_t)(uintptr_t)buf,' \
+            '        (mach_msg_type_number_t)size' \
+            '    );' \
+            '' \
+            '    if (kr != KERN_SUCCESS) {' \
+            '        snprintf(g_error, sizeof(g_error),' \
+            '                 "write 0x%llX failed: %s",' \
+            '                 (unsigned long long)addr,' \
+            '                 mach_error_string(kr));' \
+            '        return -1;' \
+            '    }' \
+            '    return 0;' \
+            '}' \
+            '' \
+            'uint64_t nk_kread64(uint64_t addr) {' \
+            '    uint64_t v = 0;' \
+            '    if (nk_kread(addr, &v, sizeof(v)) != 0) return 0;' \
+            '    return v;' \
+            '}' \
+            '' \
+            'int nk_kwrite64(uint64_t addr, uint64_t value) {' \
+            '    return nk_kwrite(addr, &value, sizeof(value));' \
+            '}' \
+            > natsuk1/Exploit/nk_krw.c
+          cat natsuk1/Exploit/nk_krw.c
+
+      - name: Write bridging.h
         run: |
           printf '%s\n' \
             '#ifndef NATSUK1_BRIDGING_H' \
@@ -104,28 +165,25 @@ jobs:
             '    static let shared = KernelRW()' \
             '    private init() {}' \
             '' \
-            '    private(set) var ready = false' \
+            '    var ready: Bool { nk_krw_ready() != 0 }' \
+            '    var lastError: String { String(cString: nk_krw_error()) }' \
             '' \
             '    @discardableResult' \
             '    func bootstrap() -> Bool {' \
             '        let rc = nk_krw_init()' \
-            '        ready = (rc == 0)' \
-            '        return ready' \
+            '        return rc == 0' \
             '    }' \
             '' \
             '    func read64(_ addr: UInt64) -> UInt64? {' \
-            '        guard ready else { return nil }' \
             '        let v = nk_kread64(addr)' \
             '        return v == 0 ? nil : v' \
             '    }' \
             '' \
             '    func write64(_ addr: UInt64, _ value: UInt64) -> Bool {' \
-            '        guard ready else { return false }' \
             '        return nk_kwrite64(addr, value) == 0' \
             '    }' \
             '' \
             '    func read(_ addr: UInt64, size: Int) -> Data? {' \
-            '        guard ready else { return nil }' \
             '        var buf = [UInt8](repeating: 0, count: size)' \
             '        let rc = nk_kread(addr, &buf, size)' \
             '        guard rc == 0 else { return nil }' \
@@ -133,85 +191,59 @@ jobs:
             '    }' \
             '' \
             '    func write(_ addr: UInt64, data: Data) -> Bool {' \
-            '        guard ready else { return false }' \
             '        let bytes = [UInt8](data)' \
             '        return nk_kwrite(addr, bytes, bytes.count) == 0' \
             '    }' \
             '' \
             '    func testRoundTrip() -> String {' \
-            '        guard let path = UserDefaults.standard.string(forKey: "kernelcache_path"),' \
-            '              FileManager.default.fileExists(atPath: path) else {' \
-            '            return "no kernelcache loaded"' \
-            '        }' \
-            '' \
             '        guard bootstrap() else {' \
-            '            return "bootstrap failed"' \
+            '            return "bootstrap failed: \\(lastError)"' \
             '        }' \
             '' \
-            '        let base = OffsetsStore.shared.value(for: "off_kernel_base")' \
-            '        guard let baseAddr = UInt64(base.dropFirst(2), radix: 16) else {' \
-            '            return "bad kernel_base value"' \
+            '        let baseStr = OffsetsStore.shared.value(for: "off_kernel_base")' \
+            '        guard baseStr.hasPrefix("0x"),' \
+            '              let baseAddr = UInt64(baseStr.dropFirst(2), radix: 16),' \
+            '              baseAddr != 0 else {' \
+            '            return "bad off_kernel_base value: \\(baseStr)"' \
             '        }' \
             '' \
-            '        let original = nk_kread64(baseAddr)' \
-            '        guard original != 0 else {' \
-            '            return "read at kernel_base returned 0"' \
+            '        guard let original = read64(baseAddr) else {' \
+            '            return "read 0x\\(String(baseAddr, radix: 16)) failed: \\(lastError)"' \
             '        }' \
             '' \
-            '        guard nk_kwrite64(baseAddr, original) == 0 else {' \
-            '            return "write at kernel_base failed"' \
+            '        guard write64(baseAddr, original) else {' \
+            '            return "write 0x\\(String(baseAddr, radix: 16)) failed: \\(lastError)"' \
             '        }' \
             '' \
-            '        let verify = nk_kread64(baseAddr)' \
+            '        guard let verify = read64(baseAddr) else {' \
+            '            return "re-read after write failed: \\(lastError)"' \
+            '        }' \
+            '' \
             '        if verify == original {' \
-            '            return String(format: "OK - read 0x%llX, write-back identical", original)' \
+            '            return String(format: "OK - read/write at 0x%llX value 0x%llX", baseAddr, original)' \
             '        } else {' \
-            '            return String(format: "MISMATCH - wrote 0x%llX, read 0x%llX", original, verify)' \
+            '            return String(format: "MISMATCH at 0x%llX: wrote 0x%llX read 0x%llX", baseAddr, original, verify)' \
             '        }' \
             '    }' \
             '}' \
             > natsuk1/Helpers/KernelRW.swift
           cat natsuk1/Helpers/KernelRW.swift
 
-      - name: Add Test R/W button to SettingsView
+      - name: Patch ContentView (Run Exploit)
         run: |
-          if grep -q "Test R/W" natsuk1/Views/SettingsView.swift; then
-            echo "already patched"
-            exit 0
-          fi
-          python3 - <<'PYEOF'
-          import re
-          path = 'natsuk1/Views/SettingsView.swift'
-          with open(path) as f:
-              src = f.read()
+          sed -i '' 's|Run Offsets|Run Exploit|g' natsuk1/Views/ContentView.swift
+          sed -i '' 's|Запустить оффсеты|Запустить эксплойт|g' natsuk1/Views/ContentView.swift
+          sed -i '' 's|Prints kernel offsets, runs NECP probe, syscall 525 probe, and lists SPTM patch targets\.|Runs kernel exploit, prints offsets, runs NECP probe, syscall 525 probe, and lists SPTM patch targets.|g' natsuk1/Views/ContentView.swift
+          sed -i '' 's|Выводит оффсеты ядра, запускает NECP probe, syscall 525 probe и перечисляет SPTM-таргеты\.|Запускает эксплойт ядра, выводит оффсеты, NECP probe, syscall 525 probe и список SPTM-таргетов.|g' natsuk1/Views/ContentView.swift
+          grep -n "Run Exploit\|Запустить эксплойт" natsuk1/Views/ContentView.swift
 
-          button_block = '''                    Button {
-                        let result = KernelRW.shared.testRoundTrip()
-                        state.append("[/] Test R/W: \\(result)")
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "checkmark.shield")
-                                .foregroundStyle(.tint)
-                                .frame(width: 20)
-                            Text("Test R/W")
-                                .foregroundStyle(.tint)
-                            Spacer(minLength: 8)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-'''
-          marker = '                    Button {\n                        state.fetchImages()'
-          if marker not in src:
-              print('marker not found')
-              raise SystemExit(1)
-          src = src.replace(marker, button_block + marker, 1)
-          with open(path, 'w') as f:
-              f.write(src)
-          print('patched')
-          PYEOF
-          grep -n "Test R/W" natsuk1/Views/SettingsView.swift || true
+      - name: Patch SettingsView (add Test R/W button)
+        run: |
+          sed -i '' 's|                            Text("Fetch Images")|                            Text("Fetch Images")|g' natsuk1/Views/SettingsView.swift
+          MARKER='                            Text("Fetch Images")'
+          BUTTON='                    Button {\n                        let r = KernelRW.shared.testRoundTrip()\n                        state.append("[/] Test R\\/W: \\(r)")\n                    } label: {\n                        HStack(spacing: 10) {\n                            Image(systemName: "checkmark.shield")\n                                .foregroundStyle(.tint)\n                                .frame(width: 20)\n                            Text("Test R\\/W")\n                                .foregroundStyle(.tint)\n                            Spacer(minLength: 8)\n                        }\n                        .contentShape(Rectangle())\n                    }\n                    .buttonStyle(.plain)\n\n'
+          sed -i '' "s|${MARKER}|${BUTTON}${MARKER}|" natsuk1/Views/SettingsView.swift
+          grep -n "Test R" natsuk1/Views/SettingsView.swift || echo "marker not found"
 
       - name: Generate xcodeproj
         run: xcodegen generate
@@ -236,7 +268,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add natsuk1/Exploit/nk_krw.c natsuk1/Exploit/nk_krw.h natsuk1/bridging.h natsuk1/Helpers/KernelRW.swift natsuk1/Views/SettingsView.swift
+          git add natsuk1/Exploit/nk_krw.c natsuk1/Exploit/nk_krw.h natsuk1/bridging.h natsuk1/Helpers/KernelRW.swift natsuk1/Views/ContentView.swift natsuk1/Views/SettingsView.swift
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "Add kread/kwrite primitive wrapper"
+          git commit -m "Add kernel R/W via mach API, rename Run Offsets -> Run Exploit"
           git push
