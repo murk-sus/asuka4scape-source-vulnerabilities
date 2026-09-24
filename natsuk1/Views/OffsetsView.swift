@@ -54,7 +54,7 @@ struct OffsetsView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.secondary)
                 }
             }
         }
@@ -97,17 +97,21 @@ struct OffsetRow: View {
     let name: String
     let value: String
 
+    private var valueColor: Color {
+        value == "0x0" ? Color.secondary : Color.green
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(name)
-                .foregroundStyle(.primary)
+                .foregroundStyle(Color.primary)
                 .font(.system(size: 13, design: .monospaced))
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
             Spacer(minLength: 8)
             Text(value)
                 .font(.system(size: 13, design: .monospaced))
-                .foregroundStyle(value == "0x0" ? .secondary : .green)
+                .foregroundColor(valueColor)
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
