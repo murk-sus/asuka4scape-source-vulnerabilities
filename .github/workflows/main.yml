@@ -18,13 +18,37 @@ jobs:
 
       - name: Rewrite project.yml
         run: |
-          sed -i '' 's|^      - sdk: libz.tbd$||g' project.yml
-          sed -i '' 's|^      - sdk: libarchive.tbd$||g' project.yml
-          sed -i '' 's|^      - sdk: libcompression.tbd$||g' project.yml
-          sed -i '' 's|^      - sdk: libxpc.tbd$||g' project.yml
-          sed -i '' 's|OTHER_LDFLAGS: |OTHER_LDFLAGS: -Wl,-no_autolink -Wl,-undefined,dynamic_lookup |' project.yml
-          grep OTHER_LDFLAGS project.yml
-          grep -n "libz\|libarchive\|libcompression\|libxpc" project.yml || true
+          python3 - <<'PYEOF'
+import re
+
+with open('project.yml', 'r') as f:
+    content = f.read()
+
+content = content.replace('OTHER_LDFLAGS: -Wl,-no_autolink -Wl,-undefined,dynamic_lookup -lpthread', 'OTHER_LDFLAGS: -Wl,-undefined,dynamic_lookup -lpthread')
+
+content = re.sub(r'^      - sdk: libz\.tbd$', '', content, flags=re.MULTILINE)
+content = re.sub(r'^      - sdk: libarchive\.tbd$', '', content, flags=re.MULTILINE)
+content = re.sub(r'^      - sdk: libcompression\.tbd$', '', content, flags=re.MULTILINE)
+content = re.sub(r'^      - sdk: libxpc\.tbd$', '', content, flags=re.MULTILINE)
+
+if 'CLANG_MODULES_AUTOLINK' not in content:
+    content = content.replace(
+        'CLANG_ENABLE_MODULES: YES',
+        'CLANG_ENABLE_MODULES: YES\n    CLANG_MODULES_AUTOLINK: NO'
+    )
+
+if '-fno-autolink' not in content:
+    content = content.replace(
+        'OTHER_CFLAGS: -std=c17 -Oz',
+        'OTHER_CFLAGS: -fno-autolink -std=c17 -Oz'
+    )
+
+with open('project.yml', 'w') as f:
+    f.write(content)
+
+print("=== project.yml patched ===")
+PYEOF
+          grep -n "OTHER_CFLAGS\|OTHER_LDFLAGS\|CLANG_MODULES_AUTOLINK" project.yml
 
       - name: Write KernelcacheParser.swift
         run: |
@@ -156,5 +180,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add project.yml natsuk1/Helpers/KernelcacheParser.swift natsuk1/bridging.h
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "Fix XPF linker flags with no_autolink"
+          git commit -m "Fix XPF autolink and linker flags"
           git push
