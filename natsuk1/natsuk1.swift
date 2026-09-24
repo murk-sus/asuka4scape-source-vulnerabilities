@@ -30,7 +30,7 @@ struct natsuk1App: App {
                     nk_set_log(cCallback)
                     if state.log.isEmpty {
                         let v = ProcessInfo.processInfo.operatingSystemVersion
-                        state.append("[*] natsuk1 v3.1")
+                        state.append("[*] natsuk1 v4.0")
                         state.append("[*] iOS \(v.majorVersion).\(v.minorVersion) / arm64e")
                         state.append("")
                     }
@@ -38,13 +38,6 @@ struct natsuk1App: App {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                             state.run()
                         }
-                    }
-                }
-                .overlay {
-                    if state.show_respring {
-                        RespringView()
-                            .brightness(-1.0)
-                            .ignoresSafeArea()
                     }
                 }
         }
@@ -67,17 +60,13 @@ final class AppState: ObservableObject {
     }
 
     @Published var log: String = ""
-    @Published var slide: UInt64 = 0
-    @Published var base: UInt64 = 0
     @Published var status: Status = .idle
     @Published var running: Bool = false
-    @Published var show_respring: Bool = false
 
     @Published var lang: String {
         didSet { UserDefaults.standard.set(lang, forKey: "lang") }
     }
 
-    private var poller: Timer?
     private var flusher: Timer?
     private var pending: String = ""
     private let lock = NSLock()
@@ -121,93 +110,22 @@ final class AppState: ObservableObject {
         lock.unlock()
     }
 
-    private func startPoller() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.poller?.invalidate()
-            self.poller = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-                guard let self = self else { return }
-                let s = nk_get_slide()
-                let b = nk_get_base()
-                if s != 0 {
-                    if self.slide != s { self.slide = s }
-                    if self.base != b { self.base = b }
-                }
-            }
-        }
-    }
-
-    private func stopPoller() {
-        DispatchQueue.main.async { [weak self] in
-            self?.poller?.invalidate()
-            self?.poller = nil
-        }
-    }
-
     func run() {
         if running { return }
         running = true
         status = .running
-        startPoller()
 
         let t = Thread { [weak self] in
             _ = nk_full_exploit()
-            let sl = nk_get_slide()
-            let bs = nk_get_base()
             DispatchQueue.main.async {
                 guard let self = self else { return }
-                self.stopPoller()
                 self.running = false
-                self.slide = sl
-                self.base = bs
-                if sl != 0 {
-                    self.status = .ok
-                    self.append(String(format: "[+] SLIDE = 0x%llx", sl))
-                    self.append(String(format: "[+] BASE  = 0x%llx", bs))
-                } else {
-                    self.status = .failed
-                    self.append("[-] KASLR not resolved")
-                }
+                self.status = .ok
             }
         }
         t.qualityOfService = .userInitiated
         t.stackSize = 16 * 1024 * 1024
         t.start()
-    }
-
-    func slideOnly() {
-        if running { return }
-        running = true
-        status = .running
-        startPoller()
-
-        let t = Thread { [weak self] in
-            _ = nk_detect_slide()
-            let sl = nk_get_slide()
-            let bs = nk_get_base()
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.stopPoller()
-                self.running = false
-                self.slide = sl
-                self.base = bs
-                if sl != 0 {
-                    self.status = .ok
-                    self.append(String(format: "[+] SLIDE = 0x%llx", sl))
-                    self.append(String(format: "[+] BASE  = 0x%llx", bs))
-                } else {
-                    self.status = .failed
-                    self.append("[-] slide not resolved")
-                }
-            }
-        }
-        t.qualityOfService = .userInitiated
-        t.stackSize = 16 * 1024 * 1024
-        t.start()
-    }
-
-    func respring() {
-        show_respring = true
     }
 
     func clear() {
