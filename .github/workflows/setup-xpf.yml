@@ -12,8 +12,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install ldid
+        run: brew install ldid
 
       - name: Clone XPF
         run: |
@@ -33,12 +34,12 @@ jobs:
           make TARGET=ios
 
       - name: Locate artifacts
-        id: find
         run: |
           echo "=== .a files ==="
           find /tmp/XPF -name "*.a" -type f
-          echo "=== .h files ==="
-          find /tmp/XPF -name "*.h" -type f | head -50
+          echo "=== headers ==="
+          find /tmp/XPF -name "xpf.h" -type f
+          find /tmp/XPF -name "choma.h" -type f
 
       - name: Copy artifacts
         run: |
@@ -46,22 +47,23 @@ jobs:
           find /tmp/XPF -name "libxpf.a" -exec cp {} natsuk1/External/ \;
           find /tmp/XPF -name "libchoma.a" -exec cp {} natsuk1/External/ \;
           find /tmp/XPF -name "xpf.h" -exec cp {} natsuk1/External/ \;
-          find /tmp/XPF -name "choma.h" -exec cp {} natsuk1/External/ \; 2>/dev/null || true
+          find /tmp/XPF -name "choma.h" -exec cp {} natsuk1/External/ \; || true
           ls -la natsuk1/External/
 
       - name: Update bridging.h
         run: |
-          cat > natsuk1/bridging.h <<'EOF'
-          #ifndef NATSUK1_BRIDGING_H
-          #define NATSUK1_BRIDGING_H
-
-          #include <stdint.h>
-          #include "Exploit/nk_api.h"
-          #import "External/libgrabkernel2.h"
-          #import "xpf.h"
-
-          #endif
-          EOF
+          printf '%s\n' \
+            '#ifndef NATSUK1_BRIDGING_H' \
+            '#define NATSUK1_BRIDGING_H' \
+            '' \
+            '#include <stdint.h>' \
+            '#include "Exploit/nk_api.h"' \
+            '#import "External/libgrabkernel2.h"' \
+            '#import "xpf.h"' \
+            '' \
+            '#endif' \
+            > natsuk1/bridging.h
+          echo "=== bridging.h ==="
           cat natsuk1/bridging.h
 
       - name: Commit and push
