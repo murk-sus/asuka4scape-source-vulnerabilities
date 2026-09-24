@@ -152,8 +152,6 @@ struct AboutView: View {
     }
 }
 
-// MARK: - Acknowledgements
-
 struct AcknowledgementsView: View {
     @Environment(\.openURL) private var openURL
     @EnvironmentObject var state: AppState
