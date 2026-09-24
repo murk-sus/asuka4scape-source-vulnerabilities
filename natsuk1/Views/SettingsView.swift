@@ -30,13 +30,13 @@ struct SettingsView: View {
 
                 Section {
                     Button {
-                        state.respring()
+                        state.clear()
                     } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: "arrow.clockwise")
+                            Image(systemName: "trash")
                                 .foregroundStyle(.secondary)
                                 .frame(width: 20)
-                            Text(state.t("Respring", "Респринг"))
+                            Text(state.t("Clear Log", "Очистить лог"))
                                 .foregroundStyle(.primary)
                             Spacer(minLength: 8)
                         }
