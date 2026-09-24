@@ -144,7 +144,7 @@ final class AppState: ObservableObject {
     func fetchKernelcache() {
         if fetchingKernelcache { return }
         fetchingKernelcache = true
-        append("[*] Fetching kernelcache for \(DeviceName.machineID())...")
+        append("[*] Fetching kernelcache via libgrabkernel2...")
 
         KernelcacheFetcher.shared.fetch { [weak self] result in
             DispatchQueue.main.async {
@@ -155,6 +155,25 @@ final class AppState: ObservableObject {
                     self.kernelcachePath = url.path
                     UserDefaults.standard.set(url.path, forKey: "kernelcache_path")
                     self.append("[+] Kernelcache saved: \(url.lastPathComponent)")
+                case .failure(let error):
+                    self.append("[-] Fetch failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    func fetchImages() {
+        if fetchingKernelcache { return }
+        fetchingKernelcache = true
+        append("[*] Fetching SPTM + TXM via libgrabkernel2...")
+
+        KernelcacheFetcher.shared.fetchImages { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.fetchingKernelcache = false
+                switch result {
+                case .success(let url):
+                    self.append("[+] Images saved to: \(url.path)")
                 case .failure(let error):
                     self.append("[-] Fetch failed: \(error.localizedDescription)")
                 }
