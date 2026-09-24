@@ -4,5 +4,6 @@
 #include <stdint.h>
 #include "Exploit/nk_api.h"
 #import "External/libgrabkernel2.h"
+#import "xpf.h"
 
 #endif
