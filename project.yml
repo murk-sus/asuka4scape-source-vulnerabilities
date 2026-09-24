@@ -89,6 +89,8 @@ targets:
       - path: natsuk1/Helpers
       - path: natsuk1/Views
       - path: natsuk1/Exploit
+      - path: natsuk1/External/libgrabkernel2.h
+        buildPhase: none
       - path: natsuk1/Resources/Offsets.json
         buildPhase: resources
       - path: natsuk1/Resources/Assets.xcassets
@@ -111,11 +113,11 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: natsuk1/bridging.h
         SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h
         OTHER_CFLAGS: -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
-        OTHER_LDFLAGS: -lpthread -framework IOKit -framework CoreFoundation -framework Security -framework UIKit -framework WebKit -lz -larchive -L"$(SRCROOT)/natsuk1/External/libgrabkernel2" -lgrabkernel2 -Wl,-dead_strip -Wl,-x -Wl,-S
-        HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External/libgrabkernel2"
-        USER_HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External/libgrabkernel2 $(SRCROOT)/natsuk1"
-        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External/libgrabkernel2"
-        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/natsuk1/External/libgrabkernel2"
+        OTHER_LDFLAGS: -lpthread -framework IOKit -framework CoreFoundation -framework Security -framework UIKit -framework WebKit -lz -larchive -L"$(SRCROOT)/natsuk1/External" -lgrabkernel2 -Wl,-dead_strip -Wl,-x -Wl,-S
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External"
+        USER_HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External $(SRCROOT)/natsuk1"
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External"
+        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/natsuk1/External"
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
