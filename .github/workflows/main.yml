@@ -1,4 +1,4 @@
-name: All primitives - sandbox escape, kernel R/W, NECP
+name: Cleanup repository
 
 on:
   workflow_dispatch:
@@ -7,331 +7,187 @@ permissions:
   contents: write
 
 jobs:
-  fix:
-    runs-on: macos-latest
+  cleanup:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install tools
-        run: brew install xcodegen ldid
-
-      - name: Write nk_krw.h
-        run: |
-          printf '%s\n' \
-            '#ifndef NK_KRW_H' \
-            '#define NK_KRW_H' \
-            '' \
-            '#include <stdint.h>' \
-            '#include <stddef.h>' \
-            '' \
-            'int nk_krw_init(void);' \
-            'int nk_krw_ready(void);' \
-            'int nk_kread(uint64_t addr, void *buf, size_t size);' \
-            'int nk_kwrite(uint64_t addr, const void *buf, size_t size);' \
-            'uint64_t nk_kread64(uint64_t addr);' \
-            'int nk_kwrite64(uint64_t addr, uint64_t value);' \
-            'const char *nk_krw_error(void);' \
-            'const char *nk_krw_primitive_name(void);' \
-            'const char *nk_sbx_status(void);' \
-            '' \
-            '#endif' \
-            > natsuk1/Exploit/nk_krw.h
-          cat natsuk1/Exploit/nk_krw.h
-
-      - name: Write nk_krw.c
-        run: |
-          printf '%s\n' \
-            '#include "nk_krw.h"' \
-            '#include "nk_log.h"' \
-            '#include <mach/mach.h>' \
-            '#include <stdio.h>' \
-            '#include <string.h>' \
-            '#include <sys/sysctl.h>' \
-            '#include <unistd.h>' \
-            '#include <fcntl.h>' \
-            '#include <errno.h>' \
-            '' \
-            'static mach_port_t g_kernel_task = MACH_PORT_NULL;' \
-            'static int g_ready = 0;' \
-            'static char g_error[512] = {0};' \
-            'static char g_primitive[64] = "none";' \
-            'static char g_sbx[512] = "not attempted";' \
-            '' \
-            'const char *nk_krw_error(void) { return g_error; }' \
-            'const char *nk_krw_primitive_name(void) { return g_primitive; }' \
-            'const char *nk_sbx_status(void) { return g_sbx; }' \
-            'int nk_krw_ready(void) { return g_ready; }' \
-            '' \
-            'static int try_sandbox_escape(void) {' \
-            '    NK_INFO("SBX", "[1/6] Trying sandbox escape paths ...");' \
-            '    const char *paths[] = {' \
-            '        "/var/containers/Data/System",' \
-            '        "/var/containers/Shared/SystemGroup",' \
-            '        "/var/mobile/Containers/Data/Application",' \
-            '        "/var/mobile/Containers/Data/InternalDaemon",' \
-            '        "/var/mobile/Containers/Data/PluginKitPlugin",' \
-            '        "/var/mobile/Containers/Shared/AppGroup",' \
-            '        "/private/var/mobile/Library/FairPlay",' \
-            '        "/private/var/mobile/Media",' \
-            '        NULL' \
-            '    };' \
-            '    int ok = 0;' \
-            '    for (int i = 0; paths[i]; i++) {' \
-            '        int fd = open(paths[i], O_RDONLY);' \
-            '        if (fd >= 0) {' \
-            '            NK_INFO("SBX", "[+] accessible: %s", paths[i]);' \
-            '            close(fd);' \
-            '            ok++;' \
-            '        } else {' \
-            '            NK_DEBUG("SBX", "[-] blocked: %s (errno=%d)", paths[i], errno);' \
-            '        }' \
-            '    }' \
-            '    if (ok > 0) {' \
-            '        snprintf(g_sbx, sizeof(g_sbx), "partial - %d paths accessible", ok);' \
-            '        NK_INFO("SBX", "[+] %d paths accessible", ok);' \
-            '        return 0;' \
-            '    }' \
-            '    snprintf(g_sbx, sizeof(g_sbx), "all paths blocked - bad_query patched in beta 5");' \
-            '    NK_WARN("SBX", "[-] all paths blocked. bad_query works only up to 27.0b4");' \
-            '    return -1;' \
-            '}' \
-            '' \
-            'static int try_task_for_pid(void) {' \
-            '    NK_INFO("KRW", "[2/6] task_for_pid(0) ...");' \
-            '    mach_port_t kt = MACH_PORT_NULL;' \
-            '    kern_return_t kr = task_for_pid(mach_task_self(), 0, &kt);' \
-            '    if (kr == KERN_SUCCESS && kt != MACH_PORT_NULL) {' \
-            '        g_kernel_task = kt;' \
-            '        snprintf(g_primitive, sizeof(g_primitive), "tfp0");' \
-            '        NK_INFO("KRW", "[+] tfp0 OK, kt=0x%x", kt);' \
-            '        return 0;' \
-            '    }' \
-            '    NK_WARN("KRW", "[-] tfp0 failed: kr=0x%x", kr);' \
-            '    return -1;' \
-            '}' \
-            '' \
-            'static int try_iosurface(void) {' \
-            '    NK_INFO("KRW", "[3/6] IOSurface ...");' \
-            '    NK_WARN("KRW", "[-] IOSurface patched in iOS 15.2.1");' \
-            '    return -1;' \
-            '}' \
-            '' \
-            'static int try_necp(void) {' \
-            '    NK_INFO("KRW", "[4/6] NECP ...");' \
-            '    int fd = (int)syscall(501, 0, 0, 0, 0, 0);' \
-            '    if (fd >= 0) {' \
-            '        NK_INFO("KRW", "[+] necp_open fd=%d", fd);' \
-            '        close(fd);' \
-            '        NK_WARN("KRW", "[-] NECP kernel primitives patched in iOS 14");' \
-            '        return -1;' \
-            '    }' \
-            '    NK_WARN("KRW", "[-] necp_open failed: errno=%d", errno);' \
-            '    return -1;' \
-            '}' \
-            '' \
-            'static int try_darksword(void) {' \
-            '    NK_INFO("KRW", "[5/6] DarkSword ...");' \
-            '    NK_WARN("KRW", "[-] CVE-2025-43510/43520 patched in 26.1");' \
-            '    NK_WARN("KRW", "[-] iOS 27.0 build 24A437 - not vulnerable");' \
-            '    return -1;' \
-            '}' \
-            '' \
-            'static int try_avevideo(void) {' \
-            '    NK_INFO("KRW", "[6/6] CVE-2026-84607 AVEVideoEncoder ...");' \
-            '    NK_WARN("KRW", "[-] patched in iOS 27 (24A437)");' \
-            '    return -1;' \
-            '}' \
-            '' \
-            'int nk_krw_init(void) {' \
-            '    if (g_ready) return 0;' \
-            '' \
-            '    NK_INFO("KRW", "=== Kernel R/W bootstrap ===");' \
-            '    NK_INFO("KRW", "Device: iPhone14,5 / iOS 27.0 / 24A437");' \
-            '' \
-            '    try_sandbox_escape();' \
-            '' \
-            '    if (try_task_for_pid() == 0) {' \
-            '        g_ready = 1;' \
-            '        snprintf(g_error, sizeof(g_error), "OK via tfp0");' \
-            '        return 0;' \
-            '    }' \
-            '    if (try_iosurface() == 0) {' \
-            '        g_ready = 1;' \
-            '        snprintf(g_error, sizeof(g_error), "OK via IOSurface");' \
-            '        return 0;' \
-            '    }' \
-            '    if (try_necp() == 0) {' \
-            '        g_ready = 1;' \
-            '        snprintf(g_error, sizeof(g_error), "OK via NECP");' \
-            '        return 0;' \
-            '    }' \
-            '    if (try_darksword() == 0) {' \
-            '        g_ready = 1;' \
-            '        snprintf(g_error, sizeof(g_error), "OK via DarkSword");' \
-            '        return 0;' \
-            '    }' \
-            '    if (try_avevideo() == 0) {' \
-            '        g_ready = 1;' \
-            '        snprintf(g_error, sizeof(g_error), "OK via AVEVideoEncoder");' \
-            '        return 0;' \
-            '    }' \
-            '' \
-            '    snprintf(g_error, sizeof(g_error),' \
-            '             "All primitives failed on iOS 27.0 (24A437). " ' \
-            '"Public kernel R/W is not available. " ' \
-            '"Options: (1) usbliter8 + Pi for A12/A13 only, " ' \
-            '(2) wait for new exploit, " ' \
-            '(3) use bad_query on 27.0b4 for file access only.");' \
-            '    NK_ERR("KRW", "%s", g_error);' \
-            '    return -1;' \
-            '}' \
-            '' \
-            'int nk_kread(uint64_t addr, void *buf, size_t size) {' \
-            '    if (!g_ready && nk_krw_init() != 0) return -1;' \
-            '    NK_DEBUG("KRW", "read 0x%llX size=%zu", (unsigned long long)addr, size);' \
-            '    vm_size_t out_size = 0;' \
-            '    kern_return_t kr = vm_read_overwrite(' \
-            '        g_kernel_task,' \
-            '        (vm_address_t)addr,' \
-            '        (vm_size_t)size,' \
-            '        (vm_address_t)(uintptr_t)buf,' \
-            '        &out_size' \
-            '    );' \
-            '    if (kr != KERN_SUCCESS) {' \
-            '        snprintf(g_error, sizeof(g_error), "read 0x%llX failed: kr=0x%x", (unsigned long long)addr, kr);' \
-            '        NK_ERR("KRW", "%s", g_error);' \
-            '        return -1;' \
-            '    }' \
-            '    return 0;' \
-            '}' \
-            '' \
-            'int nk_kwrite(uint64_t addr, const void *buf, size_t size) {' \
-            '    if (!g_ready && nk_krw_init() != 0) return -1;' \
-            '    NK_DEBUG("KRW", "write 0x%llX size=%zu", (unsigned long long)addr, size);' \
-            '    kern_return_t kr = vm_write(' \
-            '        g_kernel_task,' \
-            '        (vm_address_t)addr,' \
-            '        (vm_offset_t)(uintptr_t)buf,' \
-            '        (mach_msg_type_number_t)size' \
-            '    );' \
-            '    if (kr != KERN_SUCCESS) {' \
-            '        snprintf(g_error, sizeof(g_error), "write 0x%llX failed: kr=0x%x", (unsigned long long)addr, kr);' \
-            '        NK_ERR("KRW", "%s", g_error);' \
-            '        return -1;' \
-            '    }' \
-            '    return 0;' \
-            '}' \
-            '' \
-            'uint64_t nk_kread64(uint64_t addr) {' \
-            '    uint64_t v = 0;' \
-            '    if (nk_kread(addr, &v, sizeof(v)) != 0) return 0;' \
-            '    return v;' \
-            '}' \
-            '' \
-            'int nk_kwrite64(uint64_t addr, uint64_t value) {' \
-            '    return nk_kwrite(addr, &value, sizeof(value));' \
-            '}' \
-            > natsuk1/Exploit/nk_krw.c
-          cat natsuk1/Exploit/nk_krw.c
-
-      - name: Write bridging.h
-        run: |
-          printf '%s\n' \
-            '#ifndef NATSUK1_BRIDGING_H' \
-            '#define NATSUK1_BRIDGING_H' \
-            '' \
-            '#include <stdint.h>' \
-            '#include "Exploit/nk_api.h"' \
-            '#include "Exploit/nk_krw.h"' \
-            '#import "External/libgrabkernel2.h"' \
-            '#import "xpf.h"' \
-            '' \
-            '#endif' \
-            > natsuk1/bridging.h
-          cat natsuk1/bridging.h
-
-      - name: Write KernelRW.swift
-        run: |
-          printf '%s\n' \
-            'import Foundation' \
-            '' \
-            'final class KernelRW {' \
-            '' \
-            '    static let shared = KernelRW()' \
-            '    private init() {}' \
-            '' \
-            '    var ready: Bool { nk_krw_ready() != 0 }' \
-            '    var lastError: String { String(cString: nk_krw_error()) }' \
-            '    var primitiveName: String { String(cString: nk_krw_primitive_name()) }' \
-            '    var sandboxStatus: String { String(cString: nk_sbx_status()) }' \
-            '' \
-            '    @discardableResult' \
-            '    func bootstrap() -> Bool { nk_krw_init() == 0 }' \
-            '' \
-            '    func read64(_ addr: UInt64) -> UInt64? {' \
-            '        let v = nk_kread64(addr)' \
-            '        return v == 0 ? nil : v' \
-            '    }' \
-            '' \
-            '    func write64(_ addr: UInt64, _ value: UInt64) -> Bool {' \
-            '        return nk_kwrite64(addr, value) == 0' \
-            '    }' \
-            '' \
-            '    func testRoundTrip() -> String {' \
-            '        let sbx = sandboxStatus' \
-            '        guard bootstrap() else {' \
-            '            return "SBX: \(sbx). R/W failed: \(lastError)"' \
-            '        }' \
-            '        let baseStr = OffsetsStore.shared.value(for: "off_kernel_base")' \
-            '        guard baseStr.hasPrefix("0x"),' \
-            '              let baseAddr = UInt64(baseStr.dropFirst(2), radix: 16),' \
-            '              baseAddr != 0 else {' \
-            '            return "bad off_kernel_base value: \(baseStr)"' \
-            '        }' \
-            '        guard let original = read64(baseAddr) else {' \
-            '            return "read failed: \(lastError)"' \
-            '        }' \
-            '        guard write64(baseAddr, original) else {' \
-            '            return "write failed: \(lastError)"' \
-            '        }' \
-            '        guard let verify = read64(baseAddr) else {' \
-            '            return "re-read failed: \(lastError)"' \
-            '        }' \
-            '        if verify == original {' \
-            '            return "OK [\(primitiveName)] - R/W at 0x\(String(baseAddr, radix: 16))"' \
-            '        } else {' \
-            '            return "MISMATCH at 0x\(String(baseAddr, radix: 16))"' \
-            '        }' \
-            '    }' \
-            '}' \
-            > natsuk1/Helpers/KernelRW.swift
-          cat natsuk1/Helpers/KernelRW.swift
-
-      - name: Generate xcodeproj
-        run: xcodegen generate
-
-      - name: Test build
+      - name: Delete unused files
         run: |
           set -euo pipefail
-          xcodebuild \
-            -project natsuk1.xcodeproj \
-            -scheme natsuk1 \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build \
-            -parallelizeTargets \
-            -jobs "$(sysctl -n hw.ncpu)" \
-            CODE_SIGNING_ALLOWED=NO \
-            build -quiet
+          rm -rf natsuk1/External/choma
+          for f in \
+            CachePatching.h CSBlob.h CodeDirectory.h DER.h DyldSharedCache.h \
+            Entitlements.h Fat.h FileStream.h Host.h MachO.h MachOByteOrder.h \
+            MachOLoadCommand.h MemoryStream.h PatchFinder.h PatchFinder_arm64.h \
+            Util.h arm64.h Base64.h BufferedStream.h dyld_cache_format.h \
+            fixup-chains.h \
+            libgrabkernel2.h partial.h xpf.h; do
+            rm -f "natsuk1/External/$f"
+          done
+          rm -f natsuk1/Helpers/KernelcacheFetcher.swift
+          rm -f natsuk1/Helpers/KernelcacheParser.swift
+          rm -f natsuk1/Exploit/nk_sptm.c
+          rm -f natsuk1/Exploit/nk_sptm.h
+
+      - name: Apply source edits
+        run: |
+          python3 <<'PYEOF'
+          import json, re, os
+
+          def remove_swift_func(src, name):
+              marker = f"    func {name}("
+              idx = src.find(marker)
+              if idx == -1:
+                  return src
+              brace_idx = src.find("{", idx)
+              depth = 1
+              i = brace_idx + 1
+              while i < len(src) and depth > 0:
+                  if src[i] == '{':
+                      depth += 1
+                  elif src[i] == '}':
+                      depth -= 1
+                  i += 1
+              end = i
+              while end < len(src) and src[end] == '\n':
+                  end += 1
+              return src[:idx] + src[end:]
+
+          def remove_swift_section_containing(src, marker):
+              idx = src.find(marker)
+              if idx == -1:
+                  return src
+              sec_idx = src.rfind("Section {", 0, idx)
+              if sec_idx == -1:
+                  return src
+              brace_idx = src.find("{", sec_idx)
+              depth = 1
+              i = brace_idx + 1
+              while i < len(src) and depth > 0:
+                  if src[i] == '{':
+                      depth += 1
+                  elif src[i] == '}':
+                      depth -= 1
+                  i += 1
+              end = i
+              while end < len(src) and src[end] == '\n':
+                  end += 1
+              return src[:sec_idx] + src[end:]
+
+          p = "natsuk1/Exploit/nk_api.c"
+          if os.path.exists(p):
+              s = open(p).read()
+              s = s.replace('#include "nk_sptm.h"\n', '')
+              s = s.replace('    nk_sptm_targets();\n    nk_rule();\n\n', '')
+              open(p, "w").write(s)
+
+          p = "natsuk1/Exploit/nk_offsets.h"
+          if os.path.exists(p):
+              s = open(p).read()
+              for name in ("NK_G_CHROOT", "NK_G_CS_ENFORCEMENT", "NK_G_KALLOC_TYPE",
+                           "NK_G_MAC_POLICY", "NK_G_PROC_FIND", "NK_G_SET_BSDTASK",
+                           "NK_G_SWAP_TASK_MAP", "NK_G_TASK_FOR_PID", "NK_G_TASK_INIT",
+                           "NK_G_VM_MAP_KERNEL", "NK_G_VM_PAGE_ALLOC"):
+                  s = re.sub(rf'^#define\s+{re.escape(name)}\s+.*\n', '', s, flags=re.M)
+              s = re.sub(r'\n{3,}', '\n\n', s)
+              open(p, "w").write(s)
+
+          p = "natsuk1/Resources/Offsets.json"
+          if os.path.exists(p):
+              data = json.load(open(p))
+              confirmed = {
+                  "off_kernel_base", "off_kernel_entry", "off_sysent_base",
+                  "off_sysent_count", "off_sysent_stride", "off_mach_trap_table",
+                  "off_g_kernproc", "off_g_kernel_task", "off_g_zone_map",
+                  "off_g_task_list", "off_g_kernel_map", "off_g_allproc",
+                  "off_fn_copyin", "off_fn_copyout", "off_fn_kalloc_ext",
+                  "off_fn_kfree_ext",
+                  "off_proc_p_pid", "off_proc_ro_p_ucred",
+                  "off_thread_task_threads_next", "off_task_bsd_info",
+                  "off_task_itk_space", "off_task_map",
+                  "off_zone_data_kalloc", "off_zone_early_kalloc",
+                  "off_zone_kalloc_type_var", "off_zone_site_struct_task",
+                  "off_zone_site_struct_proc", "off_zone_site_struct_thread",
+                  "off_zone_site_struct_ucred", "off_zone_site_struct_ipc_port",
+                  "off_zone_site_struct_ipc_entry", "off_zone_site_struct_fileproc",
+                  "off_zone_site_struct_fileglob", "off_zone_site_struct_vnode",
+                  "off_zone_site_struct_mount", "off_zone_site_struct_socket",
+                  "off_zone_site_struct_inpcb", "off_zone_site_struct_pipe",
+                  "off_zone_site_struct_vm_page",
+                  "off_sptm_base", "off_sptm_ctrr_lock_boot",
+                  "off_sptm_cpu_lock_system_registers",
+                  "off_sptm_determine_kernel_ctrr", "off_sptm_bootstrap",
+                  "off_sptm_map", "off_sptm_region", "off_sptm_panic",
+                  "off_sptm_page_table",
+              }
+              data["defaults"] = {k: v for k, v in data["defaults"].items() if k in confirmed}
+              for g in data["groups"]:
+                  g["items"] = [x for x in g["items"] if x in confirmed]
+              data["groups"] = [g for g in data["groups"] if g["items"]]
+              with open(p, "w") as f:
+                  json.dump(data, f, indent=2)
+                  f.write("\n")
+
+          p = "natsuk1/Resources/natsuk1.entitlements"
+          if os.path.exists(p):
+              open(p, "w").write(
+                  '<?xml version="1.0" encoding="UTF-8"?>\n'
+                  '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                  '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+                  '<plist version="1.0">\n'
+                  '<dict>\n'
+                  '    <key>com.apple.private.skip-library-validation</key><true/>\n'
+                  '</dict>\n'
+                  '</plist>\n'
+              )
+
+          p = "project.yml"
+          if os.path.exists(p):
+              s = open(p).read()
+              s = s.replace('-lxpf -lchoma -L"$(SRCROOT)/natsuk1/External" -lgrabkernel2 -lpartial ', '')
+              s = re.sub(r'^\s*LIBRARY_SEARCH_PATHS:.*\n', '', s, flags=re.M)
+              s = re.sub(r'^\s*SWIFT_INCLUDE_PATHS:.*\n', '', s, flags=re.M)
+              s = re.sub(r'^\s*- path: natsuk1/External/libgrabkernel2\.h\n\s*buildPhase: none\n', '', s, flags=re.M)
+              s = re.sub(r'^\s*- path: natsuk1/External/partial\.h\n\s*buildPhase: none\n', '', s, flags=re.M)
+              s = re.sub(r'^\s*- path: natsuk1/External/xpf\.h\n\s*buildPhase: none\n', '', s, flags=re.M)
+              open(p, "w").write(s)
+
+          p = "natsuk1/natsuk1.swift"
+          if os.path.exists(p):
+              s = open(p).read()
+              for name in ("fetchKernelcache", "parseKernelcache", "fetchImages"):
+                  s = remove_swift_func(s, name)
+              s = s.replace('    @Published var kernelcachePath: String?\n', '')
+              s = s.replace('    @Published var fetchingKernelcache: Bool = false\n', '')
+              s = s.replace('    @Published var parsingKernelcache: Bool = false\n', '')
+              s = s.replace('        self.kernelcachePath = UserDefaults.standard.string(forKey: "kernelcache_path")\n', '')
+              open(p, "w").write(s)
+
+          p = "natsuk1/Views/SettingsView.swift"
+          if os.path.exists(p):
+              s = open(p).read()
+              s = remove_swift_section_containing(s, 'Label("Kernelcache", systemImage: "shippingbox")')
+              s = re.sub(
+                  r'\n\s*private var kernelcacheStatus: String \{.*?\n    \}\n',
+                  '\n',
+                  s,
+                  flags=re.DOTALL,
+              )
+              open(p, "w").write(s)
+
+          print("cleanup OK")
+          PYEOF
 
       - name: Commit and push
-        if: success()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add natsuk1/Exploit/nk_krw.c natsuk1/Exploit/nk_krw.h natsuk1/bridging.h natsuk1/Helpers/KernelRW.swift
-          git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "Add all known primitives: sandbox escape, tfp0, NECP, DarkSword, AVEVideo"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "Cleanup: remove unused files, unconfirmed offsets, fix build"
           git push
