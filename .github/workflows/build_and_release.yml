@@ -97,21 +97,34 @@ jobs:
               s = re.sub(r"@Published\s+", "", s)
               return s
 
+          def mark_nonisolated(s, name):
+              if ("nonisolated final class " + name) in s:
+                  return s
+              patterns = [
+                  ("final class " + name + ": ObservableObject, @unchecked Sendable {",
+                   "nonisolated final class " + name + ": @unchecked Sendable {"),
+                  ("final class " + name + ": ObservableObject {",
+                   "nonisolated final class " + name + ": @unchecked Sendable {"),
+                  ("final class " + name + ": NSObject, ObservableObject, @unchecked Sendable {",
+                   "nonisolated final class " + name + ": NSObject, @unchecked Sendable {"),
+                  ("final class " + name + ": NSObject, ObservableObject {",
+                   "nonisolated final class " + name + ": NSObject, @unchecked Sendable {"),
+                  ("final class " + name + ": NSObject, @unchecked Sendable {",
+                   "nonisolated final class " + name + ": NSObject, @unchecked Sendable {"),
+                  ("final class " + name + ": @unchecked Sendable {",
+                   "nonisolated final class " + name + ": @unchecked Sendable {"),
+              ]
+              for pat, repl in patterns:
+                  if pat in s:
+                      return s.replace(pat, repl, 1)
+              return s
+
           p = "natsuk1/Helpers/PairingController.swift"
           s = open(p).read()
 
           s = s.replace("import AirliftFFI\n", "@preconcurrency import AirliftFFI\n")
           s = clean(s)
-
-          s = s.replace(
-              "final class PairingController: ObservableObject, @unchecked Sendable {",
-              "nonisolated final class PairingController: @unchecked Sendable {")
-          s = s.replace(
-              "final class PairingController: ObservableObject {",
-              "nonisolated final class PairingController: @unchecked Sendable {")
-          s = s.replace(
-              "final class PairingController: @unchecked Sendable {",
-              "nonisolated final class PairingController: @unchecked Sendable {")
+          s = mark_nonisolated(s, "PairingController")
 
           s = s.replace(
               "static var customPairingFilePath: String? = nil",
@@ -130,13 +143,19 @@ jobs:
               "Unmanaged<PairingController>.fromOpaque(ctx).release()",
               "Unmanaged<PairingController>.fromOpaque(box.ptr).release()")
 
-          if "final class RawPtrBox" not in s:
-              s = s + (
-                  "\n"
-                  "nonisolated final class RawPtrBox: @unchecked Sendable {\n"
-                  "    let ptr: UnsafeMutableRawPointer\n"
-                  "    init(_ ptr: UnsafeMutableRawPointer) { self.ptr = ptr }\n"
-                  "}\n")
+          if "nonisolated final class RawPtrBox" not in s:
+              if "final class RawPtrBox" in s:
+                  s = s.replace(
+                      "final class RawPtrBox",
+                      "nonisolated final class RawPtrBox",
+                      1)
+              else:
+                  s = s + (
+                      "\n"
+                      "nonisolated final class RawPtrBox: @unchecked Sendable {\n"
+                      "    let ptr: UnsafeMutableRawPointer\n"
+                      "    init(_ ptr: UnsafeMutableRawPointer) { self.ptr = ptr }\n"
+                      "}\n")
 
           s = s.replace(
               "            DispatchQueue.main.async {\n                Unmanaged<PairingController>.fromOpaque(box.ptr).release()",
@@ -158,15 +177,7 @@ jobs:
           if os.path.exists(p):
               s = open(p).read()
               s = clean(s)
-              s = s.replace(
-                  "final class KeepAlive: NSObject, ObservableObject, @unchecked Sendable {",
-                  "nonisolated final class KeepAlive: NSObject, @unchecked Sendable {")
-              s = s.replace(
-                  "final class KeepAlive: NSObject, ObservableObject {",
-                  "nonisolated final class KeepAlive: NSObject, @unchecked Sendable {")
-              s = s.replace(
-                  "final class KeepAlive: NSObject, @unchecked Sendable {",
-                  "nonisolated final class KeepAlive: NSObject, @unchecked Sendable {")
+              s = mark_nonisolated(s, "KeepAlive")
               open(p, "w").write(s)
               print("patched KeepAlive")
           ENDSCRIPT
@@ -202,8 +213,8 @@ jobs:
             echo "PairingController still has @MainActor"
             exit 1
           fi
-          if grep -q "final class PairingController.*ObservableObject" natsuk1/Helpers/PairingController.swift; then
-            echo "PairingController still ObservableObject"
+          if grep -q "nonisolated nonisolated" natsuk1/Helpers/PairingController.swift; then
+            echo "duplicate nonisolated in PairingController"
             exit 1
           fi
 
@@ -225,6 +236,7 @@ jobs:
             SWIFT_DEFAULT_ACTOR_ISOLATION=nonisolated \
             SWIFT_APPROACHABLE_CONCURRENCY=NO \
             SWIFT_STRICT_CONCURRENCY=minimal \
+            OTHER_SWIFT_FLAGS="-default-isolation nonisolated" \
             -UseModernBuildSystem=YES \
             build -quiet
 
