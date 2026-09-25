@@ -36,13 +36,16 @@ struct SettingsView: View {
                     HStack(spacing: 14) {
                         Group {
                             if let icon = appIcon {
-                                Image(uiImage: icon).resizable().aspectRatio(contentMode: .fill)
+                                Image(uiImage: icon)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
                             } else {
                                 ZStack {
                                     LinearGradient(
-                                        colors: [Color(red: 0.65, green: 0.30, blue: 0.90),
-                                                 Color(red: 0.30, green: 0.65, blue: 0.95)],
-                                        startPoint: .topLeading, endPoint: .bottomTrailing)
+                                        colors: [Color.accentColor,
+                                                 Color.accentColor.opacity(0.6)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing)
                                     Image(systemName: "bolt.fill")
                                         .font(.system(size: 26, weight: .semibold))
                                         .foregroundStyle(.white)
@@ -53,8 +56,12 @@ struct SettingsView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(appName).font(.title3).fontWeight(.semibold)
-                            Text("Version \(version)").font(.subheadline).foregroundColor(.secondary)
+                            Text(appName)
+                                .font(.title3)
+                                .fontWeight(.semibold)
+                            Text("Version \(version)")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
                         }
                         Spacer(minLength: 8)
                     }
@@ -66,7 +73,7 @@ struct SettingsView: View {
                         Label("About", systemImage: "info.circle")
                     }
                 } header: {
-                    Label("App", systemImage: "info.circle")
+                    Label("App", systemImage: "person.crop.square")
                 }
 
                 Section {
@@ -74,25 +81,27 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Silent Audio")
                             Text("Plays inaudible audio so iOS keeps the app running.")
-                                .font(.caption).foregroundColor(.secondary)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                     }
                     Toggle(isOn: $keep_alive_location) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Background Location")
                             Text("Uses low-accuracy location to stay alive when needed.")
-                                .font(.caption).foregroundColor(.secondary)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                     }
                 } header: {
-                    Label("Background Keep-Alive", systemImage: "waveform.circle")
+                    Label("Background Keep-Alive", systemImage: "moon.stars.fill")
                 }
 
                 Section {
                     Toggle("Auto Run on Launch", isOn: $auto_run)
                     Toggle("Verbose Output", isOn: $verbose)
                 } header: {
-                    Label("Options", systemImage: "gearshape")
+                    Label("Options", systemImage: "slider.horizontal.3")
                 }
             }
             .listStyle(.insetGrouped)

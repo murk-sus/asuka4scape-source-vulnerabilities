@@ -7,16 +7,20 @@ struct ContentView: View {
         TabView {
             OverviewView()
                 .tabItem {
-                    Label(state.t("Overview", "Обзор"), systemImage: "house.fill")
+                    Label(state.t("Overview", "Обзор"),
+                          systemImage: "syringe.fill")
                 }
             ToolsView()
                 .tabItem {
-                    Label(state.t("Tools", "Инструменты"), systemImage: "wrench.and.screwdriver.fill")
+                    Label(state.t("Tools", "Инструменты"),
+                          systemImage: "slider.vertical.3")
                 }
             SettingsView()
                 .tabItem {
-                    Label(state.t("Settings", "Настройки"), systemImage: "gear")
+                    Label(state.t("Settings", "Настройки"),
+                          systemImage: "gearshape.fill")
                 }
         }
+        .tint(.accentColor)
     }
 }

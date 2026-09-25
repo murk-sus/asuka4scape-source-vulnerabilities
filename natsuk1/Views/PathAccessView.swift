@@ -91,12 +91,16 @@ struct PathAccessView: View {
         ("MobileActivation", "/usr/lib/libMobileActivation.dylib", []),
         ("libmis", "/usr/lib/libmis.dylib", []),
         ("libsandbox", "/usr/lib/libsandbox.1.dylib", []),
-        ("AirTrafficDevice", "/System/Library/PrivateFrameworks/AirTrafficDevice.framework/AirTrafficDevice",
+        ("AirTrafficDevice",
+         "/System/Library/PrivateFrameworks/AirTrafficDevice.framework/AirTrafficDevice",
          ["ATGrappaDeviceInfo"]),
-        ("AirTrafficHost", "/System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost",
+        ("AirTrafficHost",
+         "/System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost",
          ["ATGrappaDeviceInfo"]),
         ("CoreFP", "/System/Library/PrivateFrameworks/CoreFP.framework/CoreFP", []),
-        ("SpringBoardServices", "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", []),
+        ("SpringBoardServices",
+         "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices",
+         []),
     ]
 
     var body: some View {
@@ -135,6 +139,8 @@ struct PathAccessView: View {
                 } label: {
                     HStack {
                         Image(systemName: "magnifyingglass")
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.tint)
                         Text(busy ? "Scanning..." : "Run Scan")
                         Spacer(minLength: 8)
                         if busy { ProgressView().scaleEffect(0.8) }
@@ -142,7 +148,7 @@ struct PathAccessView: View {
                 }
                 .disabled(busy)
             } header: {
-                Label("Summary", systemImage: "chart.bar")
+                Label("Summary", systemImage: "chart.bar.xaxis")
             }
 
             if !libs.isEmpty {
@@ -152,7 +158,8 @@ struct PathAccessView: View {
                             HStack(spacing: 6) {
                                 Text(r.name)
                                     .font(.system(size: 12, weight: .semibold))
-                                badge(r.loaded ? "loaded" : "no", color: r.loaded ? .green : .red)
+                                badge(r.loaded ? "loaded" : "no",
+                                      color: r.loaded ? .green : .red)
                             }
                             Text(r.path)
                                 .font(.system(size: 10, design: .monospaced))
@@ -170,7 +177,7 @@ struct PathAccessView: View {
                         .padding(.vertical, 2)
                     }
                 } header: {
-                    Label("Libraries", systemImage: "shippingbox")
+                    Label("Libraries", systemImage: "books.vertical")
                 }
             }
 
@@ -182,7 +189,8 @@ struct PathAccessView: View {
                             .foregroundStyle(r.exists ? .primary : .secondary)
                             .lineLimit(2)
                         HStack(spacing: 6) {
-                            badge(r.exists ? "exists" : "missing", color: r.exists ? .green : .red)
+                            badge(r.exists ? "exists" : "missing",
+                                  color: r.exists ? .green : .red)
                             if r.isDirectory { badge("dir", color: .blue) }
                             if r.readable { badge("r", color: .green) }
                             if r.writable { badge("w", color: .orange) }
@@ -198,7 +206,7 @@ struct PathAccessView: View {
                     .padding(.vertical, 2)
                 }
             } header: {
-                Label("Paths", systemImage: "folder")
+                Label("Paths", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
             }
         }
         .listStyle(.insetGrouped)
@@ -213,7 +221,9 @@ struct PathAccessView: View {
                     text += "# libraries\n"
                     for r in libs {
                         text += "\(r.name) loaded=\(r.loaded) path=\(r.path)"
-                        if !r.foundSymbols.isEmpty { text += " symbols=\(r.foundSymbols.joined(separator: ","))" }
+                        if !r.foundSymbols.isEmpty {
+                            text += " symbols=\(r.foundSymbols.joined(separator: ","))"
+                        }
                         text += "\n"
                     }
                     text += "# paths\n"
@@ -224,7 +234,7 @@ struct PathAccessView: View {
                     }
                     UIPasteboard.general.string = text
                 } label: {
-                    Image(systemName: "doc.on.doc")
+                    Image(systemName: "square.and.arrow.up")
                 }
                 .disabled(results.isEmpty && libs.isEmpty)
             }
@@ -239,9 +249,9 @@ struct PathAccessView: View {
             .font(.system(size: 9, design: .monospaced))
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
-            .background(color.opacity(0.18))
+            .background(color.opacity(0.18),
+                        in: RoundedRectangle(cornerRadius: 3))
             .foregroundStyle(color)
-            .clipShape(RoundedRectangle(cornerRadius: 3))
     }
 
     private func scan() {

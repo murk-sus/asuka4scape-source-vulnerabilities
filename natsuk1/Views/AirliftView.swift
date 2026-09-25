@@ -17,6 +17,7 @@ struct AirliftView: View {
                 Section {
                     HStack(spacing: 10) {
                         Image(systemName: "exclamationmark.triangle.fill")
+                            .symbolRenderingMode(.hierarchical)
                             .foregroundStyle(.orange)
                         Text("LocalDevVPN is not active. Enable it before running Airlift.")
                             .font(.subheadline)
@@ -36,7 +37,7 @@ struct AirliftView: View {
                 AirliftLogView(lines: airlift.exploitLog, onClear: { airlift.clearLog() })
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
             } header: {
-                Label("Log", systemImage: "apple.terminal")
+                Label("Log", systemImage: "terminal")
             }
         }
         .listStyle(.insetGrouped)
@@ -58,6 +59,7 @@ struct AirliftView: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     Image(systemName: "checkmark.shield.fill")
+                        .symbolRenderingMode(.hierarchical)
                         .foregroundStyle(airlift.hasPairing() ? .green : .orange)
                     Text(airlift.hasPairing() ? "Paired" : "Not paired")
                         .font(.subheadline.bold())
@@ -94,8 +96,8 @@ struct AirliftView: View {
                     .tint(.orange)
                 }
                 .padding(12)
-                .background(Color.orange.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .background(Color.orange.opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         } header: {
             Label("Pairing", systemImage: "antenna.radiowaves.left.and.right")
@@ -119,7 +121,9 @@ struct AirliftView: View {
                     airlift.runPairing()
                 } label: {
                     HStack {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.tint)
                         Text("Start Pairing")
                         Spacer()
                     }
@@ -144,7 +148,7 @@ struct AirliftView: View {
                 .textInputAutocapitalization(.never)
             }
         } header: {
-            Label("Exploit", systemImage: "bolt.shield")
+            Label("Exploit", systemImage: "scope")
         }
 
         Section {
@@ -152,7 +156,9 @@ struct AirliftView: View {
                 airlift.runExploit()
             } label: {
                 HStack {
-                    Image(systemName: "bolt.fill")
+                    Image(systemName: "play.fill")
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.tint)
                     Text("Run Exploit")
                     Spacer()
                 }
@@ -163,7 +169,9 @@ struct AirliftView: View {
                 airlift.respring()
             } label: {
                 HStack {
-                    Image(systemName: "arrow.clockwise")
+                    Image(systemName: "restart")
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.tint)
                     Text("Respring (device)")
                     Spacer()
                 }
@@ -197,8 +205,8 @@ struct AirliftLogView: View {
             }
             .frame(maxHeight: 260)
             .padding(10)
-            .background(Color(UIColor.secondarySystemGroupedBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(.regularMaterial,
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .onChange(of: lines.count) { _, _ in
                 withAnimation(.linear(duration: 0.05)) {
                     proxy.scrollTo(0, anchor: .bottom)
@@ -209,7 +217,7 @@ struct AirliftLogView: View {
             Button {
                 UIPasteboard.general.string = lines.joined(separator: "\n")
             } label: {
-                Label("Copy All", systemImage: "doc.on.doc")
+                Label("Copy All", systemImage: "document.on.document")
             }
             Button(role: .destructive) {
                 onClear()

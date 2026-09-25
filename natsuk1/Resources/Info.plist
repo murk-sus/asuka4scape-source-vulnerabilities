@@ -20,7 +20,6 @@
     </dict>
     <key>UIStatusBarHidden</key><false/>
     <key>UIViewControllerBasedStatusBarAppearance</key><true/>
-    <key>UIUserInterfaceStyle</key><string>Dark</string>
     <key>UISupportedInterfaceOrientations</key>
     <array><string>UIInterfaceOrientationPortrait</string></array>
     <key>UISupportedInterfaceOrientations~ipad</key>

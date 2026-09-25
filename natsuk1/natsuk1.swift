@@ -126,7 +126,6 @@ struct RootView: View {
                 NotSupportedView(version: osVersionString())
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -137,6 +136,7 @@ struct NotSupportedView: View {
         VStack(spacing: 20) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 56))
+                .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(.orange)
             Text("Not supported for iOS \(version)")
                 .font(.title3)

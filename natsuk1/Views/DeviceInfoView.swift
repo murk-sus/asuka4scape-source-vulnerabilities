@@ -2,33 +2,43 @@ import SwiftUI
 import UIKit
 
 struct DeviceInfoView: View {
-    @Environment(\.dismiss) private var dismiss
-
     var body: some View {
-        NavigationStack {
-            List {
+        List {
+            Section {
                 row("Model", DeviceName.friendly())
                 row("Identifier", machineID())
                 row("Chip", DeviceName.chip())
+            } header: {
+                Label("Hardware", systemImage: "cpu")
+            }
+
+            Section {
                 row("iOS", sysctlString("kern.osproductversion"))
                 row("Build", sysctlString("kern.osversion"))
-                row("RAM", ram())
                 row("Architecture", arch())
+            } header: {
+                Label("Software", systemImage: "gear")
+            }
+
+            Section {
+                row("RAM", ram())
+                row("Uptime", uptime())
+            } header: {
+                Label("Resources", systemImage: "memorychip")
+            }
+
+            Section {
                 row("Locale", localeShort())
                 row("Region", regionShort())
-                row("Uptime", uptime())
-            }
-            .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
-            .background(Color(UIColor.systemGroupedBackground))
-            .navigationTitle("Device")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
+            } header: {
+                Label("Locale", systemImage: "globe")
             }
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color(UIColor.systemGroupedBackground))
+        .navigationTitle("Device")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func row(_ key: String, _ value: String) -> some View {

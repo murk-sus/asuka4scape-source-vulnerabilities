@@ -201,12 +201,13 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
 
     func respring() {
         let pairingPath = pairingFilePath()
+        let bridge = AirliftBridge.shared
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            appendLog("[respring] no pairing file at \(pairingPath)")
+            bridge.appendLog("[respring] no pairing file at \(pairingPath)")
             return
         }
-        appendLog("[respring] invoking with \(pairingPath)")
-        Task.detached { [weak self] in
+        bridge.appendLog("[respring] invoking with \(pairingPath)")
+        Task.detached {
             var outError: UnsafeMutablePointer<CChar>? = nil
             let rc: Int32 = pairingPath.withCString { pc in
                 al_device_respring(pc, nil, nil, &outError)
@@ -216,9 +217,9 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
             }
             await MainActor.run {
                 if rc == 0 {
-                    self?.appendLog("[respring] ok")
+                    bridge.appendLog("[respring] ok")
                 } else {
-                    self?.appendLog("[respring] rc=\(rc) \(errStr ?? "")")
+                    bridge.appendLog("[respring] rc=\(rc) \(errStr ?? "")")
                 }
             }
         }

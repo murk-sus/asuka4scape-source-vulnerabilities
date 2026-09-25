@@ -25,7 +25,9 @@ struct AboutView: View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(appName).font(.title2).fontWeight(.semibold)
+                    Text(appName)
+                        .font(.title2)
+                        .fontWeight(.semibold)
                     Text("Version \(version) (\(build))")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
@@ -40,13 +42,15 @@ struct AboutView: View {
 
             Section {
                 linkRow("Source Repository", url: repoURL)
-                linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
+                linkRow("MIT License",
+                        url: repoURL.appendingPathComponent("blob/main/LICENSE"))
             } header: {
                 Text("Open Source")
             }
 
             Section {
-                linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
+                linkRow("Star on GitHub",
+                        url: repoURL.appendingPathComponent("stargazers"))
             } header: {
                 Text("Community")
             }
@@ -77,7 +81,7 @@ struct AboutView: View {
                     .font(.body)
                     .fontWeight(.medium)
                 Spacer(minLength: 8)
-                Image(systemName: "link")
+                Image(systemName: "link.circle")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.tint)
             }

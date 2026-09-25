@@ -4,7 +4,6 @@ struct ToolsView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var airlift: AirliftBridge
     @EnvironmentObject var offsets: OffsetsStore
-    @State private var show_device = false
 
     var body: some View {
         NavigationStack {
@@ -13,40 +12,86 @@ struct ToolsView: View {
                     NavigationLink {
                         AirliftView().environmentObject(airlift)
                     } label: {
-                        Label("Airlift", systemImage: "airplane")
+                        Label {
+                            Text("Airlift")
+                        } icon: {
+                            Image(systemName: "airplane")
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(.tint)
+                        }
                     }
                     NavigationLink {
                         OffsetsView().environmentObject(offsets)
                     } label: {
-                        Label("Offsets", systemImage: "list.number")
+                        Label {
+                            Text("Offsets")
+                        } icon: {
+                            Image(systemName: "list.number")
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(.tint)
+                        }
                     }
                 } header: {
-                    Label("Exploit", systemImage: "bolt.shield")
+                    Label("Exploit", systemImage: "cross.case.fill")
                 }
 
                 Section {
-                    Button {
-                        show_device = true
+                    NavigationLink {
+                        MobileGestaltView()
                     } label: {
-                        Label("Device Info", systemImage: "iphone")
+                        Label {
+                            Text("MobileGestalt")
+                        } icon: {
+                            Image(systemName: "wand.and.stars")
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                } header: {
+                    Label("Spoof", systemImage: "wand.and.rays")
+                }
+
+                Section {
+                    NavigationLink {
+                        DeviceInfoView()
+                    } label: {
+                        Label {
+                            Text("Device Info")
+                        } icon: {
+                            Image(systemName: "iphone.gen3")
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(.tint)
+                        }
                     }
                     Button {
                         state.respring()
                     } label: {
-                        Label("Respring", systemImage: "arrow.clockwise")
+                        Label {
+                            Text("Respring")
+                        } icon: {
+                            Image(systemName: "arrow.clockwise.circle")
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(.tint)
+                        }
                     }
                 } header: {
-                    Label("Device", systemImage: "cpu")
+                    Label("Device", systemImage: "ipad.and.iphone")
                 }
 
                 Section {
                     NavigationLink {
                         PathAccessView()
                     } label: {
-                        Label("Path Access", systemImage: "folder.badge.gearshape")
+                        Label {
+                            Text("Path Access")
+                        } icon: {
+                            Image(systemName: "folder.badge.gearshape")
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(.tint)
+                        }
                     }
                 } header: {
-                    Label("Diagnostics", systemImage: "checkmark.shield")
+                    Label("Diagnostics", systemImage: "stethoscope")
                 }
             }
             .listStyle(.insetGrouped)
@@ -54,10 +99,6 @@ struct ToolsView: View {
             .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("Tools")
             .navigationBarTitleDisplayMode(.large)
-            .sheet(isPresented: $show_device) {
-                DeviceInfoView()
-                    .presentationBackground(Color(UIColor.systemGroupedBackground))
-            }
         }
     }
 }
