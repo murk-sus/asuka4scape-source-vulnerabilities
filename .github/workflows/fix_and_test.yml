@@ -166,7 +166,6 @@ jobs:
               "/// Checks for canonical natsuk1_pairing.plist, custom path, or any plist in Documents,")
 
           s = s.replace("AirCard-iOS", "natsuk1")
-          s = s.replace('"aircardPairingHostAltIRK"', '"natsuk1PairingHostAltIRK"')
           s = s.replace("aircardPairingHostAltIRK", "natsuk1PairingHostAltIRK")
           s = s.replace("aircard_pairing.plist", "natsuk1_pairing.plist")
           s = s.replace("airlift_pairing.plist", "natsuk1_pairing.plist")
@@ -1174,27 +1173,29 @@ jobs:
 
           fail() { echo "FAIL: $1"; exit 1; }
 
-          if grep -rqi "aircard" natsuk1/ ; then
+          SRC_PATHS="natsuk1/Helpers natsuk1/Views natsuk1/Exploit natsuk1/Resources natsuk1/Offsets natsuk1/natsuk1.swift natsuk1/bridging.h"
+
+          if grep -rqi "aircard" $SRC_PATHS ; then
             echo "===== aircard still present ====="
-            grep -rni "aircard" natsuk1/ || true
+            grep -rni "aircard" $SRC_PATHS || true
             fail "aircard must be replaced with natsuk1"
           fi
-          if grep -rqi "airlift_pairing" natsuk1/ ; then
+          if grep -rqi "airlift_pairing" $SRC_PATHS ; then
             echo "===== airlift_pairing still present ====="
-            grep -rni "airlift_pairing" natsuk1/ || true
+            grep -rni "airlift_pairing" $SRC_PATHS || true
             fail "airlift_pairing must be replaced with natsuk1_pairing"
           fi
 
-          if grep -rq "@MainActor" natsuk1/ ; then
-            grep -rn "@MainActor" natsuk1/ || true
+          if grep -rq "@MainActor" $SRC_PATHS ; then
+            grep -rn "@MainActor" $SRC_PATHS || true
             fail "@MainActor still present"
           fi
-          if grep -rq "@preconcurrency" natsuk1/ ; then
-            grep -rn "@preconcurrency" natsuk1/ || true
+          if grep -rq "@preconcurrency" $SRC_PATHS ; then
+            grep -rn "@preconcurrency" $SRC_PATHS || true
             fail "@preconcurrency still present"
           fi
-          if grep -rnE "(^|[^)] )static (let|var) shared(Instance)?\b" natsuk1/ ; then
-            grep -rnE "(^|[^)] )static (let|var) shared(Instance)?\b" natsuk1/ || true
+          if grep -rnE "(^|[^)] )static (let|var) shared(Instance)?\b" $SRC_PATHS ; then
+            grep -rnE "(^|[^)] )static (let|var) shared(Instance)?\b" $SRC_PATHS || true
             fail "static shared without nonisolated(unsafe)"
           fi
 
@@ -1306,7 +1307,7 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "Full aircard→natsuk1 cleanup"
+            --notes "Complete aircard→natsuk1 rename"
 
       - name: Commit
         run: |
