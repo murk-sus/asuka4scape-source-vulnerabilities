@@ -18,7 +18,7 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v5
+  CACHE_SALT: v6
 
 jobs:
   fix-and-test:
@@ -66,15 +66,10 @@ jobs:
                                           ProgressView().scaleEffect(0.8)
                                       }
                                   }
-                                  .contentShape(Rectangle())
                               }
-                              .buttonStyle(.plain)
                               .disabled(state.running)
                           } header: {
                               Label(state.t("Actions", "Действия"), systemImage: "play.circle")
-                          } footer: {
-                              Text(state.t("Runs kernel exploit, prints offsets and reference data.",
-                                           "Запускает эксплойт, выводит оффсеты и справочные данные."))
                           }
 
                           Section {
@@ -103,9 +98,7 @@ jobs:
                                           .font(.system(size: 13, weight: .semibold))
                                           .foregroundStyle(Color(UIColor.tertiaryLabel))
                                   }
-                                  .contentShape(Rectangle())
                               }
-                              .buttonStyle(.plain)
                           } header: {
                               Label(state.t("Runtime", "Состояние"), systemImage: "waveform.path.ecg")
                           }
@@ -145,6 +138,7 @@ jobs:
                       .listStyle(.insetGrouped)
                       .scrollContentBackground(.hidden)
                       .background(Color(UIColor.systemGroupedBackground))
+                      .scrollEdgeEffectHidden(true, for: .top)
                       .navigationTitle("natsuk1")
                       .navigationBarTitleDisplayMode(.inline)
                       .toolbar {
@@ -155,7 +149,6 @@ jobs:
                                   Image(systemName: "gear")
                                       .foregroundStyle(Color(UIColor.tertiaryLabel))
                               }
-                              .buttonStyle(.plain)
                           }
                       }
                       .sheet(isPresented: $show_settings) {
@@ -182,7 +175,6 @@ jobs:
                               .multilineTextAlignment(.leading)
                               .foregroundColor(state.log.isEmpty ? .secondary : .primary)
                               .frame(maxWidth: .infinity, alignment: .leading)
-                              .textSelection(.enabled)
 
                           Spacer(minLength: 0)
                               .id(0)
@@ -207,6 +199,228 @@ jobs:
               }
           }
           SWIFTEOF
+
+      - name: Write SettingsView
+        run: |
+          cat > natsuk1/Views/SettingsView.swift <<'SWIFTEOF'
+          import SwiftUI
+          import UIKit
+
+          struct SettingsView: View {
+              @Environment(\.dismiss) private var dismiss
+              @EnvironmentObject var state: AppState
+              @EnvironmentObject var offsets: OffsetsStore
+
+              @AppStorage("auto_run")   private var auto_run: Bool = false
+              @AppStorage("verbose")    private var verbose: Bool = true
+              @AppStorage("keep_alive_audio")    private var keep_alive_audio: Bool = false
+              @AppStorage("keep_alive_location") private var keep_alive_location: Bool = false
+
+              private var appName: String {
+                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+                      ?? "natsuk1"
+              }
+
+              private var version: String {
+                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+              }
+
+              private var appIcon: UIImage? {
+                  if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+                     let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+                     let files = primary["CFBundleIconFiles"] as? [String],
+                     let last = files.last {
+                      return UIImage(named: last)
+                  }
+                  return UIImage(named: "AppIcon")
+              }
+
+              private var activeVersionLabel: String {
+                  guard let v = OffsetsStore.activeVersion else { return "unknown" }
+                  return "\(v.device) / iOS \(v.ios) (\(v.build))"
+              }
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section {
+                              HStack(spacing: 14) {
+                                  Group {
+                                      if let icon = appIcon {
+                                          Image(uiImage: icon)
+                                              .resizable()
+                                              .aspectRatio(contentMode: .fill)
+                                      } else {
+                                          ZStack {
+                                              LinearGradient(
+                                                  colors: [
+                                                      Color(red: 0.65, green: 0.30, blue: 0.90),
+                                                      Color(red: 0.30, green: 0.65, blue: 0.95)
+                                                  ],
+                                                  startPoint: .topLeading,
+                                                  endPoint: .bottomTrailing
+                                              )
+                                              Image(systemName: "bolt.fill")
+                                                  .font(.system(size: 26, weight: .semibold))
+                                                  .foregroundStyle(.white)
+                                          }
+                                      }
+                                  }
+                                  .frame(width: 56, height: 56)
+                                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text(appName)
+                                          .font(.title3)
+                                          .fontWeight(.semibold)
+                                      Text("Version \(version)")
+                                          .font(.subheadline)
+                                          .foregroundColor(.secondary)
+                                  }
+                                  Spacer(minLength: 8)
+                              }
+                              .padding(.vertical, 4)
+
+                              NavigationLink {
+                                  AboutView().environmentObject(state)
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "info.circle")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Credits")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                  }
+                              }
+                          } header: {
+                              Label("About", systemImage: "info.circle")
+                          }
+
+                          Section {
+                              HStack(spacing: 10) {
+                                  Image(systemName: "cpu")
+                                      .foregroundStyle(.secondary)
+                                      .frame(width: 20)
+                                  Text("Offsets")
+                                      .foregroundStyle(.secondary)
+                                  Spacer(minLength: 8)
+                                  Text(activeVersionLabel)
+                                      .font(.system(size: 12, design: .monospaced))
+                                      .foregroundColor(.secondary)
+                                      .lineLimit(1)
+                                      .truncationMode(.middle)
+                              }
+                              .padding(.vertical, 2)
+
+                              NavigationLink {
+                                  OffsetsView().environmentObject(offsets)
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "list.number")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Modify Offsets")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                      Text("\(offsets.filledCount())/\(offsets.totalCount())")
+                                          .font(.system(size: 13, design: .monospaced))
+                                          .foregroundColor(.secondary)
+                                  }
+                              }
+                          } header: {
+                              Label("Exploit", systemImage: "cpu")
+                          }
+
+                          Section {
+                              Toggle(isOn: $keep_alive_audio) {
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text("Silent Audio")
+                                      Text("Plays inaudible audio so iOS keeps the app running.")
+                                          .font(.caption)
+                                          .foregroundColor(.secondary)
+                                  }
+                              }
+
+                              Toggle(isOn: $keep_alive_location) {
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text("Background Location")
+                                      Text("Uses low-accuracy location to stay alive when an activity needs it.")
+                                          .font(.caption)
+                                          .foregroundColor(.secondary)
+                                  }
+                              }
+                          } header: {
+                              Label("Background Keep-Alive", systemImage: "waveform.circle")
+                          }
+
+                          Section {
+                              Toggle("Auto Run on Launch", isOn: $auto_run)
+                              Toggle("Verbose Output", isOn: $verbose)
+                          } header: {
+                              Label("Options", systemImage: "gearshape")
+                          }
+
+                          Section {
+                              Button {
+                                  state.respring()
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "arrow.clockwise")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Respring")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                  }
+                              }
+                          } header: {
+                              Label("Tools", systemImage: "wrench.and.screwdriver")
+                          }
+                      }
+                      .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .background(Color(UIColor.systemGroupedBackground))
+                      .navigationTitle("Settings")
+                      .navigationBarTitleDisplayMode(.large)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Done") { dismiss() }
+                                  .fontWeight(.semibold)
+                          }
+                      }
+                  }
+              }
+          }
+          SWIFTEOF
+
+      - name: Patch natsuk1.swift version
+        run: |
+          python3 <<'PYEOF'
+          import re
+          p = "natsuk1/natsuk1.swift"
+          s = open(p).read()
+
+          if "private func appVersionString" not in s:
+              helper = '''
+          private func appVersionString() -> String {
+              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+          }
+
+          '''
+              s = s.replace(
+                  'private func osVersionString() -> String {',
+                  helper + 'private func osVersionString() -> String {'
+              )
+
+          s = s.replace(
+              'state.append("[*] natsuk1 v6.0")',
+              'state.append("[*] natsuk1 v\\(appVersionString())")'
+          )
+
+          open(p, "w").write(s)
+          PYEOF
 
       - name: Cache Homebrew
         uses: actions/cache@v5
@@ -288,5 +502,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "Add log actions section [skip ci]"
+          git commit -m "UI cleanup: log actions, no footer, no scroll edge, full row taps [skip ci]"
           git push
