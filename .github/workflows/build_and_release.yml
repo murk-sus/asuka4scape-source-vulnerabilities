@@ -173,17 +173,30 @@ jobs:
 
           python3 /tmp/patch.py
 
-          if [ -f project.yml ] && ! grep -q SWIFT_DEFAULT_ACTOR_ISOLATION project.yml; then
-            python3 - <<'PY'
+          python3 - <<'PY'
           p = "project.yml"
           s = open(p).read()
-          s = s.replace(
-              "    settings:",
-              "    settings:\n      SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated\n      SWIFT_APPROACHABLE_CONCURRENCY: NO\n      SWIFT_STRICT_CONCURRENCY: minimal\n",
-              1)
+          anchor = '    SWIFT_VERSION: "6.0"\n'
+          extra = (
+              '    SWIFT_VERSION: "6.0"\n'
+              '    SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated\n'
+              '    SWIFT_APPROACHABLE_CONCURRENCY: NO\n'
+              '    SWIFT_STRICT_CONCURRENCY: minimal\n'
+          )
+          if "SWIFT_DEFAULT_ACTOR_ISOLATION" not in s and anchor in s:
+              s = s.replace(anchor, extra, 1)
+          tgt_anchor = "        SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h\n"
+          tgt_extra = (
+              "        SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h\n"
+              "        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated\n"
+              "        SWIFT_APPROACHABLE_CONCURRENCY: NO\n"
+              "        SWIFT_STRICT_CONCURRENCY: minimal\n"
+              '        OTHER_SWIFT_FLAGS: "$(inherited) -default-isolation nonisolated"\n'
+          )
+          if "OTHER_SWIFT_FLAGS" not in s and tgt_anchor in s:
+              s = s.replace(tgt_anchor, tgt_extra, 1)
           open(p, "w").write(s)
           PY
-          fi
 
           if grep -q "@MainActor" natsuk1/Helpers/PairingController.swift; then
             echo "PairingController still has @MainActor"
