@@ -160,6 +160,17 @@ final class AppState: ObservableObject, @unchecked Sendable {
             }
         }
     }
+    func necp_run() {
+        if running { return }
+        running = true; status = .running
+        Task.detached {
+            _ = nk_necp_run()
+            await MainActor.run {
+                AppState.shared.running = false
+                AppState.shared.status = .ok
+            }
+        }
+    }
     func respring() { show_respring = true }
     func clear() { LockedBuffer.shared.clear(); log = "" }
 }

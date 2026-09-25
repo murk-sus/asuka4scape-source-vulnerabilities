@@ -9,17 +9,17 @@ struct OverviewView: View {
             List {
                 Section {
                     Button {
-                        state.run()
+                        state.necp_run()
                     } label: {
                         HStack {
-                            Text(state.t("Run Exploit", "Запустить эксплойт"))
+                            Text("Run Exploit")
                             Spacer()
                             if state.running { ProgressView().scaleEffect(0.8) }
                         }
                     }
                     .disabled(state.running)
                 } header: {
-                    Label(state.t("Exploit", "Эксплойт"), systemImage: "bolt.shield")
+                    Label("Kernel Read Write", systemImage: "cpu")
                 }
 
                 Section {
@@ -47,8 +47,6 @@ struct OverviewView: View {
                     Button(role: .destructive) { state.clear() } label: {
                         Text(state.t("Clear", "Очистить"))
                     }.disabled(state.log.isEmpty)
-                } header: {
-                    Label(state.t("Log Actions", "Действия с логом"), systemImage: "ellipsis.circle")
                 }
             }
             .listStyle(.insetGrouped)
