@@ -13,135 +13,697 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Delete unused files
+      - name: Delete dead code
         run: |
           set -euo pipefail
-          rm -rf natsuk1/External/choma
-          for f in \
-            CachePatching.h CSBlob.h CodeDirectory.h DER.h DyldSharedCache.h \
-            Entitlements.h Fat.h FileStream.h Host.h MachO.h MachOByteOrder.h \
-            MachOLoadCommand.h MemoryStream.h PatchFinder.h PatchFinder_arm64.h \
-            Util.h arm64.h Base64.h BufferedStream.h dyld_cache_format.h \
-            fixup-chains.h \
-            libgrabkernel2.h partial.h xpf.h; do
-            rm -f "natsuk1/External/$f"
-          done
-          rm -f natsuk1/Helpers/KernelcacheFetcher.swift
-          rm -f natsuk1/Helpers/KernelcacheParser.swift
+          rm -f natsuk1/Exploit/nk_krw.c
+          rm -f natsuk1/Exploit/nk_krw.h
+          rm -f natsuk1/Exploit/nk_necp.c
+          rm -f natsuk1/Exploit/nk_necp.h
+          rm -f natsuk1/Exploit/nk_probe.c
+          rm -f natsuk1/Exploit/nk_probe.h
+          rm -f natsuk1/Exploit/nk_syscalls.c
+          rm -f natsuk1/Exploit/nk_syscalls.h
           rm -f natsuk1/Exploit/nk_sptm.c
           rm -f natsuk1/Exploit/nk_sptm.h
+          rm -f natsuk1/Helpers/KernelRW.swift
+          rm -f natsuk1/Helpers/KernelcacheFetcher.swift
+          rm -f natsuk1/Helpers/KernelcacheParser.swift
+          rm -f natsuk1/Resources/Offsets.json
+          rm -rf natsuk1/External
+          rm -rf natsuk1/External/choma
 
-      - name: Apply source edits
+      - name: Write sources
         run: |
           python3 <<'PYEOF'
-          import json, re, os
+          import os, json, re
 
-          def remove_swift_func(src, name):
-              marker = f"    func {name}("
-              idx = src.find(marker)
-              if idx == -1:
-                  return src
-              brace_idx = src.find("{", idx)
-              depth = 1
-              i = brace_idx + 1
-              while i < len(src) and depth > 0:
-                  if src[i] == '{':
-                      depth += 1
-                  elif src[i] == '}':
-                      depth -= 1
-                  i += 1
-              end = i
-              while end < len(src) and src[end] == '\n':
-                  end += 1
-              return src[:idx] + src[end:]
+          def w(path, content):
+              os.makedirs(os.path.dirname(path), exist_ok=True)
+              open(path, "w").write(content)
 
-          def remove_swift_section_containing(src, marker):
-              idx = src.find(marker)
-              if idx == -1:
-                  return src
-              sec_idx = src.rfind("Section {", 0, idx)
-              if sec_idx == -1:
-                  return src
-              brace_idx = src.find("{", sec_idx)
-              depth = 1
-              i = brace_idx + 1
-              while i < len(src) and depth > 0:
-                  if src[i] == '{':
-                      depth += 1
-                  elif src[i] == '}':
-                      depth -= 1
-                  i += 1
-              end = i
-              while end < len(src) and src[end] == '\n':
-                  end += 1
-              return src[:sec_idx] + src[end:]
+          w("natsuk1/Exploit/nk_api.h", """#ifndef NK_API_H
+#define NK_API_H
 
-          p = "natsuk1/Exploit/nk_api.c"
-          if os.path.exists(p):
-              s = open(p).read()
-              s = s.replace('#include "nk_sptm.h"\n', '')
-              s = s.replace('    nk_sptm_targets();\n    nk_rule();\n\n', '')
-              open(p, "w").write(s)
+#include <stdint.h>
 
-          p = "natsuk1/Exploit/nk_offsets.h"
-          if os.path.exists(p):
-              s = open(p).read()
-              for name in ("NK_G_CHROOT", "NK_G_CS_ENFORCEMENT", "NK_G_KALLOC_TYPE",
-                           "NK_G_MAC_POLICY", "NK_G_PROC_FIND", "NK_G_SET_BSDTASK",
-                           "NK_G_SWAP_TASK_MAP", "NK_G_TASK_FOR_PID", "NK_G_TASK_INIT",
-                           "NK_G_VM_MAP_KERNEL", "NK_G_VM_PAGE_ALLOC"):
-                  s = re.sub(rf'^#define\s+{re.escape(name)}\s+.*\n', '', s, flags=re.M)
-              s = re.sub(r'\n{3,}', '\n\n', s)
-              open(p, "w").write(s)
+void nk_set_log(void (*fn)(const char *));
+int nk_run(void);
+int nk_full_exploit(void);
 
-          p = "natsuk1/Resources/Offsets.json"
-          if os.path.exists(p):
-              data = json.load(open(p))
-              confirmed = {
-                  "off_kernel_base", "off_kernel_entry", "off_sysent_base",
-                  "off_sysent_count", "off_sysent_stride", "off_mach_trap_table",
-                  "off_g_kernproc", "off_g_kernel_task", "off_g_zone_map",
-                  "off_g_task_list", "off_g_kernel_map", "off_g_allproc",
-                  "off_fn_copyin", "off_fn_copyout", "off_fn_kalloc_ext",
-                  "off_fn_kfree_ext",
-                  "off_proc_p_pid", "off_proc_ro_p_ucred",
-                  "off_thread_task_threads_next", "off_task_bsd_info",
-                  "off_task_itk_space", "off_task_map",
-                  "off_zone_data_kalloc", "off_zone_early_kalloc",
-                  "off_zone_kalloc_type_var", "off_zone_site_struct_task",
-                  "off_zone_site_struct_proc", "off_zone_site_struct_thread",
-                  "off_zone_site_struct_ucred", "off_zone_site_struct_ipc_port",
-                  "off_zone_site_struct_ipc_entry", "off_zone_site_struct_fileproc",
-                  "off_zone_site_struct_fileglob", "off_zone_site_struct_vnode",
-                  "off_zone_site_struct_mount", "off_zone_site_struct_socket",
-                  "off_zone_site_struct_inpcb", "off_zone_site_struct_pipe",
-                  "off_zone_site_struct_vm_page",
-                  "off_sptm_base", "off_sptm_ctrr_lock_boot",
-                  "off_sptm_cpu_lock_system_registers",
-                  "off_sptm_determine_kernel_ctrr", "off_sptm_bootstrap",
-                  "off_sptm_map", "off_sptm_region", "off_sptm_panic",
-                  "off_sptm_page_table",
+uint64_t nk_get_kernel_base(void);
+uint64_t nk_get_sysent_base(void);
+uint64_t nk_get_mach_trap_table(void);
+
+#endif
+""")
+
+          w("natsuk1/Exploit/nk_api.c", """#include "nk_api.h"
+#include "nk_log.h"
+#include "nk_offsets.h"
+
+int nk_run(void) {
+    nk_log("natsuk1 v5.0");
+    nk_log("iOS 27.0 / 24A437 / iPhone14,5");
+    nk_rule();
+
+    NK_INFO("BASE", "kernel          0x%016llX", (unsigned long long)NK_KERNEL_BASE);
+    NK_INFO("BASE", "sysent          0x%016llX (%d entries)",
+            (unsigned long long)NK_SYSENT_BASE, NK_SYSENT_COUNT);
+    NK_INFO("BASE", "mach_trap_table 0x%016llX", (unsigned long long)NK_MACH_TRAP_TABLE);
+    nk_rule();
+
+    NK_INFO("PRIM", "copyin   0x%016llX", (unsigned long long)NK_FN_COPYIN);
+    NK_INFO("PRIM", "copyout  0x%016llX", (unsigned long long)NK_FN_COPYOUT);
+    NK_INFO("PRIM", "kalloc   0x%016llX", (unsigned long long)NK_FN_KALLOC_EXT);
+    NK_INFO("PRIM", "kfree    0x%016llX", (unsigned long long)NK_FN_KFREE_EXT);
+    nk_rule();
+
+    NK_INFO("STRUCT", "proc_pid     0x%X", NK_OFF_PROC_PID);
+    NK_INFO("STRUCT", "proc_ucred   0x%X", NK_OFF_PROC_UCRED);
+    NK_INFO("STRUCT", "task_thread  0x%X", NK_OFF_TASK_THREAD);
+    nk_rule();
+
+    NK_WARN("STATE", "No kernel R/W primitive on iOS 27.0 (24A437).");
+    NK_WARN("STATE", "Offsets below are reference data only.");
+    nk_rule();
+
+    return 0;
+}
+
+int nk_full_exploit(void) { return nk_run(); }
+
+uint64_t nk_get_kernel_base(void)     { return NK_KERNEL_BASE; }
+uint64_t nk_get_sysent_base(void)     { return NK_SYSENT_BASE; }
+uint64_t nk_get_mach_trap_table(void) { return NK_MACH_TRAP_TABLE; }
+""")
+
+          w("natsuk1/Exploit/nk_offsets.h", """#ifndef NK_OFFSETS_H
+#define NK_OFFSETS_H
+
+#define NK_KERNEL_BASE            0xFFFFFFF007004000ULL
+#define NK_SYSENT_BASE            0xFFFFFFF007C192A0ULL
+#define NK_SYSENT_COUNT           558
+#define NK_SYSENT_STRIDE          24
+#define NK_MACH_TRAP_TABLE        0xFFFFFFF007BE8018ULL
+
+#define NK_FN_COPYIN              0xFFFFFFF00A7B9570ULL
+#define NK_FN_COPYOUT             0xFFFFFFF00A2C6C28ULL
+#define NK_FN_KALLOC_EXT          0xFFFFFFF00A200DCCULL
+#define NK_FN_KFREE_EXT           0xFFFFFFF00A201000ULL
+
+#define NK_OFF_PROC_PID           0x74
+#define NK_OFF_PROC_UCRED         0xB8
+#define NK_OFF_TASK_THREAD        0x50
+
+#endif
+""")
+
+          w("natsuk1/bridging.h", """#ifndef NATSUK1_BRIDGING_H
+#define NATSUK1_BRIDGING_H
+
+#include <stdint.h>
+#include "Exploit/nk_api.h"
+
+#endif
+""")
+
+          w("natsuk1/Helpers/OffsetsStore.swift", """import Foundation
+import Combine
+
+final class OffsetsStore: ObservableObject {
+    static let shared = OffsetsStore()
+
+    struct Group: Codable {
+        let title: String
+        let items: [String]
+    }
+
+    struct VersionEntry: Codable {
+        let file: String
+        let device: String
+        let deviceName: String
+        let chip: String
+        let ios: String
+        let build: String
+        let verified: Bool
+    }
+
+    struct Index: Codable {
+        let versions: [VersionEntry]
+    }
+
+    private struct File: Codable {
+        let groups: [Group]
+        let defaults: [String: String]
+    }
+
+    private static let bundled: File? = {
+        guard let fileURL = resolveActiveFileURL() else { return nil }
+        guard let fileData = try? Data(contentsOf: fileURL),
+              let parsed = try? JSONDecoder().decode(File.self, from: fileData)
+        else { return nil }
+        return parsed
+    }()
+
+    static var groups: [Group] { bundled?.groups ?? [] }
+    static var defaults: [String: String] { bundled?.defaults ?? [:] }
+
+    static var activeVersion: VersionEntry? {
+        resolveActiveEntry()
+    }
+
+    private static func loadIndex() -> Index? {
+        guard let url = Bundle.main.url(forResource: "index", withExtension: "json", subdirectory: "Offsets"),
+              let data = try? Data(contentsOf: url),
+              let index = try? JSONDecoder().decode(Index.self, from: data)
+        else { return nil }
+        return index
+    }
+
+    private static func resolveActiveEntry() -> VersionEntry? {
+        guard let index = loadIndex() else { return nil }
+        let device = DeviceName.machineID()
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        let ios = "\\(v.majorVersion).\\(v.minorVersion)"
+        return index.versions.first(where: { $0.device == device && $0.ios == ios })
+            ?? index.versions.first(where: { $0.device == device })
+    }
+
+    private static func resolveActiveFileURL() -> URL? {
+        guard let entry = resolveActiveEntry() else { return nil }
+        let parts = entry.file.split(separator: ".", maxSplits: 1).map(String.init)
+        let name = parts.first ?? entry.file
+        let ext  = parts.count > 1 ? parts[1] : "json"
+        return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")
+    }
+
+    @Published var values: [String: String] = [:]
+
+    private let storageKey = "natsuk1_offsets_v2"
+
+    private init() { load() }
+
+    func load() {
+        let saved = UserDefaults.standard.dictionary(forKey: storageKey) as? [String: String]
+        var merged = Self.defaults
+        if let saved = saved {
+            for (k, v) in saved where merged[k] != nil { merged[k] = v }
+        }
+        values = merged
+        if saved == nil { save() }
+    }
+
+    func save() {
+        UserDefaults.standard.set(values, forKey: storageKey)
+    }
+
+    func reset() {
+        values = Self.defaults
+        save()
+    }
+
+    func resetOne(_ name: String) {
+        values[name] = Self.defaults[name] ?? "0x0"
+        save()
+    }
+
+    func update(_ name: String, value: String) {
+        values[name] = value
+        save()
+    }
+
+    func value(for name: String) -> String {
+        values[name] ?? Self.defaults[name] ?? "0x0"
+    }
+
+    func filledCount() -> Int {
+        values.filter { $0.value != "0x0" && !$0.value.isEmpty }.count
+    }
+
+    func totalCount() -> Int {
+        Self.groups.reduce(0) { $0 + $1.items.count }
+    }
+}
+""")
+
+          w("natsuk1/natsuk1.swift", """import SwiftUI
+import UIKit
+import Foundation
+
+private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
+    guard let line = line else { return }
+    AppState.shared.append(String(cString: line))
+}
+
+@main
+struct natsuk1App: App {
+    @StateObject private var state = AppState.shared
+    @StateObject private var offsets = OffsetsStore.shared
+    @AppStorage("auto_run") private var auto_run = false
+
+    init() {
+        UserDefaults.standard.register(defaults: [
+            "auto_run": false,
+            "lang": "en",
+        ])
+    }
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environmentObject(state)
+                .environmentObject(offsets)
+                .preferredColorScheme(.dark)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onAppear {
+                    nk_set_log(cCallback)
+                    if state.log.isEmpty {
+                        let v = ProcessInfo.processInfo.operatingSystemVersion
+                        state.append("[*] natsuk1 v5.0")
+                        state.append("[*] iOS \\(v.majorVersion).\\(v.minorVersion) / arm64e")
+                        if let version = OffsetsStore.activeVersion {
+                            state.append("[*] offsets: \\(version.device) / iOS \\(version.ios) (\\(version.build))")
+                        }
+                        state.append("")
+                    }
+                    if auto_run {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            state.run()
+                        }
+                    }
+                }
+                .overlay {
+                    if state.show_respring {
+                        RespringView()
+                            .brightness(-1.0)
+                            .ignoresSafeArea()
+                    }
+                }
+        }
+    }
+}
+
+final class AppState: ObservableObject {
+    static let shared = AppState()
+
+    enum Status {
+        case idle, running, ok, failed
+        var color: Color {
+            switch self {
+            case .idle:    return .secondary
+            case .running: return .orange
+            case .ok:      return .green
+            case .failed:  return .red
+            }
+        }
+    }
+
+    @Published var log: String = ""
+    @Published var status: Status = .idle
+    @Published var running: Bool = false
+    @Published var show_respring: Bool = false
+
+    @Published var lang: String {
+        didSet { UserDefaults.standard.set(lang, forKey: "lang") }
+    }
+
+    private var flusher: Timer?
+    private var pending: String = ""
+    private let lock = NSLock()
+
+    private init() {
+        self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
+        startFlusher()
+    }
+
+    func t(_ en: String, _ ru: String) -> String {
+        lang == "ru" ? ru : en
+    }
+
+    private func startFlusher() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                self.lock.lock()
+                let chunk = self.pending
+                self.pending = ""
+                self.lock.unlock()
+                guard !chunk.isEmpty else { return }
+                var newLog = self.log
+                newLog += chunk
+                if newLog.count > 30000 {
+                    newLog = String(newLog.suffix(20000))
+                }
+                self.log = newLog
+            }
+        }
+    }
+
+    func append(_ s: String) {
+        lock.lock()
+        pending += s
+        pending += "\\n"
+        if pending.count > 10000 {
+            pending = String(pending.suffix(6000))
+        }
+        lock.unlock()
+    }
+
+    func run() {
+        if running { return }
+        running = true
+        status = .running
+
+        let t = Thread { [weak self] in
+            _ = nk_full_exploit()
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.running = false
+                self.status = .ok
+            }
+        }
+        t.qualityOfService = .userInitiated
+        t.stackSize = 16 * 1024 * 1024
+        t.start()
+    }
+
+    func respring() {
+        show_respring = true
+    }
+
+    func clear() {
+        lock.lock()
+        pending = ""
+        lock.unlock()
+        log = ""
+    }
+}
+""")
+
+          w("natsuk1/Views/SettingsView.swift", """import SwiftUI
+import UIKit
+
+struct SettingsView: View {
+    @Environment(\\.dismiss) private var dismiss
+    @EnvironmentObject var state: AppState
+    @EnvironmentObject var offsets: OffsetsStore
+
+    @AppStorage("auto_run")   private var auto_run: Bool = false
+    @AppStorage("verbose")    private var verbose: Bool = true
+    @AppStorage("keep_alive") private var keep_alive: Bool = false
+
+    private var appName: String {
+        Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+            ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+            ?? "natsuk1"
+    }
+
+    private var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+    }
+
+    private var appIcon: UIImage? {
+        if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+           let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+           let files = primary["CFBundleIconFiles"] as? [String],
+           let last = files.last {
+            return UIImage(named: last)
+        }
+        return UIImage(named: "AppIcon")
+    }
+
+    private var activeVersionLabel: String {
+        guard let v = OffsetsStore.activeVersion else { return "unknown" }
+        return "\\(v.device) / iOS \\(v.ios) (\\(v.build))"
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack(spacing: 14) {
+                        Group {
+                            if let icon = appIcon {
+                                Image(uiImage: icon)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            } else {
+                                ZStack {
+                                    LinearGradient(
+                                        colors: [
+                                            Color(red: 0.65, green: 0.30, blue: 0.90),
+                                            Color(red: 0.30, green: 0.65, blue: 0.95)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                    Image(systemName: "bolt.fill")
+                                        .font(.system(size: 26, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                }
+                            }
+                        }
+                        .frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(appName)
+                                .font(.title3)
+                                .fontWeight(.semibold)
+                            Text("Version \\(version)")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                    }
+                    .padding(.vertical, 4)
+
+                    NavigationLink {
+                        AboutView().environmentObject(state)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            Text("Credits")
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                } header: {
+                    Label("About", systemImage: "info.circle")
+                }
+
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "cpu")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20)
+                        Text("Offsets")
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Text(activeVersionLabel)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .padding(.vertical, 2)
+
+                    NavigationLink {
+                        OffsetsView().environmentObject(offsets)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "list.number")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            Text("Modify Offsets")
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                            Text("\\(offsets.filledCount())/\\(offsets.totalCount())")
+                                .font(.system(size: 13, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                } header: {
+                    Label("Exploit", systemImage: "cpu")
+                }
+
+                Section {
+                    Toggle("Auto Run on Launch", isOn: $auto_run)
+                    Toggle("Verbose Output", isOn: $verbose)
+                    Toggle("Keep Alive", isOn: $keep_alive)
+                } header: {
+                    Label("Options", systemImage: "gearshape")
+                }
+
+                Section {
+                    Button {
+                        state.respring()
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "arrow.clockwise")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            Text("Respring")
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        state.clear()
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "trash")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            Text("Clear Log")
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                } header: {
+                    Label("Tools", systemImage: "wrench.and.screwdriver")
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.large)
+            .tint(.blue)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+}
+""")
+
+          os.makedirs("Offsets", exist_ok=True)
+
+          w("Offsets/index.json", json.dumps({
+              "versions": [
+                  {
+                      "file": "iPhone14,5_iOS27.0_24A437.json",
+                      "device": "iPhone14,5",
+                      "deviceName": "iPhone 13",
+                      "chip": "A15 Bionic",
+                      "ios": "27.0",
+                      "build": "24A437",
+                      "verified": False,
+                  }
+              ]
+          }, indent=2) + "\n")
+
+          w("Offsets/iPhone14,5_iOS27.0_24A437.json", json.dumps({
+              "groups": [
+                  {"title": "Kernel", "items": [
+                      "off_kernel_base", "off_kernel_entry",
+                      "off_sysent_base", "off_sysent_count", "off_sysent_stride",
+                      "off_mach_trap_table"
+                  ]},
+                  {"title": "Globals", "items": [
+                      "off_g_kernproc", "off_g_kernel_task", "off_g_zone_map",
+                      "off_g_task_list", "off_g_kernel_map", "off_g_allproc"
+                  ]},
+                  {"title": "Primitives", "items": [
+                      "off_fn_copyin", "off_fn_copyout",
+                      "off_fn_kalloc_ext", "off_fn_kfree_ext"
+                  ]},
+                  {"title": "proc", "items": [
+                      "off_proc_p_pid", "off_proc_ro_p_ucred"
+                  ]},
+                  {"title": "task / thread", "items": [
+                      "off_task_map", "off_task_bsd_info", "off_task_itk_space",
+                      "off_thread_task_threads_next"
+                  ]},
+                  {"title": "Zones", "items": [
+                      "off_zone_data_kalloc", "off_zone_early_kalloc",
+                      "off_zone_kalloc_type_var",
+                      "off_zone_site_struct_task", "off_zone_site_struct_proc",
+                      "off_zone_site_struct_thread", "off_zone_site_struct_ucred",
+                      "off_zone_site_struct_ipc_port", "off_zone_site_struct_ipc_entry",
+                      "off_zone_site_struct_fileproc", "off_zone_site_struct_fileglob",
+                      "off_zone_site_struct_vnode", "off_zone_site_struct_mount",
+                      "off_zone_site_struct_socket", "off_zone_site_struct_inpcb",
+                      "off_zone_site_struct_pipe", "off_zone_site_struct_vm_page"
+                  ]},
+                  {"title": "SPTM", "items": [
+                      "off_sptm_base", "off_sptm_ctrr_lock_boot",
+                      "off_sptm_cpu_lock_system_registers",
+                      "off_sptm_determine_kernel_ctrr", "off_sptm_bootstrap",
+                      "off_sptm_map", "off_sptm_region", "off_sptm_panic",
+                      "off_sptm_page_table"
+                  ]}
+              ],
+              "defaults": {
+                  "off_kernel_base": "0xFFFFFFF007004000",
+                  "off_kernel_entry": "0xFFFFFFF00AA4C000",
+                  "off_sysent_base": "0xFFFFFFF007C192A0",
+                  "off_sysent_count": "558",
+                  "off_sysent_stride": "24",
+                  "off_mach_trap_table": "0xFFFFFFF007BE8018",
+
+                  "off_g_kernproc": "0xFFFFFFF007BBF040",
+                  "off_g_kernel_task": "0xFFFFFFF00700DC70",
+                  "off_g_zone_map": "0xFFFFFFF00AD6A800",
+                  "off_g_task_list": "0xFFFFFFF0080D93F0",
+                  "off_g_kernel_map": "0xFFFFFFF007BBE228",
+                  "off_g_allproc": "0xFFFFFFF007BBF048",
+
+                  "off_fn_copyin": "0xFFFFFFF00A7B9570",
+                  "off_fn_copyout": "0xFFFFFFF00A2C6C28",
+                  "off_fn_kalloc_ext": "0xFFFFFFF00A200DCC",
+                  "off_fn_kfree_ext": "0xFFFFFFF00A201000",
+
+                  "off_proc_p_pid": "0x74",
+                  "off_proc_ro_p_ucred": "0xB8",
+
+                  "off_task_map": "0x28",
+                  "off_task_bsd_info": "0x3A0",
+                  "off_task_itk_space": "0x320",
+                  "off_thread_task_threads_next": "0x50",
+
+                  "off_zone_data_kalloc": "0xFFFFFFF007C62E70",
+                  "off_zone_early_kalloc": "0xFFFFFFF007BBB170",
+                  "off_zone_kalloc_type_var": "0xFFFFFFF007BC2800",
+                  "off_zone_site_struct_task": "0xFFFFFFF007C64080",
+                  "off_zone_site_struct_proc": "0xFFFFFFF007C71240",
+                  "off_zone_site_struct_thread": "0xFFFFFFF007C63D00",
+                  "off_zone_site_struct_ucred": "0xFFFFFFF007C6F140",
+                  "off_zone_site_struct_ipc_port": "0xFFFFFFF007C79248",
+                  "off_zone_site_struct_ipc_entry": "0xFFFFFFF007C79298",
+                  "off_zone_site_struct_fileproc": "0xFFFFFFF007C7CD08",
+                  "off_zone_site_struct_fileglob": "0xFFFFFFF007C7D708",
+                  "off_zone_site_struct_vnode": "0xFFFFFFF007C660C0",
+                  "off_zone_site_struct_mount": "0xFFFFFFF007C662C0",
+                  "off_zone_site_struct_socket": "0xFFFFFFF007C70C40",
+                  "off_zone_site_struct_inpcb": "0xFFFFFFF007C6D180",
+                  "off_zone_site_struct_pipe": "0xFFFFFFF007C6FE80",
+                  "off_zone_site_struct_vm_page": "0xFFFFFFF007C64C80",
+
+                  "off_sptm_base": "0xFFFFFFF027004000",
+                  "off_sptm_ctrr_lock_boot": "0xFFFFFFF027006E62",
+                  "off_sptm_cpu_lock_system_registers": "0xFFFFFFF0270B39B4",
+                  "off_sptm_determine_kernel_ctrr": "0xFFFFFFF0270B2224",
+                  "off_sptm_bootstrap": "0xFFFFFFF0270D21CC",
+                  "off_sptm_map": "0xFFFFFFF0270E97BC",
+                  "off_sptm_region": "0xFFFFFFF0270ECFF0",
+                  "off_sptm_panic": "0xFFFFFFF0270BEE18",
+                  "off_sptm_page_table": "0xFFFFFFF0270D13D4"
               }
-              data["defaults"] = {k: v for k, v in data["defaults"].items() if k in confirmed}
-              for g in data["groups"]:
-                  g["items"] = [x for x in g["items"] if x in confirmed]
-              data["groups"] = [g for g in data["groups"] if g["items"]]
-              with open(p, "w") as f:
-                  json.dump(data, f, indent=2)
-                  f.write("\n")
-
-          p = "natsuk1/Resources/natsuk1.entitlements"
-          if os.path.exists(p):
-              open(p, "w").write(
-                  '<?xml version="1.0" encoding="UTF-8"?>\n'
-                  '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
-                  '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
-                  '<plist version="1.0">\n'
-                  '<dict>\n'
-                  '    <key>com.apple.private.skip-library-validation</key><true/>\n'
-                  '</dict>\n'
-                  '</plist>\n'
-              )
+          }, indent=2) + "\n")
 
           p = "project.yml"
           if os.path.exists(p):
@@ -152,29 +714,12 @@ jobs:
               s = re.sub(r'^\s*- path: natsuk1/External/libgrabkernel2\.h\n\s*buildPhase: none\n', '', s, flags=re.M)
               s = re.sub(r'^\s*- path: natsuk1/External/partial\.h\n\s*buildPhase: none\n', '', s, flags=re.M)
               s = re.sub(r'^\s*- path: natsuk1/External/xpf\.h\n\s*buildPhase: none\n', '', s, flags=re.M)
-              open(p, "w").write(s)
-
-          p = "natsuk1/natsuk1.swift"
-          if os.path.exists(p):
-              s = open(p).read()
-              for name in ("fetchKernelcache", "parseKernelcache", "fetchImages"):
-                  s = remove_swift_func(s, name)
-              s = s.replace('    @Published var kernelcachePath: String?\n', '')
-              s = s.replace('    @Published var fetchingKernelcache: Bool = false\n', '')
-              s = s.replace('    @Published var parsingKernelcache: Bool = false\n', '')
-              s = s.replace('        self.kernelcachePath = UserDefaults.standard.string(forKey: "kernelcache_path")\n', '')
-              open(p, "w").write(s)
-
-          p = "natsuk1/Views/SettingsView.swift"
-          if os.path.exists(p):
-              s = open(p).read()
-              s = remove_swift_section_containing(s, 'Label("Kernelcache", systemImage: "shippingbox")')
-              s = re.sub(
-                  r'\n\s*private var kernelcacheStatus: String \{.*?\n    \}\n',
-                  '\n',
-                  s,
-                  flags=re.DOTALL,
-              )
+              s = re.sub(r'^\s*- path: natsuk1/Resources/Offsets\.json\n\s*buildPhase: resources\n', '', s, flags=re.M)
+              if '      - path: Offsets\n' not in s:
+                  s = s.replace(
+                      '      - path: natsuk1/Resources/Assets.xcassets\n        buildPhase: resources\n',
+                      '      - path: natsuk1/Resources/Assets.xcassets\n        buildPhase: resources\n      - path: Offsets\n        type: folder\n        buildPhase: resources\n'
+                  )
               open(p, "w").write(s)
 
           print("cleanup OK")
@@ -189,5 +734,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "Cleanup: remove unused files, unconfirmed offsets, fix build"
+          git commit -m "Compact repo: versioned Offsets folder, drop dead primitives"
           git push
