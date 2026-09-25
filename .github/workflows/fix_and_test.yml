@@ -56,22 +56,22 @@ jobs:
               s = re.sub(r"@Published\s+", "", s)
               return s
 
-          def mark_nonisolated(s, name):
-              if ("nonisolated final class " + name) in s:
+          def mark_sendable(s, name):
+              if ("class " + name) in s and ("@unchecked Sendable" in s.split("class " + name, 1)[1].split("{", 1)[0]):
                   return s
               patterns = [
                   ("final class " + name + ": ObservableObject, @unchecked Sendable {",
-                   "nonisolated final class " + name + ": @unchecked Sendable {"),
+                   "final class " + name + ": @unchecked Sendable {"),
                   ("final class " + name + ": ObservableObject {",
-                   "nonisolated final class " + name + ": @unchecked Sendable {"),
+                   "final class " + name + ": @unchecked Sendable {"),
                   ("final class " + name + ": NSObject, ObservableObject, @unchecked Sendable {",
-                   "nonisolated final class " + name + ": NSObject, @unchecked Sendable {"),
+                   "final class " + name + ": NSObject, @unchecked Sendable {"),
                   ("final class " + name + ": NSObject, ObservableObject {",
-                   "nonisolated final class " + name + ": NSObject, @unchecked Sendable {"),
+                   "final class " + name + ": NSObject, @unchecked Sendable {"),
                   ("final class " + name + ": NSObject, @unchecked Sendable {",
-                   "nonisolated final class " + name + ": NSObject, @unchecked Sendable {"),
+                   "final class " + name + ": NSObject, @unchecked Sendable {"),
                   ("final class " + name + ": @unchecked Sendable {",
-                   "nonisolated final class " + name + ": @unchecked Sendable {"),
+                   "final class " + name + ": @unchecked Sendable {"),
               ]
               for pat, repl in patterns:
                   if pat in s:
@@ -103,15 +103,9 @@ jobs:
                   stripped = line.strip()
                   if ("ObservableObject" in stripped or "NSObject" in stripped) and (
                       stripped.startswith("final class ")
-                      or stripped.startswith("nonisolated final class ")
-                      or stripped.startswith("class ")
-                      or stripped.startswith("nonisolated class ")):
+                      or stripped.startswith("class ")):
                       if stripped.endswith(" {"):
                           new_line = line
-                          if "nonisolated " not in new_line:
-                              new_line = new_line.replace("final class ", "nonisolated final class ", 1)
-                              if "nonisolated final class " not in new_line:
-                                  new_line = new_line.replace("class ", "nonisolated class ", 1)
                           if "@unchecked Sendable" not in new_line:
                               new_line = new_line[:-2].rstrip().rstrip(",") + ", @unchecked Sendable {"
                           out.append(new_line)
@@ -125,7 +119,7 @@ jobs:
 
           s = s.replace("@preconcurrency import AirliftFFI\n", "import AirliftFFI\n")
           s = clean(s)
-          s = mark_nonisolated(s, "PairingController")
+          s = mark_sendable(s, "PairingController")
           s = protect_shared(s)
 
           s = s.replace(
@@ -145,19 +139,13 @@ jobs:
               "Unmanaged<PairingController>.fromOpaque(ctx).release()",
               "Unmanaged<PairingController>.fromOpaque(box.ptr).release()")
 
-          if "nonisolated final class RawPtrBox" not in s:
-              if "final class RawPtrBox" in s:
-                  s = s.replace(
-                      "final class RawPtrBox",
-                      "nonisolated final class RawPtrBox",
-                      1)
-              else:
-                  s = s + (
-                      "\n"
-                      "nonisolated final class RawPtrBox: @unchecked Sendable {\n"
-                      "    let ptr: UnsafeMutableRawPointer\n"
-                      "    init(_ ptr: UnsafeMutableRawPointer) { self.ptr = ptr }\n"
-                      "}\n")
+          if "final class RawPtrBox" not in s:
+              s = s + (
+                  "\n"
+                  "final class RawPtrBox: @unchecked Sendable {\n"
+                  "    let ptr: UnsafeMutableRawPointer\n"
+                  "    init(_ ptr: UnsafeMutableRawPointer) { self.ptr = ptr }\n"
+                  "}\n")
 
           s = s.replace(
               "            DispatchQueue.main.async {\n                Unmanaged<PairingController>.fromOpaque(box.ptr).release()",
@@ -182,7 +170,7 @@ jobs:
           if os.path.exists(p):
               s = open(p).read()
               s = clean(s)
-              s = mark_nonisolated(s, "KeepAlive")
+              s = mark_sendable(s, "KeepAlive")
               s = protect_shared(s)
               open(p, "w").write(s)
               print("patched KeepAlive")
@@ -229,7 +217,7 @@ jobs:
               s = s.replace(anchor, extra, 1)
 
           flags_value = (
-              '        OTHER_SWIFT_FLAGS: "$(inherited) -default-isolation nonisolated '
+              '        OTHER_SWIFT_FLAGS: "$(inherited) '
               '-Xfrontend -disable-dynamic-actor-isolation '
               '-Xfrontend -disable-actor-data-race-checks"\n'
           )
@@ -266,14 +254,9 @@ jobs:
 
           if grep -q "@MainActor" PairingController.swift; then fail "PairingController still has @MainActor"; fi
           if grep -q "@MainActor" KeepAlive.swift; then fail "KeepAlive still has @MainActor"; fi
-          if grep -q "final class PairingController.*ObservableObject" PairingController.swift; then fail "PairingController still ObservableObject"; fi
-          if grep -q "final class KeepAlive.*ObservableObject" KeepAlive.swift; then fail "KeepAlive still ObservableObject"; fi
           if grep -q "String(cString: host)" NetworkStatus.swift; then fail "NetworkStatus still String(cString:)"; fi
-          if grep -q "nonisolated nonisolated" PairingController.swift; then fail "duplicate nonisolated in PairingController"; fi
-          if grep -q "nonisolated nonisolated" KeepAlive.swift; then fail "duplicate nonisolated in KeepAlive"; fi
-          grep -q "nonisolated final class RawPtrBox" PairingController.swift || fail "RawPtrBox not nonisolated"
+          grep -q "final class RawPtrBox" PairingController.swift || fail "RawPtrBox not declared"
           grep -q "fromOpaque(box.ptr).release()" PairingController.swift || fail "release not patched"
-          grep -q "nonisolated final class PairingController" PairingController.swift || fail "PairingController not nonisolated"
 
           cd ../..
           if grep -rq "@MainActor" natsuk1/ ; then
@@ -293,16 +276,19 @@ jobs:
             fail "static shared without nonisolated(unsafe)"
           fi
 
-          if grep -rnE "^[[:space:]]*(final )?class [A-Za-z_]+.*ObservableObject[^{]*\{[[:space:]]*$" natsuk1/ ; then
-            echo "===== ObservableObject class without @unchecked Sendable ====="
-            grep -rnE "^[[:space:]]*(final )?class [A-Za-z_]+.*ObservableObject[^{]*\{[[:space:]]*$" natsuk1/ || true
-            fail "ObservableObject class missing @unchecked Sendable"
+          if grep -rnE "(^|[[:space:]])nonisolated[[:space:]]+@Published" natsuk1/ ; then
+            echo "===== nonisolated @Published present ====="
+            grep -rnE "(^|[[:space:]])nonisolated[[:space:]]+@Published" natsuk1/ || true
+            fail "nonisolated @Published not allowed"
           fi
 
           grep -q "SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated" project.yml || fail "project.yml missing SWIFT_DEFAULT_ACTOR_ISOLATION"
           grep -q "SWIFT_APPROACHABLE_CONCURRENCY: NO" project.yml || fail "project.yml missing SWIFT_APPROACHABLE_CONCURRENCY"
           grep -q "disable-dynamic-actor-isolation" project.yml || fail "project.yml missing disable-dynamic-actor-isolation"
           grep -q "disable-actor-data-race-checks" project.yml || fail "project.yml missing disable-actor-data-race-checks"
+          if grep -q "default-isolation nonisolated" project.yml ; then
+            fail "project.yml still has -default-isolation frontend flag"
+          fi
 
           echo "verify OK"
 
@@ -328,7 +314,7 @@ jobs:
             SWIFT_DEFAULT_ACTOR_ISOLATION=nonisolated \
             SWIFT_APPROACHABLE_CONCURRENCY=NO \
             SWIFT_STRICT_CONCURRENCY=minimal \
-            OTHER_SWIFT_FLAGS="-default-isolation nonisolated -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
+            OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
             -UseModernBuildSystem=YES \
             build -quiet
 
@@ -372,7 +358,7 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "Mark ObservableObject classes @unchecked Sendable"
+            --notes "Remove default-isolation frontend flag"
 
       - name: Commit
         run: |
@@ -383,5 +369,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "Mark ObservableObject classes @unchecked Sendable [skip ci]"
+          git commit -m "Remove default-isolation frontend flag [skip ci]"
           git push
