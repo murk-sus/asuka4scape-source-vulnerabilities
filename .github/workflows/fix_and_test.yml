@@ -18,12 +18,12 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v10
+  CACHE_SALT: v11
 
 jobs:
   fix-and-test:
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -47,33 +47,152 @@ jobs:
 
           cp /tmp/aircard/ios-app/GrappaHelper.h natsuk1/Exploit/
           cp /tmp/aircard/ios-app/GrappaHelper.m natsuk1/Exploit/
-
           cp /tmp/aircard/ios-app/NetworkStatus.swift natsuk1/Helpers/
           cp /tmp/aircard/ios-app/PairingController.swift natsuk1/Helpers/
 
-          echo "---- AirliftFFI xcframework ----"
-          find natsuk1/External/AirliftFFI.xcframework -type f | sort
+          test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a
+          test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers/airlift.h
+          echo "airlift files ok"
+          ls -la natsuk1/External/AirliftFFI.xcframework/ios-arm64/
 
       - name: Patch PairingController
         run: |
           python3 <<'PYEOF'
-          import re
           p = "natsuk1/Helpers/PairingController.swift"
           s = open(p).read()
           s = s.replace('private let hostName = "AirCard-iOS"', 'private let hostName = "natsuk1"')
-          s = s.replace('"Settings › Privacy & Security › Developer Mode › Pair with AirCard-iOS"',
-                        '"Settings › Privacy & Security › Developer Mode › Pair with natsuk1"')
-          s = s.replace('"Settings › Privacy & Security › Developer Mode"',
-                        '"Settings › Privacy & Security › Developer Mode"')
+          s = s.replace('Pair with AirCard-iOS', 'Pair with natsuk1')
           s = s.replace('Settings › AirCard-iOS › Local Network', 'Settings › natsuk1 › Local Network')
           open(p, "w").write(s)
           PYEOF
 
+      - name: Write Exploit nk_api.h
+        run: |
+          cat > natsuk1/Exploit/nk_api.h <<'EOF'
+          #ifndef NK_API_H
+          #define NK_API_H
+
+          #include <stdint.h>
+          #include <stddef.h>
+
+          void nk_set_log(void (*fn)(const char *));
+          void nk_logx(const char *tag, const char *fmt, ...);
+          void nk_log(const char *fmt, ...);
+          void nk_rule(void);
+
+          int nk_run(void);
+          int nk_full_exploit(void);
+
+          #define NK_INFO(tag, ...) nk_logx(tag, __VA_ARGS__)
+          #define NK_WARN(tag, ...) nk_logx(tag, __VA_ARGS__)
+          #define NK_ERR(tag, ...)  nk_logx(tag, __VA_ARGS__)
+
+          #endif
+          EOF
+
+      - name: Write Exploit nk_api.c
+        run: |
+          cat > natsuk1/Exploit/nk_api.c <<'EOF'
+          #include "nk_api.h"
+          #include "nk_offsets.h"
+          #include <stdarg.h>
+          #include <stdio.h>
+
+          static void (*g_fn)(const char *) = NULL;
+
+          void nk_set_log(void (*fn)(const char *)) {
+              g_fn = fn;
+          }
+
+          void nk_logx(const char *tag, const char *fmt, ...) {
+              if (!g_fn) return;
+              char body[448];
+              va_list ap; va_start(ap, fmt);
+              vsnprintf(body, sizeof(body), fmt, ap);
+              va_end(ap);
+              char out[512];
+              snprintf(out, sizeof(out), "[%s] %s", tag, body);
+              g_fn(out);
+          }
+
+          void nk_log(const char *fmt, ...) {
+              if (!g_fn) return;
+              char body[448];
+              va_list ap; va_start(ap, fmt);
+              vsnprintf(body, sizeof(body), fmt, ap);
+              va_end(ap);
+              char out[512];
+              snprintf(out, sizeof(out), "[MAIN] %s", body);
+              g_fn(out);
+          }
+
+          void nk_rule(void) { nk_log("----"); }
+
+          int nk_run(void) {
+              NK_INFO("BASE", "kernel %llX", (unsigned long long)NK_KERNEL_BASE);
+              NK_INFO("BASE", "sysent %llX (%d)", (unsigned long long)NK_SYSENT_BASE, NK_SYSENT_COUNT);
+              NK_INFO("BASE", "mach_trap %llX", (unsigned long long)NK_MACH_TRAP_TABLE);
+              nk_rule();
+              NK_INFO("PRIM", "copyin %llX", (unsigned long long)NK_FN_COPYIN);
+              NK_INFO("PRIM", "copyout %llX", (unsigned long long)NK_FN_COPYOUT);
+              NK_INFO("PRIM", "kalloc %llX", (unsigned long long)NK_FN_KALLOC_EXT);
+              NK_INFO("PRIM", "kfree %llX", (unsigned long long)NK_FN_KFREE_EXT);
+              nk_rule();
+              NK_INFO("STRC", "proc_pid %X", NK_OFF_PROC_PID);
+              NK_INFO("STRC", "proc_ucred %X", NK_OFF_PROC_UCRED);
+              NK_INFO("STRC", "task_thread %X", NK_OFF_TASK_THREAD);
+              nk_rule();
+              NK_WARN("STAT", "No kernel R/W primitive.");
+              NK_WARN("STAT", "Reference data only.");
+              nk_rule();
+              return 0;
+          }
+
+          int nk_full_exploit(void) { return nk_run(); }
+          EOF
+
+      - name: Write Exploit nk_offsets.h
+        run: |
+          cat > natsuk1/Exploit/nk_offsets.h <<'EOF'
+          #ifndef NK_OFFSETS_H
+          #define NK_OFFSETS_H
+
+          #define NK_KERNEL_BASE            0xFFFFFFF007004000ULL
+          #define NK_SYSENT_BASE            0xFFFFFFF007C192A0ULL
+          #define NK_SYSENT_COUNT           558
+          #define NK_MACH_TRAP_TABLE        0xFFFFFFF007BE8018ULL
+
+          #define NK_FN_COPYIN              0xFFFFFFF00A7B9570ULL
+          #define NK_FN_COPYOUT             0xFFFFFFF00A2C6C28ULL
+          #define NK_FN_KALLOC_EXT          0xFFFFFFF00A200DCCULL
+          #define NK_FN_KFREE_EXT           0xFFFFFFF00A201000ULL
+
+          #define NK_OFF_PROC_PID           0x74
+          #define NK_OFF_PROC_UCRED         0xB8
+          #define NK_OFF_TASK_THREAD        0x50
+
+          #endif
+          EOF
+
+      - name: Write bridging.h
+        run: |
+          cat > natsuk1/bridging.h <<'EOF'
+          #ifndef NATSUK1_BRIDGING_H
+          #define NATSUK1_BRIDGING_H
+
+          #include <stdint.h>
+          #include "Exploit/nk_apiStatus =.h"
+          #import " "Exploit/GrappaHelperStarting.h"
+          #include "airlift.h"
+
+          #endif
+          EOF
+
       - name: Write AirliftBridge.swift
         run: |
-          cat > natsuk1/Helpers/AirliftBridge.swift <<'SWIFTEOF'
+          cat > natsuk1/Helpers/AirliftBridge.swift <<'EOF'
           import Foundation
-          import AirliftFFI
+          import Combine
 
           @MainActor
           final class AirliftBridge: ObservableObject {
@@ -139,7 +258,7 @@ jobs:
                   }
 
                   state = .pairing
-                  pairingStatus = "Starting host…"
+                  pairing host…"
                   pairPIN = nil
 
                   let ctrl = PairingController.shared
@@ -147,7 +266,7 @@ jobs:
                       do {
                           let path = try await ctrl.startAndWait()
                           self.state = .ready(pairingPath: path)
-                          self.pairingStatus = "Paired ✅"
+                          self.pairingStatus = "Paired"
                           self.pairPIN = nil
                       } catch is CancellationError {
                           self.state = .idle
@@ -262,11 +381,11 @@ jobs:
                   }
               }
           }
-          SWIFTEOF
+          EOF
 
       - name: Write AirliftView.swift
         run: |
-          cat > natsuk1/Views/AirliftView.swift <<'SWIFTEOF'
+          cat > natsuk1/Views/AirliftView.swift <<'EOF'
           import SwiftUI
           import UIKit
 
@@ -308,7 +427,7 @@ jobs:
                               Text(airlift.hasPairing() ? "Paired" : "Not paired")
                                   .font(.subheadline.bold())
                           }
-                          Text("Advertises natsuk1 as a local pairing host. Approve in Settings → Privacy & Security → Developer Mode → Pair with natsuk1.")
+                          Text("Advertises natsuk1 as a local pairing host. Approve in Settings, Privacy & Security, Developer Mode, Pair with natsuk1.")
                               .font(.caption)
                               .foregroundColor(.secondary)
                       }
@@ -440,6 +559,14 @@ jobs:
                           }
                       }
                       .disabled(airlift.state == .running)
+
+                      Button(role: .destructive) {
+                          airlift.deletePairing()
+                      } label: {
+                          Text("Delete Pairing")
+                              .frame(maxWidth: .infinity)
+                      }
+                      .disabled(airlift.state == .running)
                   }
               }
           }
@@ -485,11 +612,11 @@ jobs:
                   }
               }
           }
-          SWIFTEOF
+          EOF
 
       - name: Write ContentView
         run: |
-          cat > natsuk1/Views/ContentView.swift <<'SWIFTEOF'
+          cat > natsuk1/Views/ContentView.swift <<'EOF'
           import SwiftUI
           import UIKit
 
@@ -519,9 +646,6 @@ jobs:
                               }
                           } header: {
                               Label(state.t("Sandbox Escape", "Побег из песочницы"), systemImage: "bolt.shield")
-                          } footer: {
-                              Text(state.t("On-device AirTraffic sandbox escape. Requires Developer Mode pairing.",
-                                           "On-device побег из песочницы через AirTraffic. Требует Developer Mode pairing."))
                           }
 
                           Section {
@@ -656,45 +780,1284 @@ jobs:
                       .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
               }
           }
-          SWIFTEOF
+          EOF
 
-      - name: Patch natsuk1.swift
+      - name: Write SettingsView
         run: |
-          python3 <<'PYEOF'
-          import re
-          p = "natsuk1/natsuk1.swift"
-          s = open(p).read()
+          cat > natsuk1/Views/SettingsView.swift <<'EOF'
+          import SwiftUI
+          import UIKit
 
-          # add AirliftBridge state object
-          if "AirliftBridge.shared" not in s:
-              s = s.replace(
-                  '    @StateObject private var offsets = OffsetsStore.shared\n',
-                  '    @StateObject private var offsets = OffsetsStore.shared\n    @StateObject private var airlift = AirliftBridge.shared\n'
-              )
-              s = s.replace(
-                  '                              .environmentObject(offsets)\n',
-                  '                              .environmentObject(offsets)\n                              .environmentObject(airlift)\n'
-              )
+          struct SettingsView: View {
+              @Environment(\.dismiss) private var dismiss
+              @EnvironmentObject var state: AppState
+              @EnvironmentObject var offsets: OffsetsStore
 
-          open(p, "w").write(s)
-          PYEOF
+              @AppStorage("auto_run")   private var auto_run: Bool = false
+              @AppStorage("verbose")    private var verbose: Bool = true
+              @AppStorage("keep_alive_audio")    private var keep_alive_audio: Bool = false
+              @AppStorage("keep_alive_location") private var keep_alive_location: Bool = false
 
-      - name: Patch bridging.h
+              private var appName: String {
+                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+                      ?? "natsuk1"
+              }
+
+              private var version: String {
+                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+              }
+
+              private var appIcon: UIImage? {
+                  if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+                     let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+                     let files = primary["CFBundleIconFiles"] as? [String],
+                     let last = files.last {
+                      return UIImage(named: last)
+                  }
+                  return UIImage(named: "AppIcon")
+              }
+
+              private var activeVersionLabel: String {
+                  guard let v = OffsetsStore.activeVersion else { return "unknown" }
+                  return "\(v.device) / iOS \(v.ios) (\(v.build))"
+              }
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section {
+                              HStack(spacing: 14) {
+                                  Group {
+                                      if let icon = appIcon {
+                                          Image(uiImage: icon)
+                                              .resizable()
+                                              .aspectRatio(contentMode: .fill)
+                                      } else {
+                                          ZStack {
+                                              LinearGradient(
+                                                  colors: [
+                                                      Color(red: 0.65, green: 0.30, blue: 0.90),
+                                                      Color(red: 0.30, green: 0.65, blue: 0.95)
+                                                  ],
+                                                  startPoint: .topLeading,
+                                                  endPoint: .bottomTrailing
+                                              )
+                                              Image(systemName: "bolt.fill")
+                                                  .font(.system(size: 26, weight: .semibold))
+                                                  .foregroundStyle(.white)
+                                          }
+                                      }
+                                  }
+                                  .frame(width: 56, height: 56)
+                                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text(appName)
+                                          .font(.title3)
+                                          .fontWeight(.semibold)
+                                      Text("Version \(version)")
+                                          .font(.subheadline)
+                                          .foregroundColor(.secondary)
+                                  }
+                                  Spacer(minLength: 8)
+                              }
+                              .padding(.vertical, 4)
+
+                              NavigationLink {
+                                  AboutView().environmentObject(state)
+                              } label: {
+                                  HStack(spacing: 12) {
+                                      Text("Credits")
+                                      Spacer(minLength: 8)
+                                  }
+                              }
+                          } header: {
+                              Label("About", systemImage: "info.circle")
+                          }
+
+                          Section {
+                              HStack(spacing: 12) {
+                                  Image(systemName: "cpu")
+                                      .frame(width: 22, alignment: .center)
+                                      .foregroundStyle(.secondary)
+                                  Text("Offsets")
+                                      .foregroundStyle(.secondary)
+                                  Spacer(minLength: 8)
+                                  Text(activeVersionLabel)
+                                      .font(.system(size: 12, design: .monospaced))
+                                      .foregroundColor(.secondary)
+                                      .lineLimit(1)
+                                      .truncationMode(.middle)
+                              }
+                              .padding(.vertical, 2)
+
+                              NavigationLink {
+                                  OffsetsView().environmentObject(offsets)
+                              } label: {
+                                  HStack(spacing: 12) {
+                                      Image(systemName: "list.number")
+                                          .frame(width: 22, alignment: .center)
+                                      Text("Modify Offsets")
+                                      Spacer(minLength: 8)
+                                      Text("\(offsets.filledCount())/\(offsets.totalCount())")
+                                          .font(.system(size: 13, design: .monospaced))
+                                          .foregroundColor(.secondary)
+                                  }
+                              }
+                          } header: {
+                              Label("Exploit", systemImage: "cpu")
+                          }
+
+                          Section {
+                              Toggle(isOn: $keep_alive_audio) {
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text("Silent Audio")
+                                      Text("Plays inaudible audio so iOS keeps the app running.")
+                                          .font(.caption)
+                                          .foregroundColor(.secondary)
+                                  }
+                              }
+
+                              Toggle(isOn: $keep_alive_location) {
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text("Background Location")
+                                      Text("Uses low-accuracy location to stay alive when an activity needs it.")
+                                          .font(.caption)
+                                          .foregroundColor(.secondary)
+                                  }
+                              }
+                          } header: {
+                              Label("Background Keep-Alive", systemImage: "waveform.circle")
+                          }
+
+                          Section {
+                              Toggle("Auto Run on Launch", isOn: $auto_run)
+                              Toggle("Verbose Output", isOn: $verbose)
+                          } header: {
+                              Label("Options", systemImage: "gearshape")
+                          }
+
+                          Section {
+                              Button {
+                                  state.respring()
+                              } label: {
+                                  HStack(spacing: 12) {
+                                      Image(systemName: "arrow.clockwise")
+                                          .frame(width: 22, alignment: .center)
+                                      Text("Respring")
+                                      Spacer(minLength: 8)
+                                  }
+                              }
+                          } header: {
+                              Label("Tools", systemImage: "wrench.and.screwdriver")
+                          }
+                      }
+                      .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .background(Color(UIColor.systemGroupedBackground))
+                      .navigationTitle("Settings")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Done") { dismiss() }
+                                  .fontWeight(.semibold)
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
+
+      - name: Write KeepAlive
         run: |
-          python3 <<'PYEOF'
-          p = "natsuk1/bridging.h"
-          s = open(p).read()
-          if "AirliftFFI" not in s:
-              s = s.replace(
-                  '#include "Exploit/nk_api.h"',
-                  '#include "Exploit/nk_api.h"\n#import <AirliftFFI/airlift.h>'
+          cat > natsuk1/Helpers/KeepAlive.swift <<'EOF'
+          import AVFoundation
+          import CoreLocation
+          import Foundation
+          import Combine
+
+          @MainActor
+          final class KeepAlive: NSObject, ObservableObject {
+              static let shared = KeepAlive()
+
+              @Published private(set) var audioActive: Bool = false
+              @Published private(set) var locationActive: Bool = false
+
+              private var player: AVAudioPlayer?
+              private var locationManager: CLLocationManager?
+
+              private override init() {
+                  super.init()
+              }
+
+              func startAudio() {
+                  guard !audioActive else { return }
+                  do {
+                      let session = AVAudioSession.sharedInstance()
+                      try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                      try session.setActive(true)
+
+                      let wav = Self.silentWavData()
+                      let url = FileManager.default.temporaryDirectory
+                          .appendingPathComponent("keepalive.wav")
+                      try wav.write(to: url)
+
+                      let p = try AVAudioPlayer(contentsOf: url)
+                      p.numberOfLoops = -1
+                      p.volume = 0.0
+                      p.prepareToPlay()
+                      p.play()
+                      player = p
+                      audioActive = true
+                  } catch {
+                      NSLog("[KeepAlive] audio failed: \(error)")
+                      audioActive = false
+                  }
+              }
+
+              func stopAudio() {
+                  guard audioActive else { return }
+                  player?.stop()
+                  player = nil
+                  audioActive = false
+              }
+
+              func startLocation() {
+                  guard !locationActive else { return }
+                  let m = CLLocationManager()
+                  m.delegate = self
+                  m.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+                  m.distanceFilter = 3000
+                  m.pausesLocationUpdatesAutomatically = false
+                  m.allowsBackgroundLocationUpdates = true
+                  m.showsBackgroundLocationIndicator = false
+
+                  let status = m.authorizationStatus
+                  if status == .notDetermined {
+                      m.requestAlwaysAuthorization()
+                  } else if status == .authorizedAlways || status == .authorizedWhenInUse {
+                      m.startUpdatingLocation()
+                      locationActive = true
+                  }
+                  locationManager = m
+              }
+
+              func stopLocation() {
+                  locationManager?.stopUpdatingLocation()
+                  locationManager = nil
+                  locationActive = false
+              }
+
+              nonisolated private static func silentWavData() -> Data {
+                  let sampleRate: UInt32 = 8000
+                  let channels: UInt16 = 1
+                  let bitsPerSample: UInt16 = 16
+                  let durationSec: UInt32 = 1
+                  let numSamples = sampleRate * durationSec
+                  let blockAlign = channels * bitsPerSample / 8
+                  let byteRate = sampleRate * UInt32(blockAlign)
+                  let dataSize = numSamples * UInt32(blockAlign)
+
+                  var d = Data()
+                  func u32(_ v: UInt32) {
+                      var x = v.littleEndian
+                      withUnsafeBytes(of: &x) { d.append(contentsOf: $0) }
+                  }
+                  func u16(_ v: UInt16) {
+                      var x = v.littleEndian
+                      withUnsafeBytes(of: &x) { d.append(contentsOf: $0) }
+                  }
+                  func str(_ s: String) { d.append(contentsOf: Array(s.utf8)) }
+
+                  str("RIFF"); u32(36 + dataSize); str("WAVE")
+                  str("fmt "); u32(16); u16(1); u16(channels)
+                  u32(sampleRate); u32(byteRate); u16(blockAlign); u16(bitsPerSample)
+                  str("data"); u32(dataSize)
+                  d.append(Data(repeating: 0, count: Int(dataSize)))
+                  return d
+              }
+          }
+
+          extension KeepAlive: @preconcurrency CLLocationManagerDelegate {
+              func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+                  let status = manager.authorizationStatus
+                  if status == .authorizedAlways || status == .authorizedWhenInUse {
+                      manager.startUpdatingLocation()
+                      locationActive = true
+                  } else if status == .denied || status == .restricted {
+                      locationActive = false
+                  }
+              }
+
+              func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+              }
+
+              func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+                  NSLog("[KeepAlive] location error: \(error)")
+              }
+          }
+          EOF
+
+      - name: Write OffsetsStore
+        run: |
+          cat > natsuk1/Helpers/OffsetsStore.swift <<'EOF'
+          import Foundation
+          import Combine
+
+          @MainActor
+          final class OffsetsStore: ObservableObject {
+              static let shared = OffsetsStore()
+
+              struct Group: Codable {
+                  let title: String
+                  let items: [String]
+              }
+
+              struct VersionEntry: Codable {
+                  let file: String
+                  let device: String
+                  let deviceName: String
+                  let chip: String
+                  let ios: String
+                  let build: String
+                  let verified: Bool
+              }
+
+              struct Index: Codable {
+                  let versions: [VersionEntry]
+              }
+
+              private struct File: Codable {
+                  let groups: [Group]
+                  let defaults: [String: String]
+              }
+
+              nonisolated private static let bundled: File? = {
+                  guard let fileURL = resolveActiveFileURL() else { return nil }
+                  guard let fileData = try? Data(contentsOf: fileURL),
+                        let parsed = try? JSONDecoder().decode(File.self, from: fileData)
+                  else { return nil }
+                  return parsed
+              }()
+
+              nonisolated static var groups: [Group] { bundled?.groups ?? [] }
+              nonisolated static var defaults: [String: String] { bundled?.defaults ?? [:] }
+
+              nonisolated static var activeVersion: VersionEntry? {
+                  resolveActiveEntry()
+              }
+
+              nonisolated private static func loadIndex() -> Index? {
+                  guard let url = Bundle.main.url(forResource: "index", withExtension: "json", subdirectory: "Offsets"),
+                        let data = try? Data(contentsOf: url),
+                        let index = try? JSONDecoder().decode(Index.self, from: data)
+                  else { return nil }
+                  return index
+              }
+
+              nonisolated private static func resolveActiveEntry() -> VersionEntry? {
+                  guard let index = loadIndex() else { return nil }
+                  let device = DeviceName.machineID()
+                  let v = ProcessInfo.processInfo.operatingSystemVersion
+                  let ios = "\(v.majorVersion).\(v.minorVersion)"
+                  return index.versions.first(where: { $0.device == device && $0.ios == ios })
+                      ?? index.versions.first(where: { $0.device == device })
+              }
+
+              nonisolated private static func resolveActiveFileURL() -> URL? {
+                  guard let entry = resolveActiveEntry() else { return nil }
+                  let parts = entry.file.split(separator: ".", maxSplits: 1).map(String.init)
+                  let name = parts.first ?? entry.file
+                  let ext  = parts.count > 1 ? parts[1] : "json"
+                  return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")
+              }
+
+              @Published var values: [String: String] = [:]
+
+              private let storageKey = "natsuk1_offsets_v2"
+
+              private init() { load() }
+
+              func load() {
+                  let saved = UserDefaults.standard.dictionary(forKey: storageKey) as? [String: String]
+                  var merged = Self.defaults
+                  if let saved = saved {
+                      for (k, v) in saved where merged[k] != nil { merged[k] = v }
+                  }
+                  values = merged
+                  if saved == nil { save() }
+              }
+
+              func save() {
+                  UserDefaults.standard.set(values, forKey: storageKey)
+              }
+
+              func reset() {
+                  values = Self.defaults
+                  save()
+              }
+
+              func resetOne(_ name: String) {
+                  values[name] = Self.defaults[name] ?? "0x0"
+                  save()
+              }
+
+              func update(_ name: String, value: String) {
+                  values[name] = value
+                  save()
+              }
+
+              func value(for name: String) -> String {
+                  values[name] ?? Self.defaults[name] ?? "0x0"
+              }
+
+              func filledCount() -> Int {
+                  values.filter { $0.value != "0x0" && !$0.value.isEmpty }.count
+              }
+
+              func totalCount() -> Int {
+                  Self.groups.reduce(0) { $0 + $1.items.count }
+              }
+          }
+          EOF
+
+      - name: Write DeviceName
+        run: |
+          cat > natsuk1/Helpers/DeviceName.swift <<'EOF'
+          import Foundation
+          import UIKit
+
+          enum DeviceName {
+
+              private struct Device {
+                  let id: String
+                  let name: String
+                  let chip: String
+              }
+
+              private static let devices: [Device] = [
+                  Device(id: "iPhone11,2", name: "iPhone XS",           chip: "A12 Bionic"),
+                  Device(id: "iPhone11,4", name: "iPhone XS Max",       chip: "A12 Bionic"),
+                  Device(id: "iPhone11,6", name: "iPhone XS Max",       chip: "A12 Bionic"),
+                  Device(id: "iPhone11,8", name: "iPhone XR",           chip: "A12 Bionic"),
+                  Device(id: "iPhone12,1", name: "iPhone 11",           chip: "A13 Bionic"),
+                  Device(id: "iPhone12,3", name: "iPhone 11 Pro",       chip: "A13 Bionic"),
+                  Device(id: "iPhone12,5", name: "iPhone 11 Pro Max",   chip: "A13 Bionic"),
+                  Device(id: "iPhone12,8", name: "iPhone SE (2nd gen)", chip: "A13 Bionic"),
+                  Device(id: "iPhone13,1", name: "iPhone 12 mini",      chip: "A14 Bionic"),
+                  Device(id: "iPhone13,2", name: "iPhone 12",           chip: "A14 Bionic"),
+                  Device(id: "iPhone13,3", name: "iPhone 12 Pro",       chip: "A14 Bionic"),
+                  Device(id: "iPhone13,4", name: "iPhone 12 Pro Max",   chip: "A14 Bionic"),
+                  Device(id: "iPhone14,2", name: "iPhone 13 Pro",       chip: "A15 Bionic"),
+                  Device(id: "iPhone14,3", name: "iPhone 13 Pro Max",   chip: "A15 Bionic"),
+                  Device(id: "iPhone14,4", name: "iPhone 13 mini",      chip: "A15 Bionic"),
+                  Device(id: "iPhone14,5", name: "iPhone 13",           chip: "A15 Bionic"),
+                  Device(id: "iPhone14,6", name: "iPhone SE (3rd gen)", chip: "A15 Bionic"),
+                  Device(id: "iPhone14,7", name: "iPhone 14",           chip: "A15 Bionic"),
+                  Device(id: "iPhone14,8", name: "iPhone 14 Plus",      chip: "A15 Bionic"),
+                  Device(id: "iPhone15,2", name: "iPhone 14 Pro",       chip: "A16 Bionic"),
+                  Device(id: "iPhone15,3", name: "iPhone 14 Pro Max",   chip: "A16 Bionic"),
+                  Device(id: "iPhone15,4", name: "iPhone 15",           chip: "A16 Bionic"),
+                  Device(id: "iPhone15,5", name: "iPhone 15 Plus",      chip: "A16 Bionic"),
+                  Device(id: "iPhone16,1", name: "iPhone 15 Pro",       chip: "A17 Pro"),
+                  Device(id: "iPhone16,2", name: "iPhone 15 Pro Max",   chip: "A17 Pro"),
+                  Device(id: "iPhone17,1", name: "iPhone 16 Pro",       chip: "A18 Pro"),
+                  Device(id: "iPhone17,2", name: "iPhone 16 Pro Max",   chip: "A18 Pro"),
+                  Device(id: "iPhone17,3", name: "iPhone 16",           chip: "A18"),
+                  Device(id: "iPhone17,4", name: "iPhone 16 Plus",      chip: "A18"),
+                  Device(id: "iPhone17,5", name: "iPhone 16e",          chip: "A18"),
+                  Device(id: "iPhone18,1", name: "iPhone 17 Pro",       chip: "A19 Pro"),
+                  Device(id: "iPhone18,2", name: "iPhone 17 Pro Max",   chip: "A19 Pro"),
+                  Device(id: "iPhone18,3", name: "iPhone 17",           chip: "A19"),
+                  Device(id: "iPhone18,4", name: "iPhone Air",          chip: "A19 Pro"),
+                  Device(id: "iPhone18,5", name: "iPhone 17e",          chip: "A19"),
+              ]
+
+              private static let byID: [String: Device] = Dictionary(
+                  uniqueKeysWithValues: devices.map { ($0.id, $0) }
               )
-              s = s.replace(
-                  '#endif',
-                  '#import "Exploit/GrappaHelper.h"\n\n#endif'
-              )
-          open(p, "w").write(s)
-          PYEOF
+
+              static func friendly() -> String {
+                  let id = machineID()
+                  return byID[id]?.name ?? id
+              }
+
+              static func chip() -> String {
+                  byID[machineID()]?.chip ?? "unknown"
+              }
+
+              static func full() -> String {
+                  let v = ProcessInfo.processInfo.operatingSystemVersion
+                  return "\(friendly()) · iOS \(v.majorVersion).\(v.minorVersion)"
+              }
+
+              static func machineID() -> String {
+                  var info = utsname()
+                  uname(&info)
+                  return Mirror(reflecting: info.machine).children.reduce("") { id, el in
+                      guard let v = el.value as? Int8, v != 0 else { return id }
+                      return id + String(UnicodeScalar(UInt8(v)))
+                  }
+              }
+          }
+          EOF
+
+      - name: Write Respring
+        run: |
+          cat > natsuk1/Helpers/Respring.swift <<'EOF'
+          import UIKit
+          import Foundation
+          import WebKit
+          import SwiftUI
+
+          struct RespringView: UIViewRepresentable {
+              private static let html = """
+              <!DOCTYPE html>
+              <html>
+                  <body>
+                      <iframe id="frame" srcdoc="" sandbox="allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-presentation allow-scripts"></iframe>
+                      <script>
+                          const frame = document.getElementById('frame');
+                          const funfun = `
+                              <html>
+                              <body>
+                                  <script>
+                                      const container = document.createElement('div');
+                                      container.style.cssText = 'perspective: 1px; perspective-origin: 9999999% 9999999%;';
+                                      document.body.appendChild(container);
+
+                                      for (let i = 0; i < 500; i++) {
+                                          let d = document.createElement('div');
+                                          d.style.cssText = 'position: absolute; width: 100vw; height: 100vh; backdrop-filter: blur(100px); -webkit-backdrop-filter: blur(100px); transform: translate3d(100000px, 100000px, ' + i + 'px) rotateY(90deg);';
+                                          container.appendChild(d);
+                                      }
+
+                                      setInterval(() => {
+                                          navigator.share({ title: 'R', text: 'R'.repeat(100000) }).catch(() => {});
+                                          let x = new Uint8Array(1024 * 1024 * 10);
+                                          crypto.getRandomValues(x);
+                                      }, 0);
+                                  <\\/script>
+                              </body>
+                              </html>
+                          `;
+
+                          frame.srcdoc = funfun;
+                      </script>
+                  </body>
+              </html>
+              """
+
+              func makeUIView(context: Context) -> WKWebView {
+                  let config = WKWebViewConfiguration()
+                  config.defaultWebpagePreferences.allowsContentJavaScript = true
+                  return WKWebView(frame: .zero, configuration: config)
+              }
+
+              func updateUIView(_ webView: WKWebView, context: Context) {
+                  webView.loadHTMLString(Self.html, baseURL: nil)
+              }
+          }
+          EOF
+
+      - name: Write AboutView
+        run: |
+          cat > natsuk1/Views/AboutView.swift <<'EOF'
+          import SwiftUI
+          import UIKit
+
+          struct AboutView: View {
+              @Environment(\.openURL) private var openURL
+              @EnvironmentObject var state: AppState
+
+              private let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")!
+
+              private var appName: String {
+                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+                      ?? "natsuk1"
+              }
+
+              private var version: String {
+                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+              }
+
+              private var build: String {
+                  Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+              }
+
+              var body: some View {
+                  List {
+                      Section {
+                          VStack(alignment: .leading, spacing: 6) {
+                              Text(appName)
+                                  .font(.title2)
+                                  .fontWeight(.semibold)
+
+                              Text("Version \(version) (\(build))")
+                                  .font(.subheadline)
+                                  .foregroundColor(.secondary)
+
+                              Text("Research project iOS.")
+                                  .font(.footnote)
+                                  .foregroundColor(.secondary)
+                                  .fixedSize(horizontal: false, vertical: true)
+                                  .padding(.top, 2)
+                          }
+                          .padding(.vertical, 6)
+                      }
+
+                      Section {
+                          linkRow("Source Repository", url: repoURL)
+                          linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
+                      } header: {
+                          Text("Open Source")
+                      }
+
+                      Section {
+                          linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
+                      } header: {
+                          Text("Community")
+                      }
+
+                      Section {
+                          linkRow("AirLift by 0xjohnnydev", url: URL(string: "https://github.com/0xjohnnydev/airlift")!)
+                          linkRow("AirCard-iOS by Mak5er", url: URL(string: "https://github.com/Mak5er/AirCard-iOS")!)
+                      } header: {
+                          Text("Credits")
+                      }
+
+                      Section {
+                      } header: {
+                          Text("Disclaimer")
+                      } footer: {
+                          Text("Independent research project. Not affiliated with Apple Inc. Provided as-is.")
+                              .font(.footnote)
+                              .foregroundColor(.secondary)
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .background(Color(UIColor.systemGroupedBackground))
+                  .navigationTitle("About")
+                  .navigationBarTitleDisplayMode(.inline)
+              }
+
+              private func linkRow(_ title: String, url: URL) -> some View {
+                  Button {
+                      openURL(url)
+                  } label: {
+                      HStack(alignment: .top, spacing: 8) {
+                          Text(title)
+                              .foregroundStyle(.tint)
+                              .font(.body)
+                              .fontWeight(.medium)
+                          Spacer(minLength: 8)
+                          Image(systemName: "link")
+                              .font(.system(size: 14, weight: .semibold))
+                              .foregroundStyle(.tint)
+                      }
+                      .padding(.vertical, 2)
+                      .contentShape(Rectangle())
+                  }
+                  .buttonStyle(.plain)
+              }
+          }
+          EOF
+
+      - name: Write DeviceInfoView
+        run: |
+          cat > natsuk1/Views/DeviceInfoView.swift <<'EOF'
+          import SwiftUI
+          import UIKit
+
+          struct DeviceInfoView: View {
+              @Environment(\.dismiss) private var dismiss
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          row("Model", DeviceName.friendly())
+                          row("Identifier", machineID())
+                          row("Chip", DeviceName.chip())
+                          row("iOS", sysctlString("kern.osproductversion"))
+                          row("Build", sysctlString("kern.osversion"))
+                          row("RAM", ram())
+                          row("Architecture", arch())
+                          row("Locale", localeShort())
+                          row("Region", regionShort())
+                          row("Uptime", uptime())
+                      }
+                      .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .background(Color(UIColor.systemGroupedBackground))
+                      .navigationTitle("Device")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Done") { dismiss() }
+                          }
+                      }
+                  }
+              }
+
+              private func row(_ key: String, _ value: String) -> some View {
+                  HStack {
+                      Text(key)
+                      Spacer()
+                      Text(value)
+                          .font(.system(.body, design: .monospaced))
+                          .foregroundColor(.secondary)
+                          .lineLimit(1)
+                          .truncationMode(.middle)
+                  }
+              }
+
+              private func machineID() -> String {
+                  var sysinfo = utsname()
+                  uname(&sysinfo)
+                  return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
+                      guard let v = el.value as? Int8, v != 0 else { return id }
+                      return id + String(UnicodeScalar(UInt8(v)))
+                  }
+              }
+
+              private func sysctlString(_ name: String) -> String {
+                  var size = 0
+                  sysctlbyname(name, nil, &size, nil, 0)
+                  var buf = [CChar](repeating: 0, count: size)
+                  sysctlbyname(name, &buf, &size, nil, 0)
+                  let bytes = buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                  return String(decoding: bytes, as: UTF8.self)
+              }
+
+              private func ram() -> String {
+                  var size: UInt64 = 0
+                  var len = MemoryLayout<UInt64>.size
+                  if sysctlbyname("hw.memsize", &size, &len, nil, 0) != 0 { return "unknown" }
+                  return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .memory)
+              }
+
+              private func arch() -> String {
+                  #if arch(arm64)
+                  return "arm64"
+                  #else
+                  return "unknown"
+                  #endif
+              }
+
+              private func localeShort() -> String {
+                  Locale.current.identifier
+                      .split(separator: "_")
+                      .first
+                      .map(String.init)?
+                      .uppercased() ?? "—"
+              }
+
+              private func regionShort() -> String {
+                  let region = Locale.current.region?.identifier ?? ""
+                  return region.isEmpty ? "—" : region.uppercased()
+              }
+
+              private func uptime() -> String {
+                  let t = ProcessInfo.processInfo.systemUptime
+                  let h = Int(t) / 3600
+                  let m = (Int(t) % 3600) / 60
+                  return "\(h)h \(m)m"
+              }
+          }
+          EOF
+
+      - name: Write OffsetsView
+        run: |
+          cat > natsuk1/Views/OffsetsView.swift <<'EOF'
+          import SwiftUI
+          import UIKit
+
+          struct OffsetsView: View {
+              @EnvironmentObject var store: OffsetsStore
+              @State private var query = ""
+              @State private var editing: String? = nil
+              @State private var showResetAll = false
+              @State private var showExport = false
+
+              var body: some View {
+                  List {
+                      Section {
+                          HStack {
+                              Text("Filled")
+                              Spacer()
+                              Text("\(store.filledCount()) / \(store.totalCount())")
+                                  .font(.system(.body, design: .monospaced))
+                                  .foregroundColor(.secondary)
+                          }
+                      }
+
+                      ForEach(filteredGroups, id: \.title) { group in
+                          Section {
+                              ForEach(group.items, id: \.self) { name in
+                                  Button {
+                                      editing = name
+                                  } label: {
+                                      OffsetRow(name: name, value: store.value(for: name))
+                                  }
+                                  .buttonStyle(.plain)
+                              }
+                          } header: {
+                              Text(group.title)
+                          }
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .background(Color(UIColor.systemGroupedBackground))
+                  .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+                  .navigationTitle("Modify Offsets")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .toolbar {
+                      ToolbarItem(placement: .navigationBarTrailing) {
+                          Menu {
+                              Button { showExport = true } label: {
+                                  Label("Export JSON", systemImage: "square.and.arrow.up")
+                              }
+                              Button(role: .destructive) { showResetAll = true } label: {
+                                  Label("Reset All", systemImage: "arrow.uturn.backward")
+                              }
+                          } label: {
+                              Image(systemName: "ellipsis.circle")
+                                  .foregroundStyle(Color(UIColor.tertiaryLabel))
+                          }
+                      }
+                  }
+                  .sheet(item: Binding(
+                      get: { editing.map { EditTarget(name: $0) } },
+                      set: { editing = $0?.name }
+                  )) { target in
+                      EditOffsetView(name: target.name)
+                          .environmentObject(store)
+                  }
+                  .sheet(isPresented: $showExport) {
+                      ExportOffsetsView()
+                          .environmentObject(store)
+                  }
+                  .alert("Reset All Offsets?", isPresented: $showResetAll) {
+                      Button("Cancel", role: .cancel) {}
+                      Button("Reset", role: .destructive) { store.reset() }
+                  } message: {
+                      Text("All offsets will be set to built-in defaults.")
+                  }
+              }
+
+              private var filteredGroups: [OffsetsStore.Group] {
+                  if query.isEmpty { return OffsetsStore.groups }
+                  let q = query.lowercased()
+                  return OffsetsStore.groups.compactMap { g in
+                      let items = g.items.filter { $0.lowercased().contains(q) }
+                      if items.isEmpty { return nil }
+                      return OffsetsStore.Group(title: g.title, items: items)
+                  }
+              }
+          }
+
+          struct EditTarget: Identifiable {
+              let name: String
+              var id: String { name }
+          }
+
+          struct OffsetRow: View {
+              let name: String
+              let value: String
+
+              private var valueColor: Color {
+                  value == "0x0" ? Color.secondary : Color.green
+              }
+
+              var body: some View {
+                  HStack(alignment: .firstTextBaseline, spacing: 8) {
+                      Text(name)
+                          .foregroundStyle(Color.primary)
+                          .font(.system(size: 13, design: .monospaced))
+                          .lineLimit(2)
+                          .multilineTextAlignment(.leading)
+                      Spacer(minLength: 8)
+                      Text(value)
+                          .font(.system(size: 13, design: .monospaced))
+                          .foregroundColor(valueColor)
+                  }
+                  .padding(.vertical, 4)
+                  .contentShape(Rectangle())
+              }
+          }
+
+          struct EditOffsetView: View {
+              @EnvironmentObject var store: OffsetsStore
+              @Environment(\.dismiss) private var dismiss
+              let name: String
+
+              @State private var text: String = ""
+              @State private var showError = false
+              @State private var errorMsg = ""
+
+              var body: some View {
+                  NavigationStack {
+                      Form {
+                          Section {
+                              Text(name)
+                                  .font(.system(size: 12, design: .monospaced))
+                                  .foregroundStyle(.secondary)
+                          } header: {
+                              Text("Offset")
+                          }
+
+                          Section {
+                              TextField("Value", text: $text)
+                                  .font(.system(size: 14, design: .monospaced))
+                                  .autocorrectionDisabled()
+                                  .textInputAutocapitalization(.never)
+                                  .keyboardType(.asciiCapable)
+                          } header: {
+                              Text("Value")
+                          } footer: {
+                              Text("Hex (0x...) or decimal. Default: \(OffsetsStore.defaults[name] ?? "0x0")")
+                          }
+
+                          Section {
+                              Button {
+                                  store.resetOne(name)
+                                  dismiss()
+                              } label: {
+                                  HStack {
+                                      Image(systemName: "arrow.uturn.backward")
+                                      Text("Restore Default")
+                                  }
+                              }
+                          }
+                      }
+                      .scrollContentBackground(.hidden)
+                      .navigationTitle("Edit")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarLeading) {
+                              Button("Cancel") { dismiss() }
+                          }
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Save") { save() }.fontWeight(.semibold)
+                          }
+                      }
+                      .alert("Invalid Value", isPresented: $showError) {
+                          Button("OK", role: .cancel) {}
+                      } message: {
+                          Text(errorMsg)
+                      }
+                      .onAppear { text = store.value(for: name) }
+                  }
+              }
+
+              private func save() {
+                  let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                  if trimmed.isEmpty {
+                      errorMsg = "Value cannot be empty."; showError = true; return
+                  }
+                  if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+                      let hexPart = String(trimmed.dropFirst(2))
+                      if UInt64(hexPart, radix: 16) == nil {
+                          errorMsg = "Invalid hex value."; showError = true; return
+                      }
+                  } else if UInt64(trimmed) == nil {
+                      errorMsg = "Invalid numeric value."; showError = true; return
+                  }
+                  store.update(name, value: trimmed)
+                  dismiss()
+              }
+          }
+
+          struct ExportOffsetsView: View {
+              @EnvironmentObject var store: OffsetsStore
+              @Environment(\.dismiss) private var dismiss
+              @State private var copied = false
+
+              private var json: String {
+                  let sorted = store.values.sorted { $0.key < $1.key }
+                  let dict = Dictionary(uniqueKeysWithValues: sorted)
+                  if let data = try? JSONSerialization.data(
+                      withJSONObject: dict,
+                      options: [.prettyPrinted, .sortedKeys]
+                  ), let str = String(data: data, encoding: .utf8) {
+                      return str
+                  }
+                  return "{}"
+              }
+
+              var body: some View {
+                  NavigationStack {
+                      ScrollView {
+                          Text(json)
+                              .font(.system(size: 11, design: .monospaced))
+                              .padding()
+                              .frame(maxWidth: .infinity, alignment: .leading)
+                              .textSelection(.enabled)
+                      }
+                      .navigationTitle("Export")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarLeading) {
+                              Button("Done") { dismiss() }
+                          }
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button {
+                                  UIPasteboard.general.string = json
+                                  copied = true
+                                  DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                      copied = false
+                                  }
+                              } label: {
+                                  Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
+
+      - name: Write natsuk1.swift
+        run: |
+          cat > natsuk1/natsuk1.swift <<'EOF'
+          import SwiftUI
+          import UIKit
+          import Foundation
+
+          final class LockedBuffer: @unchecked Sendable {
+              static let shared = LockedBuffer()
+              private let lock = NSLock()
+              private var value: String = ""
+
+              private init() {}
+
+              func append(_ s: String) {
+                  lock.lock()
+                  value += s
+                  value += "\n"
+                  if value.count > 10000 {
+                      value = String(value.suffix(6000))
+                  }
+                  lock.unlock()
+              }
+
+              func drain() -> String {
+                  lock.lock()
+                  let v = value
+                  value = ""
+                  lock.unlock()
+                  return v
+              }
+
+              func clear() {
+                  lock.lock()
+                  value = ""
+                  lock.unlock()
+              }
+          }
+
+          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
+              guard let line = line else { return }
+              var bytes: [UInt8] = []
+              var p = line
+              while p.pointee != 0 {
+                  bytes.append(UInt8(bitPattern: p.pointee))
+                  p = p.advanced(by: 1)
+              }
+              LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))
+          }
+
+          private func osVersionString() -> String {
+              let v = ProcessInfo.processInfo.operatingSystemVersion
+              return "\(v.majorVersion).\(v.minorVersion)"
+          }
+
+          private func appVersionString() -> String {
+              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+          }
+
+          private var isSupportedIOS: Bool {
+              ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
+          }
+
+          @main
+          struct natsuk1App: App {
+              var body: some Scene {
+                  WindowGroup {
+                      RootView()
+                  }
+              }
+          }
+
+          struct RootView: View {
+              @StateObject private var state = AppState.shared
+              @StateObject private var offsets = OffsetsStore.shared
+              @StateObject private var airlift = AirliftBridge.shared
+              @AppStorage("auto_run") private var auto_run = false
+              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
+              @AppStorage("keep_alive_location") private var keep_alive_location = false
+
+              init() {
+                  UserDefaults.standard.register(defaults: [
+                      "auto_run": false,
+                      "keep_alive_audio": false,
+                      "keep_alive_location": false,
+                      "lang": "en",
+                  ])
+              }
+
+              var body: some View {
+                  Group {
+                      if isSupportedIOS {
+                          ContentView()
+                              .environmentObject(state)
+                              .environmentObject(offsets)
+                              .environmentObject(airlift)
+                              .onAppear {
+                                  nk_set_log(cCallback)
+                                  if state.log.isEmpty {
+                                      state.append("[*] natsuk1 v\(appVersionString())")
+                                      state.append("[*] iOS \(osVersionString()) / arm64e")
+                                      if let version = OffsetsStore.activeVersion {
+                                          state.append("[*] offsets: \(version.device) / iOS \(version.ios) (\(version.build))")
+                                      }
+                                      state.append("")
+                                  }
+                                  if keep_alive_audio { KeepAlive.shared.startAudio() }
+                                  if keep_alive_location { KeepAlive.shared.startLocation() }
+                                  if auto_run {
+                                      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                          state.run()
+                                      }
+                                  }
+                              }
+                              .onChange(of: keep_alive_audio) { _, value in
+                                  if value { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
+                              }
+                              .onChange(of: keep_alive_location) { _, value in
+                                  if value { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
+                              }
+                              .overlay {
+                                  if state.show_respring {
+                                      RespringView()
+                                          .brightness(-1.0)
+                                          .ignoresSafeArea()
+                                  }
+                              }
+                      } else {
+                          NotSupportedView(version: osVersionString())
+                      }
+                  }
+                  .preferredColorScheme(.dark)
+              }
+          }
+
+          struct NotSupportedView: View {
+              let version: String
+
+              var body: some View {
+                  VStack(spacing: 20) {
+                      Image(systemName: "exclamationmark.triangle.fill")
+                          .font(.system(size: 56))
+                          .foregroundStyle(.orange)
+                      Text("Not supported for iOS \(version)")
+                          .font(.title3)
+                          .fontWeight(.semibold)
+                          .multilineTextAlignment(.center)
+                      Text("natsuk1 runs on iOS 27 only.")
+                          .font(.subheadline)
+                          .foregroundColor(.secondary)
+                          .multilineTextAlignment(.center)
+                  }
+                  .padding(40)
+                  .frame(maxWidth: .infinity, maxHeight: .infinity)
+                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+              }
+          }
+
+          @MainActor
+          final class AppState: ObservableObject {
+              static let shared = AppState()
+
+              enum Status {
+                  case idle, running, ok, failed
+                  var color: Color {
+                      switch self {
+                      case .idle:    return .secondary
+                      case .running: return .orange
+                      case .ok:      return .green
+                      case .failed:  return .red
+                      }
+                  }
+              }
+
+              @Published var log: String = ""
+              @Published var status: Status = .idle
+              @Published var running: Bool = false
+              @Published var show_respring: Bool = false
+
+              @Published var lang: String {
+                  didSet { UserDefaults.standard.set(lang, forKey: "lang") }
+              }
+
+              private init() {
+                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
+                  startFlusher()
+              }
+
+              func t(_ en: String, _ ru: String) -> String {
+                  lang == "ru" ? ru : en
+              }
+
+              private func startFlusher() {
+                  Task { @MainActor [weak self] in
+                      while !Task.isCancelled {
+                          try? await Task.sleep(for: .milliseconds(300))
+                          guard let self else { return }
+                          let chunk = LockedBuffer.shared.drain()
+                          guard !chunk.isEmpty else { continue }
+                          var newLog = self.log
+                          newLog += chunk
+                          if newLog.count > 30000 {
+                              newLog = String(newLog.suffix(20000))
+                          }
+                          self.log = newLog
+                      }
+                  }
+              }
+
+              func append(_ s: String) {
+                  LockedBuffer.shared.append(s)
+              }
+
+              func run() {
+                  if running { return }
+                  running = true
+                  status = .running
+
+                  Task.detached {
+                      _ = nk_full_exploit()
+                      await MainActor.run {
+                          AppState.shared.running = false
+                          AppState.shared.status = .ok
+                      }
+                  }
+              }
+
+              func respring() {
+                  show_respring = true
+              }
+
+              func clear() {
+                  LockedBuffer.shared.clear()
+                  log = ""
+              }
+          }
+          EOF
 
       - name: Patch Info.plist
         run: |
@@ -714,10 +2077,7 @@ jobs:
               )
               s = s.replace("</dict>\n</plist>", insert + "</dict>\n</plist>")
 
-          if "UIBackgroundModes" in s:
-              # ensure audio is present (needed for pairing keep-alive)
-              pass
-          else:
+          if "UIBackgroundModes" not in s:
               insert = (
                   "    <key>UIBackgroundModes</key>\n"
                   "    <array>\n"
@@ -727,6 +2087,7 @@ jobs:
               s = s.replace("</dict>\n</plist>", insert + "</dict>\n</plist>")
 
           open(p, "w").write(s)
+          print("info.plist patched")
           PYEOF
 
       - name: Patch project.yml
@@ -736,31 +2097,40 @@ jobs:
           p = "project.yml"
           s = open(p).read()
 
-          # add xcframework as dependency
-          if "AirliftFFI.xcframework" not in s:
-              if "    dependencies:" in s:
-                  s = s.replace(
-                      "    dependencies:\n",
-                      "    dependencies:\n      - framework: natsuk1/External/AirliftFFI.xcframework\n        embed: false\n",
-                      1
-                  )
+          s = re.sub(
+              r'^\s*- framework: natsuk1/External/AirliftFFI\.xcframework\n\s*embed: false\n',
+              '',
+              s, flags=re.M,
+          )
+          s = re.sub(
+              r'^\s*- path: natsuk1/External\n\s*excludes:\n\s*- "\*\*/\*\.xcframework/\*\*"\n',
+              '',
+              s, flags=re.M,
+          )
 
-          # add libc++ linking + C++ standard
-          if "-lc++" not in s:
+          hdr = '        HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers $(SRCROOT)/natsuk1/Exploit"'
+          if "HEADER_SEARCH_PATHS" in s:
+              s = re.sub(r'^\s*HEADER_SEARCH_PATHS:.*\n', hdr + '\n', s, flags=re.M)
+          else:
+              s = re.sub(
+                  r'(^\s*OTHER_LDFLAGS:.*\n)',
+                  r'\1' + hdr + '\n',
+                  s, flags=re.M,
+              )
+
+          lib = '$(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a'
+          if lib not in s:
+              s = re.sub(
+                  r'^(\s*OTHER_LDFLAGS:\s*)(.*)$',
+                  r'\1\2 ' + lib + ' -lc++',
+                  s, flags=re.M,
+              )
+          elif "-lc++" not in s:
               s = re.sub(
                   r'^(\s*OTHER_LDFLAGS:\s*)(.*)$',
                   r'\1\2 -lc++',
-                  s, flags=re.M
+                  s, flags=re.M,
               )
-
-          # add Exploit sources
-          if "- path: natsuk1/External\n" not in s:
-              marker = "      - path: natsuk1/Exploit\n"
-              if marker in s:
-                  s = s.replace(
-                      marker,
-                      marker + "      - path: natsuk1/External\n        excludes:\n          - \"**/*.xcframework/**\"\n"
-                  )
 
           open(p, "w").write(s)
           print("---- project.yml ----")
@@ -818,6 +2188,7 @@ jobs:
             exit 1
           fi
           echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          ls -la "$APP_PATH"
 
       - name: Package app for handoff
         run: |
@@ -846,5 +2217,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "Integrate AirliftFFI: on-device AirTraffic sandbox escape [skip ci]"
+          git commit -m "Airlift: direct .a linking, HEADER_SEARCH_PATHS, no xcframework dep [skip ci]"
           git push
