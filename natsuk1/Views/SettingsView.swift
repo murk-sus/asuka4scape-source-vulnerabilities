@@ -30,11 +30,6 @@ struct SettingsView: View {
         return UIImage(named: "AppIcon")
     }
 
-    private var kernelcacheStatus: String {
-        guard let path = state.kernelcachePath else { return "Not loaded" }
-        return URL(fileURLWithPath: path).lastPathComponent
-    }
-
     var body: some View {
         NavigationStack {
             List {
@@ -114,92 +109,7 @@ struct SettingsView: View {
                     Label("Exploit", systemImage: "cpu")
                 }
 
-                Section {
-                    HStack(spacing: 10) {
-                        Image(systemName: "doc.text")
-                            .foregroundStyle(.secondary)
-                            .frame(width: 20)
-                        Text("Kernelcache")
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 8)
-                        Text(kernelcacheStatus)
-                            .font(.system(size: 13, design: .monospaced))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .padding(.vertical, 2)
-
-                    Button {
-                        state.fetchKernelcache()
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "square.and.arrow.down")
-                                .foregroundStyle(.tint)
-                                .frame(width: 20)
-                            Text(state.fetchingKernelcache ? "Fetching..." : "Import")
-                                .foregroundStyle(.tint)
-                            Spacer(minLength: 8)
-                            if state.fetchingKernelcache {
-                                ProgressView().scaleEffect(0.8)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(state.fetchingKernelcache)
-
-                    Button {
-                        state.parseKernelcache()
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "wand.and.stars")
-                                .foregroundStyle(.tint)
-                                .frame(width: 20)
-                            Text("Auto-Detect Offsets")
-                                .foregroundStyle(.tint)
-                            Spacer(minLength: 8)
-                            if state.parsingKernelcache {
-                                ProgressView().scaleEffect(0.8)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(state.kernelcachePath == nil || state.parsingKernelcache)
-
-                    Button {
-                        let r = KernelRW.shared.testRoundTrip()
-                        state.append("[/] Test R/W: \(r)")
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "checkmark.shield")
-                                .foregroundStyle(.tint)
-                                .frame(width: 20)
-                            Text("Test R/W")
-                                .foregroundStyle(.tint)
-                            Spacer(minLength: 8)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        state.fetchImages()
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "square.stack.3d.down.right")
-                                .foregroundStyle(.tint)
-                                .frame(width: 20)
-                            Text("Fetch Images")
-                                .foregroundStyle(.tint)
-                            Spacer(minLength: 8)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(state.fetchingKernelcache)
-                } header: {
+                 header: {
                     Label("Kernelcache", systemImage: "shippingbox")
                 }
 

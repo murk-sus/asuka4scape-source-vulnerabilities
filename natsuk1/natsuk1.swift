@@ -72,9 +72,6 @@ final class AppState: ObservableObject {
     @Published var status: Status = .idle
     @Published var running: Bool = false
     @Published var show_respring: Bool = false
-    @Published var kernelcachePath: String?
-    @Published var fetchingKernelcache: Bool = false
-    @Published var parsingKernelcache: Bool = false
 
     @Published var lang: String {
         didSet { UserDefaults.standard.set(lang, forKey: "lang") }
@@ -86,7 +83,6 @@ final class AppState: ObservableObject {
 
     private init() {
         self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
-        self.kernelcachePath = UserDefaults.standard.string(forKey: "kernelcache_path")
         startFlusher()
     }
 
@@ -140,90 +136,6 @@ final class AppState: ObservableObject {
         t.qualityOfService = .userInitiated
         t.stackSize = 16 * 1024 * 1024
         t.start()
-    }
-
-    func fetchKernelcache() {
-        if fetchingKernelcache { return }
-        fetchingKernelcache = true
-        append("[*] Fetching kernelcache via libgrabkernel2...")
-
-        KernelcacheFetcher.shared.fetch { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.fetchingKernelcache = false
-                switch result {
-                case .success(let url):
-                    self.kernelcachePath = url.path
-                    UserDefaults.standard.set(url.path, forKey: "kernelcache_path")
-                    let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-                    let mb = Double(size) / 1024.0 / 1024.0
-                    self.append(String(format: "[+] Kernelcache: %.1f MB", mb))
-                    self.append("[+] Saved: \(url.path)")
-                case .failure(let error):
-                    self.append("[-] Fetch failed: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    func parseKernelcache() {
-        guard let path = kernelcachePath else {
-            append("[-] No kernelcache loaded")
-            return
-        }
-        if parsingKernelcache { return }
-        parsingKernelcache = true
-        append("[*] Parsing kernelcache via XPF...")
-
-        let url = URL(fileURLWithPath: path)
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                let found = try KernelcacheParser.shared.parse(url: url)
-                DispatchQueue.main.async {
-                    self.parsingKernelcache = false
-                    for (key, value) in found {
-                        OffsetsStore.shared.update(key, value: value)
-                    }
-                    self.append("[+] Parsed \(found.count) offsets")
-                    for (key, value) in found.sorted(by: { $0.key < $1.key }) {
-                        self.append("    \(key) = \(value)")
-                    }
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.parsingKernelcache = false
-                    self.append("[-] Parse failed: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    func fetchImages() {
-        if fetchingKernelcache { return }
-        fetchingKernelcache = true
-        append("[*] Fetching SPTM + TXM via libgrabkernel2...")
-
-        KernelcacheFetcher.shared.fetchImages { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.fetchingKernelcache = false
-                switch result {
-                case .success(let url):
-                    self.append("[+] Images saved to: \(url.path)")
-                    if let files = try? FileManager.default.contentsOfDirectory(atPath: url.path) {
-                        for f in files {
-                            let full = url.path + "/" + f
-                            let size = (try? FileManager.default.attributesOfItem(atPath: full)[.size] as? Int) ?? 0
-                            let kb = Double(size) / 1024.0
-                            self.append(String(format: "    %@ — %.0f KB", f, kb))
-                        }
-                    }
-                case .failure(let error):
-                    self.append("[-] Fetch failed: \(error.localizedDescription)")
-                }
-            }
-        }
     }
 
     func respring() {
