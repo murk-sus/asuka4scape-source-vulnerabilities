@@ -171,11 +171,8 @@ struct SettingsView: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(Color(UIColor.systemGroupedBackground))
-            .scrollEdgeEffectHidden(true, for: .top)
             .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(Color(UIColor.systemGroupedBackground), for: .navigationBar)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }

@@ -45,6 +45,7 @@ struct ContentView: View {
                     } label: {
                         HStack(spacing: 8) {
                             Text(state.t("Device", "Устройство"))
+                                .foregroundColor(.primary)
                             Spacer(minLength: 8)
                             Text(DeviceName.full())
                                 .font(.system(size: 13, design: .monospaced))
@@ -95,11 +96,8 @@ struct ContentView: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(Color(UIColor.systemGroupedBackground))
-            .scrollEdgeEffectHidden(true, for: .top)
             .navigationTitle("natsuk1")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(Color(UIColor.systemGroupedBackground), for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -130,7 +128,7 @@ struct LogView: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 Text(state.log.isEmpty ? "Awaiting execution." : state.log)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.system(size: 9, design: .monospaced))
                     .multilineTextAlignment(.leading)
                     .foregroundColor(state.log.isEmpty ? .secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)

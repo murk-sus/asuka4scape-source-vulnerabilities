@@ -56,14 +56,6 @@ enum DeviceName {
         return byID[id]?.name ?? id
     }
 
-    static func short() -> String {
-        let name = friendly()
-        if name.hasPrefix("iPhone ") {
-            return String(name.dropFirst("iPhone ".count))
-        }
-        return name
-    }
-
     static func chip() -> String {
         byID[machineID()]?.chip ?? "unknown"
     }
@@ -71,11 +63,6 @@ enum DeviceName {
     static func full() -> String {
         let v = ProcessInfo.processInfo.operatingSystemVersion
         return "\(friendly()) · iOS \(v.majorVersion).\(v.minorVersion)"
-    }
-
-    static func fullWithChip() -> String {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        return "\(friendly()) · \(chip()) · iOS \(v.majorVersion).\(v.minorVersion)"
     }
 
     static func machineID() -> String {
