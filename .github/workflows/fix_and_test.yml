@@ -18,7 +18,7 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v12
+  CACHE_SALT: v14
 
 jobs:
   fix-and-test:
@@ -40,21 +40,81 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/aircard
           git clone --depth 1 https://github.com/Mak5er/AirCard-iOS.git /tmp/aircard
-
           mkdir -p natsuk1/External
           rm -rf natsuk1/External/AirliftFFI.xcframework
           cp -R /tmp/aircard/AirliftFFI.xcframework natsuk1/External/
-
           cp /tmp/aircard/ios-app/GrappaHelper.h natsuk1/Exploit/
           cp /tmp/aircard/ios-app/GrappaHelper.m natsuk1/Exploit/
           cp /tmp/aircard/ios-app/NetworkStatus.swift natsuk1/Helpers/
           cp /tmp/aircard/ios-app/PairingController.swift natsuk1/Helpers/
-
           test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a
           test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers/airlift.h
-          test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers/module.modulemap
-          echo "airlift files verified"
-          ls -la natsuk1/External/AirliftFFI.xcframework/ios-arm64/
+
+      - name: Strip comments from AirCard sources
+        run: |
+          python3 <<'PYEOF'
+          import os
+          def strip(source):
+              out = []
+              i = 0
+              n = len(source)
+              in_string = False
+              while i < n:
+                  c = source[i]
+                  if in_string:
+                      out.append(c)
+                      if c == '\\' and i + 1 < n:
+                          out.append(source[i+1])
+                          i += 2
+                          continue
+                      if c == '"':
+                          in_string = False
+                      i += 1
+                      continue
+                  if c == '"':
+                      in_string = True
+                      out.append(c)
+                      i += 1
+                      continue
+                  if c == '/' and i + 1 < n and source[i+1] == '/':
+                      while i < n and source[i] != '\n':
+                          i += 1
+                      continue
+                  if c == '/' and i + 1 < n and source[i+1] == '*':
+                      i += 2
+                      while i + 1 < n and not (source[i] == '*' and source[i+1] == '/'):
+                          i += 1
+                      i += 2
+                      continue
+                  out.append(c)
+                  i += 1
+              result = ''.join(out)
+              lines = result.split('\n')
+              cleaned = []
+              blank = 0
+              for line in lines:
+                  if line.strip() == '':
+                      blank += 1
+                      if blank <= 1:
+                          cleaned.append('')
+                  else:
+                      blank = 0
+                      cleaned.append(line)
+              return '\n'.join(cleaned)
+          for p in [
+              "natsuk1/Helpers/NetworkStatus.swift",
+              "natsuk1/Helpers/PairingController.swift",
+              "natsuk1/Exploit/GrappaHelper.h",
+              "natsuk1/Exploit/GrappaHelper.m",
+          ]:
+              if os.path.exists(p):
+                  with open(p) as f:
+                      src = f.read()
+                  s = strip(src)
+                  with open(p, "w") as f:
+                      f.write(s)
+                  print(f"stripped {p} ({len(src)} -> {len(s)})")
+          PYEOF
 
       - name: Patch PairingController
         run: |
@@ -67,20 +127,28 @@ jobs:
           open(p, "w").write(s)
           PYEOF
 
-      - name: Write all Swift and C sources
+      - name: Clean target directories
         run: |
-          python3 <<'PYEOF'
-          import os
+          rm -f natsuk1/Views/OffsetsView.swift
+          rm -f natsuk1/Views/ContentView.swift
+          rm -f natsuk1/Views/SettingsView.swift
+          rm -f natsuk1/Views/AboutView.swift
+          rm -f natsuk1/Views/DeviceInfoView.swift
+          rm -f natsuk1/Views/AirliftView.swift
+          rm -f natsuk1/Helpers/AirliftBridge.swift
+          rm -f natsuk1/Helpers/KeepAlive.swift
+          rm -f natsuk1/Helpers/OffsetsStore.swift
+          rm -f natsuk1/Helpers/DeviceName.swift
+          rm -f natsuk1/Helpers/Respring.swift
+          rm -f natsuk1/natsuk1.swift
+          rm -f natsuk1/bridging.h
+          rm -f natsuk1/Exploit/nk_api.h
+          rm -f natsuk1/Exploit/nk_api.c
+          rm -f natsuk1/Exploit/nk_offsets.h
 
-          def w(path, content):
-              d = os.path.dirname(path)
-              if d:
-                  os.makedirs(d, exist_ok=True)
-              with open(path, "w", encoding="utf-8") as f:
-                  f.write(content)
-              print(f"wrote {path} ({len(content)} bytes)")
-
-          w("natsuk1/bridging.h", """\
+      - name: Write bridging.h and C sources
+        run: |
+          cat > natsuk1/bridging.h <<'EOF'
           #ifndef NATSUK1_BRIDGING_H
           #define NATSUK1_BRIDGING_H
 
@@ -90,9 +158,9 @@ jobs:
           #include "airlift.h"
 
           #endif
-          """)
+          EOF
 
-          w("natsuk1/Exploit/nk_api.h", """\
+          cat > natsuk1/Exploit/nk_api.h <<'EOF'
           #ifndef NK_API_H
           #define NK_API_H
 
@@ -112,9 +180,9 @@ jobs:
           #define NK_ERR(tag, ...)  nk_logx(tag, __VA_ARGS__)
 
           #endif
-          """)
+          EOF
 
-          w("natsuk1/Exploit/nk_api.c", """\
+          cat > natsuk1/Exploit/nk_api.c <<'EOF'
           #include "nk_api.h"
           #include "nk_offsets.h"
           #include <stdarg.h>
@@ -171,9 +239,9 @@ jobs:
           }
 
           int nk_full_exploit(void) { return nk_run(); }
-          """)
+          EOF
 
-          w("natsuk1/Exploit/nk_offsets.h", """\
+          cat > natsuk1/Exploit/nk_offsets.h <<'EOF'
           #ifndef NK_OFFSETS_H
           #define NK_OFFSETS_H
 
@@ -192,9 +260,11 @@ jobs:
           #define NK_OFF_TASK_THREAD        0x50
 
           #endif
-          """)
+          EOF
 
-          w("natsuk1/Helpers/AirliftBridge.swift", '''\
+      - name: Write AirliftBridge.swift
+        run: |
+          cat > natsuk1/Helpers/AirliftBridge.swift <<'EOF'
           import Foundation
           import Combine
 
@@ -277,7 +347,7 @@ jobs:
                           self.pairingStatus = "Cancelled"
                       } catch {
                           self.state = .idle
-                          self.pairingStatus = "Failed: \\(error.localizedDescription)"
+                          self.pairingStatus = "Failed: \(error.localizedDescription)"
                       }
                   }
                   Task {
@@ -337,7 +407,7 @@ jobs:
                               let msg = jsonStr ?? "Canary write confirmed"
                               self.state = .done(ok: true, message: msg)
                           } else {
-                              let msg = errStr ?? "rc=\\(rc)"
+                              let msg = errStr ?? "rc=\(rc)"
                               self.state = .done(ok: false, message: msg)
                           }
                       }
@@ -385,9 +455,11 @@ jobs:
                   }
               }
           }
-          ''')
+          EOF
 
-          w("natsuk1/Views/AirliftView.swift", '''\
+      - name: Write AirliftView.swift
+        run: |
+          cat > natsuk1/Views/AirliftView.swift <<'EOF'
           import SwiftUI
           import UIKit
 
@@ -581,7 +653,7 @@ jobs:
               var body: some View {
                   ScrollViewReader { proxy in
                       ScrollView(showsIndicators: false) {
-                          Text(lines.isEmpty ? "No output yet." : lines.joined(separator: "\\n"))
+                          Text(lines.isEmpty ? "No output yet." : lines.joined(separator: "\n"))
                               .font(.system(size: 9, design: .monospaced))
                               .multilineTextAlignment(.leading)
                               .foregroundColor(lines.isEmpty ? .secondary : .primary)
@@ -602,7 +674,7 @@ jobs:
                   }
                   .contextMenu {
                       Button {
-                          UIPasteboard.general.string = lines.joined(separator: "\\n")
+                          UIPasteboard.general.string = lines.joined(separator: "\n")
                       } label: {
                           Label("Copy All", systemImage: "doc.on.doc")
                       }
@@ -614,9 +686,11 @@ jobs:
                   }
               }
           }
-          ''')
+          EOF
 
-          w("natsuk1/Views/ContentView.swift", '''\
+      - name: Write ContentView.swift
+        run: |
+          cat > natsuk1/Views/ContentView.swift <<'EOF'
           import SwiftUI
           import UIKit
 
@@ -780,14 +854,16 @@ jobs:
                       .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
               }
           }
-          ''')
+          EOF
 
-          w("natsuk1/Views/SettingsView.swift", '''\
+      - name: Write SettingsView.swift
+        run: |
+          cat > natsuk1/Views/SettingsView.swift <<'EOF'
           import SwiftUI
           import UIKit
 
           struct SettingsView: View {
-              @Environment(\\.dismiss) private var dismiss
+              @Environment(\.dismiss) private var dismiss
               @EnvironmentObject var state: AppState
               @EnvironmentObject var offsets: OffsetsStore
 
@@ -818,7 +894,7 @@ jobs:
 
               private var activeVersionLabel: String {
                   guard let v = OffsetsStore.activeVersion else { return "unknown" }
-                  return "\\(v.device) / iOS \\(v.ios) (\\(v.build))"
+                  return "\(v.device) / iOS \(v.ios) (\(v.build))"
               }
 
               var body: some View {
@@ -854,7 +930,7 @@ jobs:
                                       Text(appName)
                                           .font(.title3)
                                           .fontWeight(.semibold)
-                                      Text("Version \\(version)")
+                                      Text("Version \(version)")
                                           .font(.subheadline)
                                           .foregroundColor(.secondary)
                                   }
@@ -898,7 +974,7 @@ jobs:
                                           .frame(width: 22, alignment: .center)
                                       Text("Modify Offsets")
                                       Spacer(minLength: 8)
-                                      Text("\\(offsets.filledCount())/\\(offsets.totalCount())")
+                                      Text("\(offsets.filledCount())/\(offsets.totalCount())")
                                           .font(.system(size: 13, design: .monospaced))
                                           .foregroundColor(.secondary)
                                   }
@@ -965,597 +1041,11 @@ jobs:
                   }
               }
           }
-          ''')
-
-          w("natsuk1/Helpers/KeepAlive.swift", '''\
-          import AVFoundation
-          import CoreLocation
-          import Foundation
-          import Combine
-
-          @MainActor
-          final class KeepAlive: NSObject, ObservableObject {
-              static let shared = KeepAlive()
-
-              @Published private(set) var audioActive: Bool = false
-              @Published private(set) var locationActive: Bool = false
-
-              private var player: AVAudioPlayer?
-              private var locationManager: CLLocationManager?
-
-              private override init() {
-                  super.init()
-              }
-
-              func startAudio() {
-                  guard !audioActive else { return }
-                  do {
-                      let session = AVAudioSession.sharedInstance()
-                      try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-                      try session.setActive(true)
-
-                      let wav = Self.silentWavData()
-                      let url = FileManager.default.temporaryDirectory
-                          .appendingPathComponent("keepalive.wav")
-                      try wav.write(to: url)
-
-                      let p = try AVAudioPlayer(contentsOf: url)
-                      p.numberOfLoops = -1
-                      p.volume = 0.0
-                      p.prepareToPlay()
-                      p.play()
-                      player = p
-                      audioActive = true
-                  } catch {
-                      NSLog("[KeepAlive] audio failed: \\(error)")
-                      audioActive = false
-                  }
-              }
-
-              func stopAudio() {
-                  guard audioActive else { return }
-                  player?.stop()
-                  player = nil
-                  audioActive = false
-              }
-
-              func startLocation() {
-                  guard !locationActive else { return }
-                  let m = CLLocationManager()
-                  m.delegate = self
-                  m.desiredAccuracy = kCLLocationAccuracyThreeKilometers
-                  m.distanceFilter = 3000
-                  m.pausesLocationUpdatesAutomatically = false
-                  m.allowsBackgroundLocationUpdates = true
-                  m.showsBackgroundLocationIndicator = false
-
-                  let status = m.authorizationStatus
-                  if status == .notDetermined {
-                      m.requestAlwaysAuthorization()
-                  } else if status == .authorizedAlways || status == .authorizedWhenInUse {
-                      m.startUpdatingLocation()
-                      locationActive = true
-                  }
-                  locationManager = m
-              }
-
-              func stopLocation() {
-                  locationManager?.stopUpdatingLocation()
-                  locationManager = nil
-                  locationActive = false
-              }
-
-              nonisolated private static func silentWavData() -> Data {
-                  let sampleRate: UInt32 = 8000
-                  let channels: UInt16 = 1
-                  let bitsPerSample: UInt16 = 16
-                  let durationSec: UInt32 = 1
-                  let numSamples = sampleRate * durationSec
-                  let blockAlign = channels * bitsPerSample / 8
-                  let byteRate = sampleRate * UInt32(blockAlign)
-                  let dataSize = numSamples * UInt32(blockAlign)
-
-                  var d = Data()
-                  func u32(_ v: UInt32) {
-                      var x = v.littleEndian
-                      withUnsafeBytes(of: &x) { d.append(contentsOf: $0) }
-                  }
-                  func u16(_ v: UInt16) {
-                      var x = v.littleEndian
-                      withUnsafeBytes(of: &x) { d.append(contentsOf: $0) }
-                  }
-                  func str(_ s: String) { d.append(contentsOf: Array(s.utf8)) }
-
-                  str("RIFF"); u32(36 + dataSize); str("WAVE")
-                  str("fmt "); u32(16); u16(1); u16(channels)
-                  u32(sampleRate); u32(byteRate); u16(blockAlign); u16(bitsPerSample)
-                  str("data"); u32(dataSize)
-                  d.append(Data(repeating: 0, count: Int(dataSize)))
-                  return d
-              }
-          }
-
-          extension KeepAlive: @preconcurrency CLLocationManagerDelegate {
-              func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-                  let status = manager.authorizationStatus
-                  if status == .authorizedAlways || status == .authorizedWhenInUse {
-                      manager.startUpdatingLocation()
-                      locationActive = true
-                  } else if status == .denied || status == .restricted {
-                      locationActive = false
-                  }
-              }
-
-              func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-              }
-
-              func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-                  NSLog("[KeepAlive] location error: \\(error)")
-              }
-          }
-          ''')
-
-          w("natsuk1/Helpers/OffsetsStore.swift", '''\
-          import Foundation
-          import Combine
-
-          @MainActor
-          final class OffsetsStore: ObservableObject {
-              static let shared = OffsetsStore()
-
-              struct Group: Codable {
-                  let title: String
-                  let items: [String]
-              }
-
-              struct VersionEntry: Codable {
-                  let file: String
-                  let device: String
-                  let deviceName: String
-                  let chip: String
-                  let ios: String
-                  let build: String
-                  let verified: Bool
-              }
-
-              struct Index: Codable {
-                  let versions: [VersionEntry]
-              }
-
-              private struct File: Codable {
-                  let groups: [Group]
-                  let defaults: [String: String]
-              }
-
-              nonisolated private static let bundled: File? = {
-                  guard let fileURL = resolveActiveFileURL() else { return nil }
-                  guard let fileData = try? Data(contentsOf: fileURL),
-                        let parsed = try? JSONDecoder().decode(File.self, from: fileData)
-                  else { return nil }
-                  return parsed
-              }()
-
-              nonisolated static var groups: [Group] { bundled?.groups ?? [] }
-              nonisolated static var defaults: [String: String] { bundled?.defaults ?? [:] }
-
-              nonisolated static var activeVersion: VersionEntry? {
-                  resolveActiveEntry()
-              }
-
-              nonisolated private static func loadIndex() -> Index? {
-                  guard let url = Bundle.main.url(forResource: "index", withExtension: "json", subdirectory: "Offsets"),
-                        let data = try? Data(contentsOf: url),
-                        let index = try? JSONDecoder().decode(Index.self, from: data)
-                  else { return nil }
-                  return index
-              }
-
-              nonisolated private static func resolveActiveEntry() -> VersionEntry? {
-                  guard let index = loadIndex() else { return nil }
-                  let device = DeviceName.machineID()
-                  let v = ProcessInfo.processInfo.operatingSystemVersion
-                  let ios = "\\(v.majorVersion).\\(v.minorVersion)"
-                  return index.versions.first(where: { $0.device == device && $0.ios == ios })
-                      ?? index.versions.first(where: { $0.device == device })
-              }
-
-              nonisolated private static func resolveActiveFileURL() -> URL? {
-                  guard let entry = resolveActiveEntry() else { return nil }
-                  let parts = entry.file.split(separator: ".", maxSplits: 1).map(String.init)
-                  let name = parts.first ?? entry.file
-                  let ext  = parts.count > 1 ? parts[1] : "json"
-                  return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")
-              }
-
-              @Published var values: [String: String] = [:]
-
-              private let storageKey = "natsuk1_offsets_v2"
-
-              private init() { load() }
-
-              func load() {
-                  let saved = UserDefaults.standard.dictionary(forKey: storageKey) as? [String: String]
-                  var merged = Self.defaults
-                  if let saved = saved {
-                      for (k, v) in saved where merged[k] != nil { merged[k] = v }
-                  }
-                  values = merged
-                  if saved == nil { save() }
-              }
-
-              func save() {
-                  UserDefaults.standard.set(values, forKey: storageKey)
-              }
-
-              func reset() {
-                  values = Self.defaults
-                  save()
-              }
-
-              func resetOne(_ name: String) {
-                  values[name] = Self.defaults[name] ?? "0x0"
-                  save()
-              }
-
-              func update(_ name: String, value: String) {
-                  values[name] = value
-                  save()
-              }
-
-              func value(for name: String) -> String {
-                  values[name] ?? Self.defaults[name] ?? "0x0"
-              }
-
-              func filledCount() -> Int {
-                  values.filter { $0.value != "0x0" && !$0.value.isEmpty }.count
-              }
-
-              func totalCount() -> Int {
-                  Self.groups.reduce(0) { $0 + $1.items.count }
-              }
-          }
-          ''')
-
-          w("natsuk1/Helpers/DeviceName.swift", '''\
-          import Foundation
-          import UIKit
-
-          enum DeviceName {
-
-              private struct Device {
-                  let id: String
-                  let name: String
-                  let chip: String
-              }
-
-              private static let devices: [Device] = [
-                  Device(id: "iPhone11,2", name: "iPhone XS",           chip: "A12 Bionic"),
-                  Device(id: "iPhone11,4", name: "iPhone XS Max",       chip: "A12 Bionic"),
-                  Device(id: "iPhone11,6", name: "iPhone XS Max",       chip: "A12 Bionic"),
-                  Device(id: "iPhone11,8", name: "iPhone XR",           chip: "A12 Bionic"),
-                  Device(id: "iPhone12,1", name: "iPhone 11",           chip: "A13 Bionic"),
-                  Device(id: "iPhone12,3", name: "iPhone 11 Pro",       chip: "A13 Bionic"),
-                  Device(id: "iPhone12,5", name: "iPhone 11 Pro Max",   chip: "A13 Bionic"),
-                  Device(id: "iPhone12,8", name: "iPhone SE (2nd gen)", chip: "A13 Bionic"),
-                  Device(id: "iPhone13,1", name: "iPhone 12 mini",      chip: "A14 Bionic"),
-                  Device(id: "iPhone13,2", name: "iPhone 12",           chip: "A14 Bionic"),
-                  Device(id: "iPhone13,3", name: "iPhone 12 Pro",       chip: "A14 Bionic"),
-                  Device(id: "iPhone13,4", name: "iPhone 12 Pro Max",   chip: "A14 Bionic"),
-                  Device(id: "iPhone14,2", name: "iPhone 13 Pro",       chip: "A15 Bionic"),
-                  Device(id: "iPhone14,3", name: "iPhone 13 Pro Max",   chip: "A15 Bionic"),
-                  Device(id: "iPhone14,4", name: "iPhone 13 mini",      chip: "A15 Bionic"),
-                  Device(id: "iPhone14,5", name: "iPhone 13",           chip: "A15 Bionic"),
-                  Device(id: "iPhone14,6", name: "iPhone SE (3rd gen)", chip: "A15 Bionic"),
-                  Device(id: "iPhone14,7", name: "iPhone 14",           chip: "A15 Bionic"),
-                  Device(id: "iPhone14,8", name: "iPhone 14 Plus",      chip: "A15 Bionic"),
-                  Device(id: "iPhone15,2", name: "iPhone 14 Pro",       chip: "A16 Bionic"),
-                  Device(id: "iPhone15,3", name: "iPhone 14 Pro Max",   chip: "A16 Bionic"),
-                  Device(id: "iPhone15,4", name: "iPhone 15",           chip: "A16 Bionic"),
-                  Device(id: "iPhone15,5", name: "iPhone 15 Plus",      chip: "A16 Bionic"),
-                  Device(id: "iPhone16,1", name: "iPhone 15 Pro",       chip: "A17 Pro"),
-                  Device(id: "iPhone16,2", name: "iPhone 15 Pro Max",   chip: "A17 Pro"),
-                  Device(id: "iPhone17,1", name: "iPhone 16 Pro",       chip: "A18 Pro"),
-                  Device(id: "iPhone17,2", name: "iPhone 16 Pro Max",   chip: "A18 Pro"),
-                  Device(id: "iPhone17,3", name: "iPhone 16",           chip: "A18"),
-                  Device(id: "iPhone17,4", name: "iPhone 16 Plus",      chip: "A18"),
-                  Device(id: "iPhone17,5", name: "iPhone 16e",          chip: "A18"),
-                  Device(id: "iPhone18,1", name: "iPhone 17 Pro",       chip: "A19 Pro"),
-                  Device(id: "iPhone18,2", name: "iPhone 17 Pro Max",   chip: "A19 Pro"),
-                  Device(id: "iPhone18,3", name: "iPhone 17",           chip: "A19"),
-                  Device(id: "iPhone18,4", name: "iPhone Air",          chip: "A19 Pro"),
-                  Device(id: "iPhone18,5", name: "iPhone 17e",          chip: "A19"),
-              ]
-
-              private static let byID: [String: Device] = Dictionary(
-                  uniqueKeysWithValues: devices.map { ($0.id, $0) }
-              )
-
-              static func friendly() -> String {
-                  let id = machineID()
-                  return byID[id]?.name ?? id
-              }
-
-              static func chip() -> String {
-                  byID[machineID()]?.chip ?? "unknown"
-              }
-
-              static func full() -> String {
-                  let v = ProcessInfo.processInfo.operatingSystemVersion
-                  return "\\(friendly()) · iOS \\(v.majorVersion).\\(v.minorVersion)"
-              }
-
-              static func machineID() -> String {
-                  var info = utsname()
-                  uname(&info)
-                  return Mirror(reflecting: info.machine).children.reduce("") { id, el in
-                      guard let v = el.value as? Int8, v != 0 else { return id }
-                      return id + String(UnicodeScalar(UInt8(v)))
-                  }
-              }
-          }
-          ''')
-
-          w("natsuk1/Helpers/Respring.swift", '''\
-          import UIKit
-          import Foundation
-          import WebKit
-          import SwiftUI
-
-          struct RespringView: UIViewRepresentable {
-              private static let html = """
-              <!DOCTYPE html>
-              <html>
-                  <body>
-                      <iframe id="frame" srcdoc="" sandbox="allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-presentation allow-scripts"></iframe>
-                      <script>
-                          const frame = document.getElementById('frame');
-                          const funfun = `
-                              <html>
-                              <body>
-                                  <script>
-                                      const container = document.createElement('div');
-                                      container.style.cssText = 'perspective: 1px; perspective-origin: 9999999% 9999999%;';
-                                      document.body.appendChild(container);
-
-                                      for (let i = 0; i < 500; i++) {
-                                          let d = document.createElement('div');
-                                          d.style.cssText = 'position: absolute; width: 100vw; height: 100vh; backdrop-filter: blur(100px); -webkit-backdrop-filter: blur(100px); transform: translate3d(100000px, 100000px, ' + i + 'px) rotateY(90deg);';
-                                          container.appendChild(d);
-                                      }
-
-                                      setInterval(() => {
-                                          navigator.share({ title: 'R', text: 'R'.repeat(100000) }).catch(() => {});
-                                          let x = new Uint8Array(1024 * 1024 * 10);
-                                          crypto.getRandomValues(x);
-                                      }, 0);
-                                  <\\\\/script>
-                              </body>
-                              </html>
-                          `;
-
-                          frame.srcdoc = funfun;
-                      </script>
-                  </body>
-              </html>
-              """
-
-              func makeUIView(context: Context) -> WKWebView {
-                  let config = WKWebViewConfiguration()
-                  config.defaultWebpagePreferences.allowsContentJavaScript = true
-                  return WKWebView(frame: .zero, configuration: config)
-              }
-
-              func updateUIView(_ webView: WKWebView, context: Context) {
-                  webView.loadHTMLString(Self.html, baseURL: nil)
-              }
-          }
-          ''')
-
-          w("natsuk1/Views/AboutView.swift", '''\
-          import SwiftUI
-          import UIKit
-
-          struct AboutView: View {
-              @Environment(\\.openURL) private var openURL
-              @EnvironmentObject var state: AppState
-
-              private let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")!
-
-              private var appName: String {
-                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
-                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
-                      ?? "natsuk1"
-              }
-
-              private var version: String {
-                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-              }
-
-              private var build: String {
-                  Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-              }
-
-              var body: some View {
-                  List {
-                      Section {
-                          VStack(alignment: .leading, spacing: 6) {
-                              Text(appName)
-                                  .font(.title2)
-                                  .fontWeight(.semibold)
-
-                              Text("Version \\(version) (\\(build))")
-                                  .font(.subheadline)
-                                  .foregroundColor(.secondary)
-
-                              Text("Research project iOS.")
-                                  .font(.footnote)
-                                  .foregroundColor(.secondary)
-                                  .fixedSize(horizontal: false, vertical: true)
-                                  .padding(.top, 2)
-                          }
-                          .padding(.vertical, 6)
-                      }
-
-                      Section {
-                          linkRow("Source Repository", url: repoURL)
-                          linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
-                      } header: {
-                          Text("Open Source")
-                      }
-
-                      Section {
-                          linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
-                      } header: {
-                          Text("Community")
-                      }
-
-                      Section {
-                          linkRow("AirLift by 0xjohnnydev", url: URL(string: "https://github.com/0xjohnnydev/airlift")!)
-                          linkRow("AirCard-iOS by Mak5er", url: URL(string: "https://github.com/Mak5er/AirCard-iOS")!)
-                      } header: {
-                          Text("Credits")
-                      }
-
-                      Section {
-                      } header: {
-                          Text("Disclaimer")
-                      } footer: {
-                          Text("Independent research project. Not affiliated with Apple Inc. Provided as-is.")
-                              .font(.footnote)
-                              .foregroundColor(.secondary)
-                      }
-                  }
-                  .listStyle(.insetGrouped)
-                  .scrollContentBackground(.hidden)
-                  .background(Color(UIColor.systemGroupedBackground))
-                  .navigationTitle("About")
-                  .navigationBarTitleDisplayMode(.inline)
-              }
-
-              private func linkRow(_ title: String, url: URL) -> some View {
-                  Button {
-                      openURL(url)
-                  } label: {
-                      HStack(alignment: .top, spacing: 8) {
-                          Text(title)
-                              .foregroundStyle(.tint)
-                              .font(.body)
-                              .fontWeight(.medium)
-                          Spacer(minLength: 8)
-                          Image(systemName: "link")
-                              .font(.system(size: 14, weight: .semibold))
-                              .foregroundStyle(.tint)
-                      }
-                      .padding(.vertical, 2)
-                      .contentShape(Rectangle())
-                  }
-                  .buttonStyle(.plain)
-              }
-          }
-          ''')
-
-          w("natsuk1/Views/DeviceInfoView.swift", '''\
-          import SwiftUI
-          import UIKit
-
-          struct DeviceInfoView: View {
-              @Environment(\\.dismiss) private var dismiss
-
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          row("Model", DeviceName.friendly())
-                          row("Identifier", machineID())
-                          row("Chip", DeviceName.chip())
-                          row("iOS", sysctlString("kern.osproductversion"))
-                          row("Build", sysctlString("kern.osversion"))
-                          row("RAM", ram())
-                          row("Architecture", arch())
-                          row("Locale", localeShort())
-                          row("Region", regionShort())
-                          row("Uptime", uptime())
-                      }
-                      .listStyle(.insetGrouped)
-                      .scrollContentBackground(.hidden)
-                      .background(Color(UIColor.systemGroupedBackground))
-                      .navigationTitle("Device")
-                      .navigationBarTitleDisplayMode(.inline)
-                      .toolbar {
-                          ToolbarItem(placement: .navigationBarTrailing) {
-                              Button("Done") { dismiss() }
-                          }
-                      }
-                  }
-              }
-
-              private func row(_ key: String, _ value: String) -> some View {
-                  HStack {
-                      Text(key)
-                      Spacer()
-                      Text(value)
-                          .font(.system(.body, design: .monospaced))
-                          .foregroundColor(.secondary)
-                          .lineLimit(1)
-                          .truncationMode(.middle)
-                  }
-              }
-
-              private func machineID() -> String {
-                  var sysinfo = utsname()
-                  uname(&sysinfo)
-                  return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
-                      guard let v = el.value as? Int8, v != 0 else { return id }
-                      return id + String(UnicodeScalar(UInt8(v)))
-                  }
-              }
-
-              private func sysctlString(_ name: String) -> String {
-                  var size = 0
-                  sysctlbyname(name, nil, &size, nil, 0)
-                  var buf = [CChar](repeating: 0, count: size)
-                  sysctlbyname(name, &buf, &size, nil, 0)
-                  let bytes = buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-                  return String(decoding: bytes, as: UTF8.self)
-              }
-
-              private func ram() -> String {
-                  var size: UInt64 = 0
-                  var len = MemoryLayout<UInt64>.size
-                  if sysctlbyname("hw.memsize", &size, &len, nil, 0) != 0 { return "unknown" }
-                  return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .memory)
-              }
-
-              private func arch() -> String {
-                  #if arch(arm64)
-                  return "arm64"
-                  #else
-                  return "unknown"
-                  #endif
-              }
-
-              private func localeShort() -> String {
-                  Locale.current.identifier
-                      .split(separator: "_")
-                      .first
-                      .map(String.init)?
-                      .uppercased() ?? "—"
-              }
-
-              private func regionShort() -> String {
-                  let region = Locale.current.region?.identifier ?? ""
-                  return region.isEmpty ? "—" : region.uppercased()
-              }
-
-              private func uptime() -> String {
-                  let t = ProcessInfo.processInfo.systemUptime
-                  let h = Int(t) / 3600
-                  let m = (Int(t) % 3600) / 60
-                  return "\\(h)h \\(m)m"
-              }
-          }
-          ''')
-
-          w("natsuk1/Views/OffsetsView.swift", '''\
+          EOF
+
+      - name: Write OffsetsView.swift
+        run: |
+          cat > natsuk1/Views/OffsetsView.swift <<'EOF'
           import SwiftUI
           import UIKit
 
@@ -1572,15 +1062,15 @@ jobs:
                           HStack {
                               Text("Filled")
                               Spacer()
-                              Text("\\(store.filledCount()) / \\(store.totalCount())")
+                              Text("\(store.filledCount()) / \(store.totalCount())")
                                   .font(.system(.body, design: .monospaced))
                                   .foregroundColor(.secondary)
                           }
                       }
 
-                      ForEach(filteredGroups, id: \\.title) { group in
+                      ForEach(filteredGroups, id: \.title) { group in
                           Section {
-                              ForEach(group.items, id: \\.self) { name in
+                              ForEach(group.items, id: \.self) { name in
                                   Button {
                                       editing = name
                                   } label: {
@@ -1676,7 +1166,7 @@ jobs:
 
           struct EditOffsetView: View {
               @EnvironmentObject var store: OffsetsStore
-              @Environment(\\.dismiss) private var dismiss
+              @Environment(\.dismiss) private var dismiss
               let name: String
 
               @State private var text: String = ""
@@ -1703,7 +1193,7 @@ jobs:
                           } header: {
                               Text("Value")
                           } footer: {
-                              Text("Hex (0x...) or decimal. Default: \\(OffsetsStore.defaults[name] ?? "0x0")")
+                              Text("Hex (0x...) or decimal. Default: \(OffsetsStore.defaults[name] ?? "0x0")")
                           }
 
                           Section {
@@ -1752,14 +1242,14 @@ jobs:
                       errorMsg = "Invalid numeric value."; showError = true; return
                   }
                   store.update(name, value: trimmed)
-                  dismissState()
-              private }
+                  dismiss()
+              }
           }
 
-          struct Export varOffsetsView: View {
-              @ copiedEnvironmentObject var store: Offsets =Store
-              @Environment(\\.dismiss) private var dismiss
-              @ false
+          struct ExportOffsetsView: View {
+              @EnvironmentObject var store: OffsetsStore
+              @Environment(\.dismiss) private var dismiss
+              @State private var copied = false
 
               private var json: String {
                   let sorted = store.values.sorted { $0.key < $1.key }
@@ -1803,413 +1293,573 @@ jobs:
                   }
               }
           }
-          ''')
+          EOF
 
-          w("natsuk1/natsuk1.swift", '''\
+      - name: Write AboutView.swift
+        run: |
+          cat > natsuk1/Views/AboutView.swift <<'EOF'
+          import SwiftUI
+          import UIKit
+
+          struct AboutView: View {
+              @Environment(\.openURL) private var openURL
+              @EnvironmentObject var state: AppState
+
+              private let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")!
+
+              private var appName: String {
+                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+                      ?? "natsuk1"
+              }
+
+              private var version: String {
+                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+              }
+
+              private var build: String {
+                  Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+              }
+
+              var body: some View {
+                  List {
+                      Section {
+                          VStack(alignment: .leading, spacing: 6) {
+                              Text(appName)
+                                  .font(.title2)
+                                  .fontWeight(.semibold)
+
+                              Text("Version \(version) (\(build))")
+                                  .font(.subheadline)
+                                  .foregroundColor(.secondary)
+
+                              Text("Research project iOS.")
+                                  .font(.footnote)
+                                  .foregroundColor(.secondary)
+                                  .fixedSize(horizontal: false, vertical: true)
+                                  .padding(.top, 2)
+                          }
+                          .padding(.vertical, 6)
+                      }
+
+                      Section {
+                          linkRow("Source Repository", url: repoURL)
+                          linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
+                      } header: {
+                          Text("Open Source")
+                      }
+
+                      Section {
+                          linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
+                      } header: {
+                          Text("Community")
+                      }
+
+                      Section {
+                          linkRow("AirLift by 0xjohnnydev", url: URL(string: "https://github.com/0xjohnnydev/airlift")!)
+                          linkRow("AirCard-iOS by Mak5er", url: URL(string: "https://github.com/Mak5er/AirCard-iOS")!)
+                      } header: {
+                          Text("Credits")
+                      }
+
+                      Section {
+                      } header: {
+                          Text("Disclaimer")
+                      } footer: {
+                          Text("Independent research project. Not affiliated with Apple Inc. Provided as-is.")
+                              .font(.footnote)
+                              .foregroundColor(.secondary)
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .background(Color(UIColor.systemGroupedBackground))
+                  .navigationTitle("About")
+                  .navigationBarTitleDisplayMode(.inline)
+              }
+
+              private func linkRow(_ title: String, url: URL) -> some View {
+                  Button {
+                      openURL(url)
+                  } label: {
+                      HStack(alignment: .top, spacing: 8) {
+                          Text(title)
+                              .foregroundStyle(.tint)
+                              .font(.body)
+                              .fontWeight(.medium)
+                          Spacer(minLength: 8)
+                          Image(systemName: "link")
+                              .font(.system(size: 14, weight: .semibold))
+                              .foregroundStyle(.tint)
+                      }
+                      .padding(.vertical, 2)
+                      .contentShape(Rectangle())
+                  }
+                  .buttonStyle(.plain)
+              }
+          }
+          EOF
+
+      - name: Write DeviceInfoView.swift
+        run: |
+          cat > natsuk1/Views/DeviceInfoView.swift <<'EOF'
+          import SwiftUI
+          import UIKit
+
+          struct DeviceInfoView: View {
+              @Environment(\.dismiss) private var dismiss
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          row("Model", DeviceName.friendly())
+                          row("Identifier", machineID())
+                          row("Chip", DeviceName.chip())
+                          row("iOS", sysctlString("kern.osproductversion"))
+                          row("Build", sysctlString("kern.osversion"))
+                          row("RAM", ram())
+                          row("Architecture", arch())
+                          row("Locale", localeShort())
+                          row("Region", regionShort())
+                          row("Uptime", uptime())
+                      }
+                      .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .background(Color(UIColor.systemGroupedBackground))
+                      .navigationTitle("Device")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Done") { dismiss() }
+                          }
+                      }
+                  }
+              }
+
+              private func row(_ key: String, _ value: String) -> some View {
+                  HStack {
+                      Text(key)
+                      Spacer()
+                      Text(value)
+                          .font(.system(.body, design: .monospaced))
+                          .foregroundColor(.secondary)
+                          .lineLimit(1)
+                          .truncationMode(.middle)
+                  }
+              }
+
+              private func machineID() -> String {
+                  var sysinfo = utsname()
+                  uname(&sysinfo)
+                  return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
+                      guard let v = el.value as? Int8, v != 0 else { return id }
+                      return id + String(UnicodeScalar(UInt8(v)))
+                  }
+              }
+
+              private func sysctlString(_ name: String) -> String {
+                  var size = 0
+                  sysctlbyname(name, nil, &size, nil, 0)
+                  var buf = [CChar](repeating: 0, count: size)
+                  sysctlbyname(name, &buf, &size, nil, 0)
+                  let bytes = buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                  return String(decoding: bytes, as: UTF8.self)
+              }
+
+              private func ram() -> String {
+                  var size: UInt64 = 0
+                  var len = MemoryLayout<UInt64>.size
+                  if sysctlbyname("hw.memsize", &size, &len, nil, 0) != 0 { return "unknown" }
+                  return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .memory)
+              }
+
+              private func arch() -> String {
+                  #if arch(arm64)
+                  return "arm64"
+                  #else
+                  return "unknown"
+                  #endif
+              }
+
+              private func localeShort() -> String {
+                  Locale.current.identifier
+                      .split(separator: "_")
+                      .first
+                      .map(String.init)?
+                      .uppercased() ?? "—"
+              }
+
+              private func regionShort() -> String {
+                  let region = Locale.current.region?.identifier ?? ""
+                  return region.isEmpty ? "—" : region.uppercased()
+              }
+
+              private func uptime() -> String {
+                  let t = ProcessInfo.processInfo.systemUptime
+                  let h = Int(t) / 3600
+                  let m = (Int(t) % 3600) / 60
+                  return "\(h)h \(m)m"
+              }
+          }
+          EOF
+
+      - name: Write Helpers
+        run: |
+          cat > natsuk1/Helpers/KeepAlive.swift <<'EOF'
+          import AVFoundation
+          import CoreLocation
+          import Foundation
+          import Combine
+
+          @MainActor
+          final class KeepAlive: NSObject, ObservableObject {
+              static let shared = KeepAlive()
+
+              @Published private(set) var audioActive: Bool = false
+              @Published private(set) var locationActive: Bool = false
+
+              private var player: AVAudioPlayer?
+              private var locationManager: CLLocationManager?
+
+              private override init() {
+                  super.init()
+              }
+
+              func startAudio() {
+                  guard !audioActive else { return }
+                  do {
+                      let session = AVAudioSession.sharedInstance()
+                      try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                      try session.setActive(true)
+
+                      let wav = Self.silentWavData()
+                      let url = FileManager.default.temporaryDirectory
+                          .appendingPathComponent("keepalive.wav")
+                      try wav.write(to: url)
+
+                      let p = try AVAudioPlayer(contentsOf: url)
+                      p.numberOfLoops = -1
+                      p.volume = 0.0
+                      p.prepareToPlay()
+                      p.play()
+                      player = p
+                      audioActive = true
+                  } catch {
+                      NSLog("[KeepAlive] audio failed: \(error)")
+                      audioActive = false
+                  }
+              }
+
+              func stopAudio() {
+                  guard audioActive else { return }
+                  player?.stop()
+                  player = nil
+                  audioActive = false
+              }
+
+              func startLocation() {
+                  guard !locationActive else { return }
+                  let m = CLLocationManager()
+                  m.delegate = self
+                  m.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+                  m.distanceFilter = 3000
+                  m.pausesLocationUpdatesAutomatically = false
+                  m.allowsBackgroundLocationUpdates = true
+                  m.showsBackgroundLocationIndicator = false
+
+                  let status = m.authorizationStatus
+                  if status == .notDetermined {
+                      m.requestAlwaysAuthorization()
+                  } else if status == .authorizedAlways || status == .authorizedWhenInUse {
+                      m.startUpdatingLocation()
+                      locationActive = true
+                  }
+                  locationManager = m
+              }
+
+              func stopLocation() {
+                  locationManager?.stopUpdatingLocation()
+                  locationManager = nil
+                  locationActive = false
+              }
+
+              nonisolated private static func silentWavData() -> Data {
+                  let sampleRate: UInt32 = 8000
+                  let channels: UInt16 = 1
+                  let bitsPerSample: UInt16 = 16
+                  let durationSec: UInt32 = 1
+                  let numSamples = sampleRate * durationSec
+                  let blockAlign = channels * bitsPerSample / 8
+                  let byteRate = sampleRate * UInt32(blockAlign)
+                  let dataSize = numSamples * UInt32(blockAlign)
+
+                  var d = Data()
+                  func u32(_ v: UInt32) {
+                      var x = v.littleEndian
+                      withUnsafeBytes(of: &x) { d.append(contentsOf: $0) }
+                  }
+                  func u16(_ v: UInt16) {
+                      var x = v.littleEndian
+                      withUnsafeBytes(of: &x) { d.append(contentsOf: $0) }
+                  }
+                  func str(_ s: String) { d.append(contentsOf: Array(s.utf8)) }
+
+                  str("RIFF"); u32(36 + dataSize); str("WAVE")
+                  str("fmt "); u32(16); u16(1); u16(channels)
+                  u32(sampleRate); u32(byteRate); u16(blockAlign); u16(bitsPerSample)
+                  str("data"); u32(dataSize)
+                  d.append(Data(repeating: 0, count: Int(dataSize)))
+                  return d
+              }
+          }
+
+          extension KeepAlive: @preconcurrency CLLocationManagerDelegate {
+              func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+                  let status = manager.authorizationStatus
+                  if status == .authorizedAlways || status == .authorizedWhenInUse {
+                      manager.startUpdatingLocation()
+                      locationActive = true
+                  } else if status == .denied || status == .restricted {
+                      locationActive = false
+                  }
+              }
+
+              func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+              }
+
+              func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+                  NSLog("[KeepAlive] location error: \(error)")
+              }
+          }
+          EOF
+
+          cat > natsuk1/Helpers/OffsetsStore.swift <<'EOF'
+          import Foundation
+          import Combine
+
+          @MainActor
+          final class OffsetsStore: ObservableObject {
+              static let shared = OffsetsStore()
+
+              struct Group: Codable {
+                  let title: String
+                  let items: [String]
+              }
+
+              struct VersionEntry: Codable {
+                  let file: String
+                  let device: String
+                  let deviceName: String
+                  let chip: String
+                  let ios: String
+                  let build: String
+                  let verified: Bool
+              }
+
+              struct Index: Codable {
+                  let versions: [VersionEntry]
+              }
+
+              private struct File: Codable {
+                  let groups: [Group]
+                  let defaults: [String: String]
+              }
+
+              nonisolated private static let bundled: File? = {
+                  guard let fileURL = resolveActiveFileURL() else { return nil }
+                  guard let fileData = try? Data(contentsOf: fileURL),
+                        let parsed = try? JSONDecoder().decode(File.self, from: fileData)
+                  else { return nil }
+                  return parsed
+              }()
+
+              nonisolated static var groups: [Group] { bundled?.groups ?? [] }
+              nonisolated static var defaults: [String: String] { bundled?.defaults ?? [:] }
+
+              nonisolated static var activeVersion: VersionEntry? {
+                  resolveActiveEntry()
+              }
+
+              nonisolated private static func loadIndex() -> Index? {
+                  guard let url = Bundle.main.url(forResource: "index", withExtension: "json", subdirectory: "Offsets"),
+                        let data = try? Data(contentsOf: url),
+                        let index = try? JSONDecoder().decode(Index.self, from: data)
+                  else { return nil }
+                  return index
+              }
+
+              nonisolated private static func resolveActiveEntry() -> VersionEntry? {
+                  guard let index = loadIndex() else { return nil }
+                  let device = DeviceName.machineID()
+                  let v = ProcessInfo.processInfo.operatingSystemVersion
+                  let ios = "\(v.majorVersion).\(v.minorVersion)"
+                  return index.versions.first(where: { $0.device == device && $0.ios == ios })
+                      ?? index.versions.first(where: { $0.device == device })
+              }
+
+              nonisolated private static func resolveActiveFileURL() -> URL? {
+                  guard let entry = resolveActiveEntry() else { return nil }
+                  let parts = entry.file.split(separator: ".", maxSplits: 1).map(String.init)
+                  let name = parts.first ?? entry.file
+                  let ext  = parts.count > 1 ? parts[1] : "json"
+                  return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")
+              }
+
+              @Published var values: [String: String] = [:]
+
+              private let storageKey = "natsuk1_offsets_v2"
+
+              private init() { load() }
+
+              func load() {
+                  let saved = UserDefaults.standard.dictionary(forKey: storageKey) as? [String: String]
+                  var merged = Self.defaults
+                  if let saved = saved {
+                      for (k, v) in saved where merged[k] != nil { merged[k] = v }
+                  }
+                  values = merged
+                  if saved == nil { save() }
+              }
+
+              func save() {
+                  UserDefaults.standard.set(values, forKey: storageKey)
+              }
+
+              func reset() {
+                  values = Self.defaults
+                  save()
+              }
+
+              func resetOne(_ name: String) {
+                  values[name] = Self.defaults[name] ?? "0x0"
+                  save()
+              }
+
+              func update(_ name: String, value: String) {
+                  values[name] = value
+                  save()
+              }
+
+              func value(for name: String) -> String {
+                  values[name] ?? Self.defaults[name] ?? "0x0"
+              }
+
+              func filledCount() -> Int {
+                  values.filter { $0.value != "0x0" && !$0.value.isEmpty }.count
+              }
+
+              func totalCount() -> Int {
+                  Self.groups.reduce(0) { $0 + $1.items.count }
+              }
+          }
+          EOF
+
+          cat > natsuk1/Helpers/DeviceName.swift <<'EOF'
+          import Foundation
+          import UIKit
+
+          enum DeviceName {
+
+              private struct Device {
+                  let id: String
+                  let name: String
+                  let chip: String
+              }
+
+              private static let devices: [Device] = [
+                  Device(id: "iPhone11,2", name: "iPhone XS",           chip: "A12 Bionic"),
+                  Device(id: "iPhone11,4", name: "iPhone XS Max",       chip: "A12 Bionic"),
+                  Device(id: "iPhone11,6", name: "iPhone XS Max",       chip: "A12 Bionic"),
+                  Device(id: "iPhone11,8", name: "iPhone XR",           chip: "A12 Bionic"),
+                  Device(id: "iPhone12,1", name: "iPhone 11",           chip: "A13 Bionic"),
+                  Device(id: "iPhone12,3", name: "iPhone 11 Pro",       chip: "A13 Bionic"),
+                  Device(id: "iPhone12,5", name: "iPhone 11 Pro Max",   chip: "A13 Bionic"),
+                  Device(id: "iPhone12,8", name: "iPhone SE (2nd gen)", chip: "A13 Bionic"),
+                  Device(id: "iPhone13,1", name: "iPhone 12 mini",      chip: "A14 Bionic"),
+                  Device(id: "iPhone13,2", name: "iPhone 12",           chip: "A14 Bionic"),
+                  Device(id: "iPhone13,3", name: "iPhone 12 Pro",       chip: "A14 Bionic"),
+                  Device(id: "iPhone13,4", name: "iPhone 12 Pro Max",   chip: "A14 Bionic"),
+                  Device(id: "iPhone14,2", name: "iPhone 13 Pro",       chip: "A15 Bionic"),
+                  Device(id: "iPhone14,3", name: "iPhone 13 Pro Max",   chip: "A15 Bionic"),
+                  Device(id: "iPhone14,4", name: "iPhone 13 mini",      chip: "A15 Bionic"),
+                  Device(id: "iPhone14,5", name: "iPhone 13",           chip: "A15 Bionic"),
+                  Device(id: "iPhone14,6", name: "iPhone SE (3rd gen)", chip: "A15 Bionic"),
+                  Device(id: "iPhone14,7", name: "iPhone 14",           chip: "A15 Bionic"),
+                  Device(id: "iPhone14,8", name: "iPhone 14 Plus",      chip: "A15 Bionic"),
+                  Device(id: "iPhone15,2", name: "iPhone 14 Pro",       chip: "A16 Bionic"),
+                  Device(id: "iPhone15,3", name: "iPhone 14 Pro Max",   chip: "A16 Bionic"),
+                  Device(id: "iPhone15,4", name: "iPhone 15",           chip: "A16 Bionic"),
+                  Device(id: "iPhone15,5", name: "iPhone 15 Plus",      chip: "A16 Bionic"),
+                  Device(id: "iPhone16,1", name: "iPhone 15 Pro",       chip: "A17 Pro"),
+                  Device(id: "iPhone16,2", name: "iPhone 15 Pro Max",   chip: "A17 Pro"),
+                  Device(id: "iPhone17,1", name: "iPhone 16 Pro",       chip: "A18 Pro"),
+                  Device(id: "iPhone17,2", name: "iPhone 16 Pro Max",   chip: "A18 Pro"),
+                  Device(id: "iPhone17,3", name: "iPhone 16",           chip: "A18"),
+                  Device(id: "iPhone17,4", name: "iPhone 16 Plus",      chip: "A18"),
+                  Device(id: "iPhone17,5", name: "iPhone 16e",          chip: "A18"),
+                  Device(id: "iPhone18,1", name: "iPhone 17 Pro",       chip: "A19 Pro"),
+                  Device(id: "iPhone18,2", name: "iPhone 17 Pro Max",   chip: "A19 Pro"),
+                  Device(id: "iPhone18,3", name: "iPhone 17",           chip: "A19"),
+                  Device(id: "iPhone18,4", name: "iPhone Air",          chip: "A19 Pro"),
+                  Device(id: "iPhone18,5", name: "iPhone 17e",          chip: "A19"),
+              ]
+
+              private static let byID: [String: Device] = Dictionary(
+                  uniqueKeysWithValues: devices.map { ($0.id, $0) }
+              )
+
+              static func friendly() -> String {
+                  let id = machineID()
+                  return byID[id]?.name ?? id
+              }
+
+              static func chip() -> String {
+                  byID[machineID()]?.chip ?? "unknown"
+              }
+
+              static func full() -> String {
+                  let v = ProcessInfo.processInfo.operatingSystemVersion
+                  return "\(friendly()) · iOS \(v.majorVersion).\(v.minorVersion)"
+              }
+
+              static func machineID() -> String {
+                  var info = utsname()
+                  uname(&info)
+                  return Mirror(reflecting: info.machine).children.reduce("") { id, el in
+                      guard let v = el.value as? Int8, v != 0 else { return id }
+                      return id + String(UnicodeScalar(UInt8(v)))
+                  }
+              }
+          }
+          EOF
+
+          cat > natsuk1/Helpers/Respring.swift <<'EOF'
+          import UIKit
+          import Foundation
+          import WebKit
+          import SwiftUI
+
+          struct RespringView: UIViewRepresentable {
+              private static let html = "<!DOCTYPE html><html><body><iframe id=\"frame\" srcdoc=\"\" sandbox=\"allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-presentation allow-scripts\"></iframe><script>const frame=document.getElementById('frame');const funfun=`<html><body><script>const container=document.createElement('div');container.style.cssText='perspective: 1px; perspective-origin: 9999999% 9999999%;';document.body.appendChild(container);for(let i=0;i<500;i++){let d=document.createElement('div');d.style.cssText='position: absolute; width: 100vw; height: 100vh; backdrop-filter: blur(100px); -webkit-backdrop-filter: blur(100px); transform: translate3d(100000px, 100000px, '+i+'px) rotateY(90deg);';container.appendChild(d);}setInterval(()=>{navigator.share({title:'R',text:'R'.repeat(100000)}).catch(()=>{});let x=new Uint8Array(1024*1024*10);crypto.getRandomValues(x);},0);<\\/script></body></html>`;frame.srcdoc=funfun;</script></body></html>"
+
+              func makeUIView(context: Context) -> WKWebView {
+                  let config = WKWebViewConfiguration()
+                  config.defaultWebpagePreferences.allowsContentJavaScript = true
+                  return WKWebView(frame: .zero, configuration: config)
+              }
+
+              func updateUIView(_ webView: WKWebView, context: Context) {
+                  webView.loadHTMLString(Self.html, baseURL: nil)
+              }
+          }
+          EOF
+
+      - name: Write natsuk1.swift
+        run: |
+          cat > natsuk1/natsuk1.swift <<'EOF'
           import SwiftUI
           import UIKit
           import Foundation
 
           final class LockedBuffer: @unchecked Sendable {
-              static let shared = LockedBuffer()
-              private let lock = NSLock()
-              private var value: String = ""
-
-              private init() {}
-
-              func append(_ s: String) {
-                  lock.lock()
-                  value += s
-                  value += "\\n"
-                  if value.count > 10000 {
-                      value = String(value.suffix(6000))
-                  }
-                  lock.unlock()
-              }
-
-              func drain() -> String {
-                  lock.lock()
-                  let v = value
-                  value = ""
-                  lock.unlock()
-                  return v
-              }
-
-              func clear() {
-                  lock.lock()
-                  value = ""
-                  lock.unlock()
-              }
-          }
-
-          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
-              guard let line = line else { return }
-              var bytes: [UInt8] = []
-              var p = line
-              while p.pointee != 0 {
-                  bytes.append(UInt8(bitPattern: p.pointee))
-                  p = p.advanced(by: 1)
-              }
-              LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))
-          }
-
-          private func osVersionString() -> String {
-              let v = ProcessInfo.processInfo.operatingSystemVersion
-              return "\\(v.majorVersion).\\(v.minorVersion)"
-          }
-
-          private func appVersionString() -> String {
-              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-          }
-
-          private var isSupportedIOS: Bool {
-              ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
-          }
-
-          @main
-          struct natsuk1App: App {
-              var body: some Scene {
-                  WindowGroup {
-                      RootView()
-                  }
-              }
-          }
-
-          struct RootView: View {
-              @StateObject private var state = AppState.shared
-              @StateObject private var offsets = OffsetsStore.shared
-              @StateObject private var airlift = AirliftBridge.shared
-              @AppStorage("auto_run") private var auto_run = false
-              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
-              @AppStorage("keep_alive_location") private var keep_alive_location = false
-
-              init() {
-                  UserDefaults.standard.register(defaults: [
-                      "auto_run": false,
-                      "keep_alive_audio": false,
-                      "keep_alive_location": false,
-                      "lang": "en",
-                  ])
-              }
-
-              var body: some View {
-                  Group {
-                      if isSupportedIOS {
-                          ContentView()
-                              .environmentObject(state)
-                              .environmentObject(offsets)
-                              .environmentObject(airlift)
-                              .onAppear {
-                                  nk_set_log(cCallback)
-                                  if state.log.isEmpty {
-                                      state.append("[*] natsuk1 v\\(appVersionString())")
-                                      state.append("[*] iOS \\(osVersionString()) / arm64e")
-                                      if let version = OffsetsStore.activeVersion {
-                                          state.append("[*] offsets: \\(version.device) / iOS \\(version.ios) (\\(version.build))")
-                                      }
-                                      state.append("")
-                                  }
-                                  if keep_alive_audio { KeepAlive.shared.startAudio() }
-                                  if keep_alive_location { KeepAlive.shared.startLocation() }
-                                  if auto_run {
-                                      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                          state.run()
-                                      }
-                                  }
-                              }
-                              .onChange(of: keep_alive_audio) { _, value in
-                                  if value { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
-                              }
-                              .onChange(of: keep_alive_location) { _, value in
-                                  if value { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
-                              }
-                              .overlay {
-                                  if state.show_respring {
-                                      RespringView()
-                                          .brightness(-1.0)
-                                          .ignoresSafeArea()
-                                  }
-                              }
-                      } else {
-                          NotSupportedView(version: osVersionString())
-                      }
-                  }
-                  .preferredColorScheme(.dark)
-              }
-          }
-
-          struct NotSupportedView: View {
-              let version: String
-
-              var body: some View {
-                  VStack(spacing: 20) {
-                      Image(systemName: "exclamationmark.triangle.fill")
-                          .font(.system(size: 56))
-                          .foregroundStyle(.orange)
-                      Text("Not supported for iOS \\(version)")
-                          .font(.title3)
-                          .fontWeight(.semibold)
-                          .multilineTextAlignment(.center)
-                      Text("natsuk1 runs on iOS 27 only.")
-                          .font(.subheadline)
-                          .foregroundColor(.secondary)
-                          .multilineTextAlignment(.center)
-                  }
-                  .padding(40)
-                  .frame(maxWidth: .infinity, maxHeight: .infinity)
-                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
-              }
-          }
-
-          @MainActor
-          final class AppState: ObservableObject {
-              static let shared = AppState()
-
-              enum Status {
-                  case idle, running, ok, failed
-                  var color: Color {
-                      switch self {
-                      case .idle:    return .secondary
-                      case .running: return .orange
-                      case .ok:      return .green
-                      case .failed:  return .red
-                      }
-                  }
-              }
-
-              @Published var log: String = ""
-              @Published var status: Status = .idle
-              @Published var running: Bool = false
-              @Published var show_respring: Bool = false
-
-              @Published var lang: String {
-                  didSet { UserDefaults.standard.set(lang, forKey: "lang") }
-              }
-
-              private init() {
-                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
-                  startFlusher()
-              }
-
-              func t(_ en: String, _ ru: String) -> String {
-                  lang == "ru" ? ru : en
-              }
-
-              private func startFlusher() {
-                  Task { @MainActor [weak self] in
-                      while !Task.isCancelled {
-                          try? await Task.sleep(for: .milliseconds(300))
-                          guard let self else { return }
-                          let chunk = LockedBuffer.shared.drain()
-                          guard !chunk.isEmpty else { continue }
-                          var newLog = self.log
-                          newLog += chunk
-                          if newLog.count > 30000 {
-                              newLog = String(newLog.suffix(20000))
-                          }
-                          self.log = newLog
-                      }
-                  }
-              }
-
-              func append(_ s: String) {
-                  LockedBuffer.shared.append(s)
-              }
-
-              func run() {
-                  if running { return }
-                  running = true
-                  status = .running
-
-                  Task.detached {
-                      _ = nk_full_exploit()
-                      await MainActor.run {
-                          AppState.shared.running = false
-                          AppState.shared.status = .ok
-                      }
-                  }
-              }
-
-              func respring() {
-                  show_respring = true
-              }
-
-              func clear() {
-                  LockedBuffer.shared.clear()
-                  log = ""
-              }
-          }
-          ''')
-
-          print("all source files written")
-          PYEOF
-
-      - name: Patch Info.plist
-        run: |
-          python3 <<'PYEOF'
-          import re
-          p = "natsuk1/Resources/Info.plist"
-          s = open(p).read()
-
-          if "NSBonjourServices" not in s:
-              insert = (
-                  "    <key>NSBonjourServices</key>\n"
-                  "    <array>\n"
-                  "        <string>_remotepairing-pairable-host._tcp</string>\n"
-                  "    </array>\n"
-                  "    <key>NSLocalNetworkUsageDescription</key>\n"
-                  "    <string>natsuk1 advertises a local pairing service so this device can pair with itself.</string>\n"
-              )
-              s = s.replace("</dict>\n</plist>", insert + "</dict>\n</plist>")
-
-          if "UIBackgroundModes" not in s:
-              insert = (
-                  "    <key>UIBackgroundModes</key>\n"
-                  "    <array>\n"
-                  "        <string>audio</string>\n"
-                  "    </array>\n"
-              )
-              s = s.replace("</dict>\n</plist>", insert + "</dict>\n</plist>")
-
-          open(p, "w").write(s)
-          print("info.plist patched")
-          PYEOF
-
-      - name: Patch project.yml
-        run: |
-          python3 <<'PYEOF'
-          import re
-          p = "project.yml"
-          s = open(p).read()
-
-          # 1. Remove broken xcframework framework dependency if present
-          s = re.sub(
-              r'^\s*- framework: natsuk1/External/AirliftFFI\.xcframework\n\s*embed: false\n',
-              '',
-              s, flags=re.M,
-          )
-
-          # 2. Remove External path from sources if present
-          s = re.sub(
-              r'^\s*- path: natsuk1/External\n(?:\s*excludes:\n(?:\s*-.*\n)*)?',
-              '',
-              s, flags=re.M,
-          )
-
-          # 3. Remove duplicated -lc++ if already present
-          s = re.sub(r'(-lc\+\+)(\s+-lc\+\+)', r'\1', s)
-
-          # 4. Add HEADER_SEARCH_PATHS with xcframework headers
-          hdr = '        HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers $(SRCROOT)/natsuk1/Exploit"'
-          if "HEADER_SEARCH_PATHS" in s:
-              s = re.sub(r'^\s*HEADER_SEARCH_PATHS:.*\n', hdr + '\n', s, flags=re.M)
-          else:
-              s = re.sub(
-                  r'(^\s*OTHER_LDFLAGS:.*\n)',
-                  r'\1' + hdr + '\n',
-                  s, flags=re.M,
-              )
-
-          # 5. Add .a to OTHER_LDFLAGS if not already there
-          lib = '$(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a'
-          if lib not in s:
-              s = re.sub(
-                  r'^(\s*OTHER_LDFLAGS:\s*)(.*)$',
-                  r'\1\2 ' + lib + ' -lc++',
-                  s, flags=re.M,
-              )
-          else:
-              if "-lc++" not in s:
-                  s = re.sub(
-                      r'^(\s*OTHER_LDFLAGS:\s*)(.*)$',
-                      r'\1\2 -lc++',
-                      s, flags=re.M,
-                  )
-
-          open(p, "w").write(s)
-          print("---- project.yml ----")
-          print(s)
-          PYEOF
-
-      - name: Cache Homebrew
-        uses: actions/cache@v5
-        with:
-          path: ~/Library/Caches/Homebrew
-          key: brew-${{ runner.os }}-${{ hashFiles('project.yml') }}
-          restore-keys: |
-            brew-${{ runner.os }}-
-
-      - name: Install tools
-        run: |
-          brew install xcodegen ldid
-          brew link --overwrite xcodegen ldid || true
-
-      - name: Generate xcodeproj
-        run: xcodegen generate
-
-      - name: Cache DerivedData
-        uses: actions/cache@v5
-        with:
-          path: |
-            build/Build/Intermediates.noindex
-            build/ModuleCache.noindex
-            build/SDKStatCaches.noindex
-          key: dd-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ env.CACHE_SALT }}-${{ hashFiles('natsuk1/**/*.swift', 'natsuk1/**/*.c', 'natsuk1/**/*.h', 'project.yml') }}
-          restore-keys: |
-            dd-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ env.CACHE_SALT }}-
-            dd-${{ runner.os }}-${{ env.XCODE_VERSION }}-
-
-      - name: Build
-        id: build
-        run: |
-          set -euo pipefail
-          xcodebuild \
-            -project natsuk1.xcodeproj \
-            -scheme natsuk1 \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build \
-            -parallelizeTargets \
-            -jobs "$(sysctl -n hw.ncpu)" \
-            CODE_SIGNING_ALLOWED=NO \
-            -UseModernBuildSystem=YES \
-            build -quiet
-
-          APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
-          if [ -z "$APP_PATH" ]; then
-            echo "No .app produced"
-            exit 1
-          fi
-          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
-          ls -la "$APP_PATH"
-
-      - name: Package app for handoff
-        run: |
-          set -euo pipefail
-          APP_PATH="${{ steps.build.outputs.app_path }}"
-          APP_DIR="$(dirname "$APP_PATH")"
-          APP_NAME="$(basename "$APP_PATH")"
-          COPYFILE_DISABLE=1 tar -czf natsuk1-app.tar.gz -C "$APP_DIR" "$APP_NAME"
-          ls -lh natsuk1-app.tar.gz
-
-      - name: Upload app tarball
-        uses: actions/upload-artifact@v6
-        with:
-          name: natsuk1-app-tar
-          path: natsuk1-app.tar.gz
-          retention-days: 7
-          if-no-files-found: error
-
-      - name: Commit fixes if any
-        if: success()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-            exit 0
-          fi
-          git commit -m "Airlift integration: direct .a linking, Python-written sources, safe concurrency [skip ci]"
-          git push
+              static let shared =
