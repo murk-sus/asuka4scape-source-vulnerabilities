@@ -4,7 +4,7 @@ import Foundation
 import Combine
 
 final class KeepAlive: NSObject, ObservableObject {
-    static let shared = KeepAlive()
+    nonisolated(unsafe) static let shared = KeepAlive()
 
     @Published private(set) var audioActive: Bool = false
     @Published private(set) var locationActive: Bool = false

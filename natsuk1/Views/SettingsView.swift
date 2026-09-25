@@ -1,4 +1,3 @@
-
 import SwiftUI
 import UIKit
 
@@ -196,7 +195,6 @@ struct SettingsView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(Color.black)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {

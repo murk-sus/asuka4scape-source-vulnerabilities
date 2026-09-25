@@ -1,4 +1,3 @@
-
 import SwiftUI
 import UIKit
 
@@ -38,7 +37,6 @@ struct OffsetsView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(Color.black)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
         .navigationTitle("Modify Offsets")
         .navigationBarTitleDisplayMode(.inline)
@@ -165,7 +163,6 @@ struct EditOffsetView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(Color.black)
             .navigationTitle("Edit")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -230,7 +227,6 @@ struct ExportOffsetsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
-            .background(Color.black)
             .navigationTitle("Export")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

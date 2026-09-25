@@ -1,12 +1,17 @@
-
 import SwiftUI
 import UIKit
 import Foundation
 
 private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
     guard let line = line else { return }
-    let s = String(cString: line)
-    DispatchQueue.main.async {
+    var bytes: [UInt8] = []
+    var p = line
+    while p.pointee != 0 {
+        bytes.append(UInt8(bitPattern: p.pointee))
+        p = p.advanced(by: 1)
+    }
+    let s = String(decoding: bytes, as: UTF8.self)
+    Task { @MainActor in
         AppState.shared.append(s)
     }
 }
@@ -114,7 +119,7 @@ struct NotSupportedView: View {
 }
 
 final class AppState: ObservableObject {
-    static let shared = AppState()
+    nonisolated(unsafe) static let shared = AppState()
 
     enum Status {
         case idle, running, ok, failed

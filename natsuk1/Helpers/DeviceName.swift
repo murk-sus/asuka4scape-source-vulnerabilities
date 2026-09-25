@@ -81,9 +81,9 @@ enum DeviceName {
     static func machineID() -> String {
         var info = utsname()
         uname(&info)
-        return withUnsafeBytes(of: &info.machine) { raw -> String in
-            let ptr = raw.baseAddress!.assumingMemoryBound(to: CChar.self)
-            return String(cString: ptr)
+        return Mirror(reflecting: info.machine).children.reduce("") { id, el in
+            guard let v = el.value as? Int8, v != 0 else { return id }
+            return id + String(UnicodeScalar(UInt8(v)))
         }
     }
 }

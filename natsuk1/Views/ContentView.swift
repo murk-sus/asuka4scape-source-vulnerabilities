@@ -1,4 +1,3 @@
-
 import SwiftUI
 import UIKit
 
@@ -82,7 +81,6 @@ struct ContentView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(Color.black)
             .navigationTitle("natsuk1")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -158,7 +156,7 @@ private extension View {
             .frame(maxWidth: .infinity)
             .frame(minHeight: 180, idealHeight: 260, maxHeight: 400)
             .padding(10)
-            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .background(Color(white: 0.11))
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }

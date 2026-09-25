@@ -1,4 +1,3 @@
-
 import SwiftUI
 import UIKit
 
@@ -21,7 +20,6 @@ struct DeviceInfoView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(Color.black)
             .navigationTitle("Device")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -59,7 +57,8 @@ struct DeviceInfoView: View {
         sysctlbyname(name, nil, &size, nil, 0)
         var buf = [CChar](repeating: 0, count: size)
         sysctlbyname(name, &buf, &size, nil, 0)
-        return String(cString: buf)
+        let bytes = buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private func ram() -> String {

@@ -2,7 +2,7 @@ import Foundation
 import Combine
 
 final class OffsetsStore: ObservableObject {
-    static let shared = OffsetsStore()
+    nonisolated(unsafe) static let shared = OffsetsStore()
 
     struct Group: Codable {
         let title: String

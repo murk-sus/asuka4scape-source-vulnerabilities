@@ -1,4 +1,3 @@
-
 import SwiftUI
 import UIKit
 
@@ -80,9 +79,9 @@ struct AboutView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(Color.black)
         .navigationTitle("About")
         .navigationBarTitleDisplayMode(.inline)
+        .background(Color.black.ignoresSafeArea())
     }
 
     private func linkRow(_ title: String, url: URL) -> some View {
@@ -156,8 +155,8 @@ struct AcknowledgementsView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(Color.black)
         .navigationTitle("Acknowledgements")
         .navigationBarTitleDisplayMode(.inline)
+        .background(Color.black.ignoresSafeArea())
     }
 }
