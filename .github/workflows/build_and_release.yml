@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: build-release-${{ github.ref }}
@@ -23,57 +24,77 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
-      - name: Select Xcode ${{ env.XCODE_VERSION }}
-        uses: maxim-lobanov/setup-xcode@v1
+      - name: Download app tarball
+        uses: actions/download-artifact@v6
         with:
-          xcode-version: ${{ env.XCODE_VERSION }}
-
-      - name: Download app bundle
-        uses: actions/download-artifact@v4
-        with:
-          name: natsuk1-app
-          path: app-bundle
+          name: natsuk1-app-tar
+          path: artifact
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cache Homebrew
-        uses: actions/cache@v5
-        with:
-          path: ~/Library/Caches/Homebrew
-          key: brew-release-${{ runner.os }}
-          restore-keys: |
-            brew-${{ runner.os }}-
+      - name: Unpack tarball
+        id: unpack
+        run: |
+          set -euo pipefail
+
+          if [ ! -f artifact/natsuk1-app.tar.gz ]; then
+            echo "Tarball not found:"
+            find artifact -type f
+            exit 1
+          fi
+
+          mkdir -p app-out
+          tar -xzf artifact/natsuk1-app.tar.gz -C app-out
+
+          APP_PATH="$(find app-out -maxdepth 2 -name '*.app' -type d -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "No .app after unpack"
+            find app-out -maxdepth 3
+            exit 1
+          fi
+
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          echo "Unpacked: $APP_PATH"
+          ls -la "$APP_PATH"
 
       - name: Install ldid
         run: |
           brew install ldid
-          brew link --overwrite ldid
+          brew link --overwrite ldid || true
 
-      - name: Package IPA
-        id: package
+      - name: Sign binary
         run: |
           set -euo pipefail
+          APP_PATH="${{ steps.unpack.outputs.app_path }}"
+          BIN="$APP_PATH/natsuk1"
 
-          APP_PATH="$(find app-bundle -maxdepth 1 -name '*.app' -print -quit)"
-          if [ -z "$APP_PATH" ]; then
-            echo "No .app found in artifact"
-            ls -la app-bundle
+          if [ ! -f "$BIN" ]; then
+            echo "Binary missing: $BIN"
+            ls -la "$APP_PATH"
             exit 1
           fi
-          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
-          echo "app_name=$(basename "$APP_PATH")" >> "$GITHUB_OUTPUT"
 
-          ldid -Snatsuk1/Resources/natsuk1.entitlements "$APP_PATH/natsuk1"
+          chmod +x "$BIN"
+          ldid -Snatsuk1/Resources/natsuk1.entitlements "$BIN"
+
+          echo "verify after ldid:"
+          ls -la "$BIN"
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="${{ steps.unpack.outputs.app_path }}"
 
           rm -rf Payload natsuk1.ipa
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          ditto -c -k --norsrc --keepParent Payload natsuk1.ipa
+
+          COPYFILE_DISABLE=1 zip -qry natsuk1.ipa Payload
           rm -rf Payload
 
           ls -lh natsuk1.ipa
@@ -91,12 +112,12 @@ jobs:
           NOTES="$(git log -5 --pretty=format:'- %h %s')"
 
           gh release create development natsuk1.ipa \
-            --target "${GITHUB_SHA}" \
+            --target "${{ github.event.workflow_run.head_sha || github.sha }}" \
             --title "Development" \
             --prerelease \
             --latest=false \
             --notes "Automated build
 
-          Source commit: ${GITHUB_SHA}
+          Source commit: ${{ github.event.workflow_run.head_sha || github.sha }}
 
           ${NOTES}"
