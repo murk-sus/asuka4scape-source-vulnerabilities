@@ -17,6 +17,9 @@ struct DeviceInfoView: View {
                 row("Region", regionShort())
                 row("Uptime", uptime())
             }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("Device")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

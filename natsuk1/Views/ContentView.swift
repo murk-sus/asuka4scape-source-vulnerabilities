@@ -81,9 +81,10 @@ struct ContentView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("natsuk1")
             .navigationBarTitleDisplayMode(.inline)
-            .tint(.blue)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -96,10 +97,13 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $show_settings) {
-                SettingsView().environmentObject(state)
+                SettingsView()
+                    .environmentObject(state)
+                    .presentationBackground(Color(UIColor.systemGroupedBackground))
             }
             .sheet(isPresented: $show_device) {
                 DeviceInfoView()
+                    .presentationBackground(Color(UIColor.systemGroupedBackground))
             }
         }
     }
@@ -124,6 +128,7 @@ struct LogView: View {
                 .frame(maxWidth: .infinity, minHeight: 240, alignment: .topLeading)
                 .contentShape(Rectangle())
             }
+            .tint(Color(UIColor.systemGray))
             .contextMenu {
                 Button {
                     UIPasteboard.general.string = state.log

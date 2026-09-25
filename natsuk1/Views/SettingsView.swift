@@ -172,9 +172,10 @@ struct SettingsView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
-            .tint(.blue)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }

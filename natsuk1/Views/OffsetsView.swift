@@ -36,10 +36,11 @@ struct OffsetsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color(UIColor.systemGroupedBackground))
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
         .navigationTitle("Modify Offsets")
         .navigationBarTitleDisplayMode(.inline)
-        .tint(.blue)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
@@ -50,7 +51,8 @@ struct OffsetsView: View {
                         Label("Reset All", systemImage: "arrow.uturn.backward")
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle").foregroundStyle(Color.secondary)
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(Color(UIColor.tertiaryLabel))
                 }
             }
         }
@@ -58,10 +60,14 @@ struct OffsetsView: View {
             get: { editing.map { EditTarget(name: $0) } },
             set: { editing = $0?.name }
         )) { target in
-            EditOffsetView(name: target.name).environmentObject(store)
+            EditOffsetView(name: target.name)
+                .environmentObject(store)
+                .presentationBackground(Color(UIColor.systemGroupedBackground))
         }
         .sheet(isPresented: $showExport) {
-            ExportOffsetsView().environmentObject(store)
+            ExportOffsetsView()
+                .environmentObject(store)
+                .presentationBackground(Color(UIColor.systemGroupedBackground))
         }
         .alert("Reset All Offsets?", isPresented: $showResetAll) {
             Button("Cancel", role: .cancel) {}
@@ -128,7 +134,6 @@ struct EditOffsetView: View {
                     Text(name)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
                 } header: {
                     Text("Offset")
                 }
@@ -220,6 +225,7 @@ struct ExportOffsetsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
+            .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("Export")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
