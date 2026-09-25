@@ -88,7 +88,6 @@ struct SettingsView: View {
                                 .foregroundStyle(.primary)
                             Spacer(minLength: 8)
                         }
-                        .contentShape(Rectangle())
                     }
                 } header: {
                     Label("About", systemImage: "info.circle")
@@ -124,7 +123,6 @@ struct SettingsView: View {
                                 .font(.system(size: 13, design: .monospaced))
                                 .foregroundColor(.secondary)
                         }
-                        .contentShape(Rectangle())
                     }
                 } header: {
                     Label("Exploit", systemImage: "cpu")
@@ -171,24 +169,7 @@ struct SettingsView: View {
                                 .foregroundStyle(.primary)
                             Spacer(minLength: 8)
                         }
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        state.clear()
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "trash")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 20)
-                            Text("Clear Log")
-                                .foregroundStyle(.primary)
-                            Spacer(minLength: 8)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
                 } header: {
                     Label("Tools", systemImage: "wrench.and.screwdriver")
                 }

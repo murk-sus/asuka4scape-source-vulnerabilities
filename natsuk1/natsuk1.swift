@@ -45,6 +45,11 @@ private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line i
     LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))
 }
 
+
+private func appVersionString() -> String {
+    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+}
+
 private func osVersionString() -> String {
     let v = ProcessInfo.processInfo.operatingSystemVersion
     return "\(v.majorVersion).\(v.minorVersion)"
@@ -88,7 +93,7 @@ struct RootView: View {
                     .onAppear {
                         nk_set_log(cCallback)
                         if state.log.isEmpty {
-                            state.append("[*] natsuk1 v6.0")
+                            state.append("[*] natsuk1 v\(appVersionString())")
                             state.append("[*] iOS \(osVersionString()) / arm64e")
                             if let version = OffsetsStore.activeVersion {
                                 state.append("[*] offsets: \(version.device) / iOS \(version.ios) (\(version.build))")

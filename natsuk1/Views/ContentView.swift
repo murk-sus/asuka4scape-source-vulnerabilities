@@ -26,15 +26,10 @@ struct ContentView: View {
                                 ProgressView().scaleEffect(0.8)
                             }
                         }
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
                     .disabled(state.running)
                 } header: {
                     Label(state.t("Actions", "Действия"), systemImage: "play.circle")
-                } footer: {
-                    Text(state.t("Runs kernel exploit, prints offsets and reference data.",
-                                 "Запускает эксплойт, выводит оффсеты и справочные данные."))
                 }
 
                 Section {
@@ -63,9 +58,7 @@ struct ContentView: View {
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(Color(UIColor.tertiaryLabel))
                         }
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
                 } header: {
                     Label(state.t("Runtime", "Состояние"), systemImage: "waveform.path.ecg")
                 }
@@ -105,6 +98,7 @@ struct ContentView: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(Color(UIColor.systemGroupedBackground))
+            .scrollEdgeEffectHidden(true, for: .top)
             .navigationTitle("natsuk1")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -115,7 +109,6 @@ struct ContentView: View {
                         Image(systemName: "gear")
                             .foregroundStyle(Color(UIColor.tertiaryLabel))
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .sheet(isPresented: $show_settings) {
@@ -142,7 +135,6 @@ struct LogView: View {
                     .multilineTextAlignment(.leading)
                     .foregroundColor(state.log.isEmpty ? .secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
 
                 Spacer(minLength: 0)
                     .id(0)
