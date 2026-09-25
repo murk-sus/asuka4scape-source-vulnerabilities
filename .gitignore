@@ -2,7 +2,11 @@ natsuk1.xcodeproj/
 build/
 DerivedData/
 *.ipa
+*.tar.gz
+natsuk1-app.tar.gz
+natsuk1.ipa
 .DS_Store
 xcuserdata/
 *.xcuserstate
 Payload/
+reference/
