@@ -41,7 +41,6 @@ settings:
     GCC_NO_COMMON_BLOCKS: YES
     CLANG_LTO: NO
     LLVM_LTO: NO
-
   configs:
     Debug:
       SWIFT_OPTIMIZATION_LEVEL: "-Onone"
@@ -54,7 +53,6 @@ settings:
       DEBUG_INFORMATION_FORMAT: dwarf
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
       ENABLE_TESTABILITY: YES
-
     Release:
       SWIFT_OPTIMIZATION_LEVEL: "-Osize"
       SWIFT_COMPILATION_MODE: wholemodule

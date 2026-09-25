@@ -11,17 +11,10 @@ struct OverviewView: View {
                     Button {
                         state.run()
                     } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "bolt.fill")
-                                .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(.tint)
-                                .frame(width: 22, alignment: .center)
+                        HStack {
                             Text(state.t("Run Exploit", "Запустить эксплойт"))
-                                .foregroundStyle(.primary)
-                            Spacer(minLength: 8)
-                            if state.running {
-                                ProgressView().scaleEffect(0.8)
-                            }
+                            Spacer()
+                            if state.running { ProgressView().scaleEffect(0.8) }
                         }
                     }
                     .disabled(state.running)
@@ -33,86 +26,48 @@ struct OverviewView: View {
                     HStack {
                         Text(state.t("Status", "Статус"))
                         Spacer()
-                        Circle()
-                            .fill(state.status.color)
-                            .frame(width: 8, height: 8)
-                            .shadow(color: state.status.color.opacity(0.7), radius: 3)
+                        Circle().fill(state.status.color).frame(width: 8, height: 8)
                     }
                 } header: {
                     Label(state.t("Runtime", "Состояние"), systemImage: "waveform.path.ecg")
                 } footer: {
-                    Text(DeviceName.full())
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                    Text(DeviceName.full()).font(.system(size: 12, design: .monospaced))
                 }
 
                 Section {
-                    OverviewLogView()
-                        .environmentObject(state)
-                        .terminalPlatter()
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                    LogTerminal(text: state.log.isEmpty ? "Awaiting execution." : state.log)
                 } header: {
-                    Label(state.t("Logs", "Логи"), systemImage: "text.alignleft")
+                    Label(state.t("Logs", "Логи"), systemImage: "terminal")
                 }
 
                 Section {
-                    Button {
-                        UIPasteboard.general.string = state.log
-                    } label: {
-                        Label(state.t("Copy All", "Копировать всё"),
-                              systemImage: "document.on.document")
-                    }
-                    .disabled(state.log.isEmpty)
-
-                    Button(role: .destructive) {
-                        state.clear()
-                    } label: {
-                        Label(state.t("Clear", "Очистить"),
-                              systemImage: "trash")
-                    }
-                    .disabled(state.log.isEmpty)
+                    Button { UIPasteboard.general.string = state.log } label: {
+                        Text(state.t("Copy All", "Копировать всё"))
+                    }.disabled(state.log.isEmpty)
+                    Button(role: .destructive) { state.clear() } label: {
+                        Text(state.t("Clear", "Очистить"))
+                    }.disabled(state.log.isEmpty)
                 } header: {
                     Label(state.t("Log Actions", "Действия с логом"), systemImage: "ellipsis.circle")
                 }
             }
             .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
-            .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("natsuk1")
             .navigationBarTitleDisplayMode(.inline)
         }
     }
 }
 
-struct OverviewLogView: View {
-    @EnvironmentObject var state: AppState
-
+struct LogTerminal: View {
+    let text: String
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(showsIndicators: false) {
-                Text(state.log.isEmpty ? "Awaiting execution." : state.log)
-                    .font(.system(size: 10, design: .monospaced))
-                    .multilineTextAlignment(.leading)
-                    .foregroundColor(state.log.isEmpty ? .secondary : .primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer(minLength: 0).id(0)
-            }
-            .onChange(of: state.log) { _, _ in
-                withAnimation(.linear(duration: 0.05)) {
-                    proxy.scrollTo(0, anchor: .bottom)
-                }
-            }
+        ScrollView {
+            Text(text)
+                .font(.system(size: 10, design: .monospaced))
+                .multilineTextAlignment(.leading)
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-    }
-}
-
-extension View {
-    func terminalPlatter() -> some View {
-        self
-            .frame(maxWidth: .infinity)
-            .frame(minHeight: 180, idealHeight: 260, maxHeight: 400)
-            .padding(10)
-            .background(.regularMaterial,
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(minHeight: 200, maxHeight: 400)
     }
 }
