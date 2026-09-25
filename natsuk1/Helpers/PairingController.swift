@@ -17,7 +17,7 @@ var pairingPIN: String? = nil
 
     nonisolated(unsafe) static var customPairingFilePath: String? = nil
 
-    private static let altIRKKey = "aircardPairingHostAltIRK"
+    nonisolated private static let altIRKKey = "aircardPairingHostAltIRK"
     private static var storedAltIRK: String {
         get { UserDefaults.standard.string(forKey: altIRKKey) ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: altIRKKey) }
