@@ -246,14 +246,6 @@ jobs:
               open(p, "w").write(s)
               print("patched LocalNetworkAuthorization")
 
-          p = "natsuk1/Resources/Info.plist"
-          if os.path.exists(p):
-              s = open(p).read()
-              s = s.replace("_aircardprobe._tcp", "_natsuk1probe._tcp")
-              s = s.replace("aircard", "natsuk1")
-              open(p, "w").write(s)
-              print("patched Info.plist")
-
           def handle(fp):
               src = open(fp).read()
               new = re.sub(r"@MainActor\s*", "", src)
@@ -275,6 +267,303 @@ jobs:
 
       - name: Apply patch
         run: python3 /tmp/patch.py
+
+      - name: Write natsuk1.swift
+        run: |
+          cat > natsuk1/natsuk1.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+          import Foundation
+
+          final class LockedBuffer: @unchecked Sendable {
+              nonisolated(unsafe) static let shared = LockedBuffer()
+              private let lock = NSLock()
+              private var value: String = ""
+
+              private init() {}
+
+              func append(_ s: String) {
+                  lock.lock()
+                  value += s
+                  value += "\n"
+                  if value.count > 10000 {
+                      value = String(value.suffix(6000))
+                  }
+                  lock.unlock()
+              }
+
+              func drain() -> String {
+                  lock.lock()
+                  let v = value
+                  value = ""
+                  lock.unlock()
+                  return v
+              }
+
+              func clear() {
+                  lock.lock()
+                  value = ""
+                  lock.unlock()
+              }
+          }
+
+          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
+              guard let line = line else { return }
+              var bytes: [UInt8] = []
+              var p = line
+              while p.pointee != 0 {
+                  bytes.append(UInt8(bitPattern: p.pointee))
+                  p = p.advanced(by: 1)
+              }
+              LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))
+          }
+
+          private func osVersionString() -> String {
+              let v = ProcessInfo.processInfo.operatingSystemVersion
+              return "\(v.majorVersion).\(v.minorVersion)"
+          }
+
+          private func appVersionString() -> String {
+              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+          }
+
+          private var isSupportedIOS: Bool {
+              ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
+          }
+
+          @main
+          struct natsuk1App: App {
+              var body: some Scene {
+                  WindowGroup {
+                      RootView()
+                  }
+              }
+          }
+
+          struct RootView: View {
+              @StateObject private var state = AppState.shared
+              @StateObject private var offsets = OffsetsStore.shared
+              @StateObject private var airlift = AirliftBridge.shared
+              @AppStorage("auto_run") private var auto_run = false
+              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
+              @AppStorage("keep_alive_location") private var keep_alive_location = false
+
+              init() {
+                  UserDefaults.standard.register(defaults: [
+                      "auto_run": false,
+                      "keep_alive_audio": false,
+                      "keep_alive_location": false,
+                      "lang": "en",
+                  ])
+              }
+
+              var body: some View {
+                  Group {
+                      if isSupportedIOS {
+                          ContentView()
+                              .environmentObject(state)
+                              .environmentObject(offsets)
+                              .environmentObject(airlift)
+                              .onAppear {
+                                  nk_set_log(cCallback)
+                                  if state.log.isEmpty {
+                                      state.append("[*] natsuk1 v\(appVersionString())")
+                                      state.append("[*] iOS \(osVersionString()) / arm64e")
+                                      if let version = OffsetsStore.activeVersion {
+                                          state.append("[*] offsets: \(version.device) / iOS \(version.ios) (\(version.build))")
+                                      }
+                                      state.append("")
+                                  }
+                                  if keep_alive_audio { KeepAlive.shared.startAudio() }
+                                  if keep_alive_location { KeepAlive.shared.startLocation() }
+                                  if auto_run {
+                                      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                          state.run()
+                                      }
+                                  }
+                              }
+                              .onChange(of: keep_alive_audio) { _, value in
+                                  if value { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
+                              }
+                              .onChange(of: keep_alive_location) { _, value in
+                                  if value { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
+                              }
+                              .overlay {
+                                  if state.show_respring {
+                                      RespringView()
+                                          .brightness(-1.0)
+                                          .ignoresSafeArea()
+                                  }
+                              }
+                      } else {
+                          NotSupportedView(version: osVersionString())
+                      }
+                  }
+              }
+          }
+
+          struct NotSupportedView: View {
+              let version: String
+
+              var body: some View {
+                  VStack(spacing: 20) {
+                      Image(systemName: "exclamationmark.triangle.fill")
+                          .font(.system(size: 56))
+                          .symbolRenderingMode(.hierarchical)
+                          .foregroundStyle(.orange)
+                      Text("Not supported for iOS \(version)")
+                          .font(.title3)
+                          .fontWeight(.semibold)
+                          .multilineTextAlignment(.center)
+                      Text("natsuk1 runs on iOS 27 only.")
+                          .font(.subheadline)
+                          .foregroundColor(.secondary)
+                          .multilineTextAlignment(.center)
+                  }
+                  .padding(40)
+                  .frame(maxWidth: .infinity, maxHeight: .infinity)
+                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+              }
+          }
+
+          final class AppState: ObservableObject, @unchecked Sendable {
+              nonisolated(unsafe) static let shared = AppState()
+
+              enum Status {
+                  case idle, running, ok, failed
+                  var color: Color {
+                      switch self {
+                      case .idle:    return .secondary
+                      case .running: return .orange
+                      case .ok:      return .green
+                      case .failed:  return .red
+                      }
+                  }
+              }
+
+              @Published var log: String = ""
+              @Published var status: Status = .idle
+              @Published var running: Bool = false
+              @Published var show_respring: Bool = false
+
+              @Published var lang: String {
+                  didSet { UserDefaults.standard.set(lang, forKey: "lang") }
+              }
+
+              private init() {
+                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
+                  startFlusher()
+              }
+
+              func t(_ en: String, _ ru: String) -> String {
+                  lang == "ru" ? ru : en
+              }
+
+              private func startFlusher() {
+                  Task { [weak self] in
+                      while !Task.isCancelled {
+                          try? await Task.sleep(for: .milliseconds(300))
+                          guard let self else { return }
+                          let chunk = LockedBuffer.shared.drain()
+                          guard !chunk.isEmpty else { continue }
+                          var newLog = self.log
+                          newLog += chunk
+                          if newLog.count > 30000 {
+                              newLog = String(newLog.suffix(20000))
+                          }
+                          self.log = newLog
+                      }
+                  }
+              }
+
+              func append(_ s: String) {
+                  LockedBuffer.shared.append(s)
+              }
+
+              func run() {
+                  if running { return }
+                  running = true
+                  status = .running
+
+                  Task.detached {
+                      _ = nk_full_exploit()
+                      await MainActor.run {
+                          AppState.shared.running = false
+                          AppState.shared.status = .ok
+                      }
+                  }
+              }
+
+              func respring() {
+                  show_respring = true
+              }
+
+              func clear() {
+                  LockedBuffer.shared.clear()
+                  log = ""
+              }
+          }
+          SWIFT
+          echo "wrote natsuk1.swift"
+
+      - name: Write Info.plist
+        run: |
+          cat > natsuk1/Resources/Info.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key><string>en</string>
+              <key>CFBundleExecutable</key><string>natsuk1</string>
+              <key>CFBundleIdentifier</key><string>com.natsuk1.exploit</string>
+              <key>CFBundleName</key><string>natsuk1</string>
+              <key>CFBundleDisplayName</key><string>natsuk1</string>
+              <key>CFBundleVersion</key><string>1.0.0</string>
+              <key>CFBundleShortVersionString</key><string>1.0.0</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+              <key>MinimumOSVersion</key><string>26.0</string>
+              <key>UILaunchScreen</key>
+              <dict/>
+              <key>UIApplicationSceneManifest</key>
+              <dict>
+                  <key>UIApplicationSupportsMultipleScenes</key><false/>
+              </dict>
+              <key>UIStatusBarHidden</key><false/>
+              <key>UIViewControllerBasedStatusBarAppearance</key><true/>
+              <key>UISupportedInterfaceOrientations</key>
+              <array><string>UIInterfaceOrientationPortrait</string></array>
+              <key>UISupportedInterfaceOrientations~ipad</key>
+              <array>
+                  <string>UIInterfaceOrientationPortrait</string>
+                  <string>UIInterfaceOrientationPortraitUpsideDown</string>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+              <key>UIRequiredDeviceCapabilities</key>
+              <array><string>arm64</string></array>
+              <key>UIFileSharingEnabled</key><true/>
+              <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+              <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+              <string>Keeps the app running in the background.</string>
+              <key>NSLocationWhenInUseUsageDescription</key>
+              <string>Keeps the app running in the background.</string>
+              <key>UIBackgroundModes</key>
+              <array>
+                  <string>audio</string>
+                  <string>location</string>
+              </array>
+              <key>NSBonjourServices</key>
+              <array>
+                  <string>_remotepairing-pairable-host._tcp</string>
+                  <string>_natsuk1probe._tcp</string>
+              </array>
+              <key>NSLocalNetworkUsageDescription</key>
+              <string>natsuk1 advertises a local pairing service so this device can pair with itself.</string>
+          </dict>
+          </plist>
+          PLIST
+          echo "wrote Info.plist"
 
       - name: Write AirliftBridge.swift
         run: |
@@ -533,6 +822,211 @@ jobs:
           SWIFT
           echo "wrote AirliftBridge.swift"
 
+      - name: Write MobileGestalt.swift
+        run: |
+          cat > natsuk1/Helpers/MobileGestalt.swift <<'SWIFT'
+          import Foundation
+          import CoreFoundation
+
+          final class MobileGestalt: @unchecked Sendable {
+              nonisolated(unsafe) static let shared = MobileGestalt()
+
+              private typealias CopyAnswerFn = @convention(c) (CFString) -> Unmanaged<CFTypeRef>?
+              private typealias BoolFn       = @convention(c) (CFString) -> Bool
+              private typealias SInt32Fn     = @convention(c) (CFString) -> Int32
+              private typealias SInt64Fn     = @convention(c) (CFString) -> Int64
+              private typealias Float32Fn    = @convention(c) (CFString) -> Float32
+
+              private var handle: UnsafeMutableRawPointer?
+              private var copyAnswerFn: CopyAnswerFn?
+              private var boolFn: BoolFn?
+              private var sInt32Fn: SInt32Fn?
+              private var sInt64Fn: SInt64Fn?
+              private var float32Fn: Float32Fn?
+
+              private(set) var loaded: Bool = false
+              private(set) var loadError: String?
+
+              private let storageKey = "natsuk1_mg_overrides"
+              private var overrides: [String: String]
+
+              private init() {
+                  self.overrides =
+                      (UserDefaults.standard.dictionary(forKey: storageKey) as? [String: String]) ?? [:]
+                  load()
+              }
+
+              private func load() {
+                  let path = "/usr/lib/libMobileGestalt.dylib"
+                  guard let h = dlopen(path, RTLD_NOW) else {
+                      loadError = "dlopen failed: \(String(cString: dlerror()))"
+                      return
+                  }
+                  handle = h
+                  if let s = dlsym(h, "MGCopyAnswer") {
+                      copyAnswerFn = unsafeBitCast(s, to: CopyAnswerFn.self)
+                  }
+                  if let s = dlsym(h, "MGGetBoolAnswer") {
+                      boolFn = unsafeBitCast(s, to: BoolFn.self)
+                  }
+                  if let s = dlsym(h, "MGGetSInt32Answer") {
+                      sInt32Fn = unsafeBitCast(s, to: SInt32Fn.self)
+                  }
+                  if let s = dlsym(h, "MGGetSInt64Answer") {
+                      sInt64Fn = unsafeBitCast(s, to: SInt64Fn.self)
+                  }
+                  if let s = dlsym(h, "MGGetFloat32Answer") {
+                      float32Fn = unsafeBitCast(s, to: Float32Fn.self)
+                  }
+                  loaded = copyAnswerFn != nil
+                  if !loaded { loadError = "MGCopyAnswer not found" }
+              }
+
+              func overrideValue(for key: String) -> String? {
+                  return overrides[key]
+              }
+
+              func setOverride(_ key: String, value: String?) {
+                  if let v = value, !v.isEmpty {
+                      overrides[key] = v
+                  } else {
+                      overrides.removeValue(forKey: key)
+                  }
+                  UserDefaults.standard.set(overrides, forKey: storageKey)
+              }
+
+              func clearAllOverrides() {
+                  overrides.removeAll()
+                  UserDefaults.standard.removeObject(forKey: storageKey)
+              }
+
+              var overrideCount: Int { overrides.count }
+              var overrideKeys: [String] { overrides.keys.sorted() }
+
+              func raw(_ key: String) -> CFTypeRef? {
+                  guard let f = copyAnswerFn else { return nil }
+                  return f(key as CFString)?.takeRetainedValue()
+              }
+
+              func string(_ key: String) -> String? {
+                  if let ov = overrides[key] { return ov }
+                  guard let v = raw(key) else { return nil }
+                  if let s = v as? String { return s }
+                  if let n = v as? NSNumber { return n.stringValue }
+                  if let d = v as? Data {
+                      return d.map { String(format: "%02x", $0) }.joined()
+                  }
+                  if let arr = v as? [Any] {
+                      return arr.map { "\($0)" }.joined(separator: ", ")
+                  }
+                  return "\(v)"
+              }
+
+              func bool(_ key: String) -> Bool? {
+                  if let ov = overrides[key] {
+                      if ov == "1" || ov.lowercased() == "true" || ov.lowercased() == "yes" { return true }
+                      if ov == "0" || ov.lowercased() == "false" || ov.lowercased() == "no" { return false }
+                  }
+                  if let f = boolFn { return f(key as CFString) }
+                  if let v = raw(key) as? NSNumber { return v.boolValue }
+                  return nil
+              }
+
+              func int(_ key: String) -> Int64? {
+                  if let ov = overrides[key], let n = Int64(ov) { return n }
+                  if let ov = overrides[key], ov.hasPrefix("0x"), let n = Int64(ov.dropFirst(2), radix: 16) { return n }
+                  if let f = sInt64Fn { return f(key as CFString) }
+                  if let f = sInt32Fn { return Int64(f(key as CFString)) }
+                  if let v = raw(key) as? NSNumber { return v.int64Value }
+                  return nil
+              }
+
+              func float(_ key: String) -> Float? {
+                  if let ov = overrides[key], let f = Float(ov) { return f }
+                  if let f = float32Fn { return f(key as CFString) }
+                  if let v = raw(key) as? NSNumber { return v.floatValue }
+                  return nil
+              }
+
+              func describe(_ key: String, kind: MobileGestaltCatalog.Key.Kind) -> String {
+                  let overridden = overrides[key] != nil
+                  let base: String
+                  switch kind {
+                  case .string: base = string(key) ?? "—"
+                  case .bool:   base = bool(key).map { $0 ? "true" : "false" } ?? "—"
+                  case .int:    base = int(key).map { "\($0)" } ?? "—"
+                  case .float:  base = float(key).map { String(format: "%.4f", $0) } ?? "—"
+                  }
+                  return overridden ? "\(base)  (override)" : base
+              }
+          }
+
+          enum MobileGestaltCatalog {
+              struct Key: Identifiable, Hashable {
+                  let id = UUID()
+                  let name: String
+                  let kind: Kind
+                  enum Kind: String { case string, bool, int, float }
+              }
+
+              static let all: [Key] = [
+                  Key(name: "ProductType", kind: .string),
+                  Key(name: "ProductVersion", kind: .string),
+                  Key(name: "BuildVersion", kind: .string),
+                  Key(name: "MarketingName", kind: .string),
+                  Key(name: "UserAssignedDeviceName", kind: .string),
+                  Key(name: "DeviceName", kind: .string),
+                  Key(name: "ModelNumber", kind: .string),
+                  Key(name: "RegionCode", kind: .string),
+                  Key(name: "RegionInfo", kind: .string),
+                  Key(name: "SerialNumber", kind: .string),
+                  Key(name: "UniqueDeviceID", kind: .string),
+                  Key(name: "InternationalMobileEquipmentIdentity", kind: .string),
+                  Key(name: "MobileEquipmentIdentifier", kind: .string),
+                  Key(name: "IntegratedCircuitCardIdentifier", kind: .string),
+                  Key(name: "WiFiAddress", kind: .string),
+                  Key(name: "BluetoothAddress", kind: .string),
+                  Key(name: "EthernetMacAddress", kind: .string),
+                  Key(name: "BasebandVersion", kind: .string),
+                  Key(name: "BasebandChipId", kind: .int),
+                  Key(name: "BasebandSerialNumber", kind: .string),
+                  Key(name: "HWModel", kind: .string),
+                  Key(name: "CPUArchitecture", kind: .string),
+                  Key(name: "CPUType", kind: .int),
+                  Key(name: "BoardId", kind: .int),
+                  Key(name: "ChipID", kind: .int),
+                  Key(name: "DeviceSupportsApplePencil", kind: .bool),
+                  Key(name: "DeviceSupportsFaceTime", kind: .bool),
+                  Key(name: "HasBaseband", kind: .bool),
+                  Key(name: "HasBattery", kind: .bool),
+                  Key(name: "HasCellularTelephony", kind: .bool),
+                  Key(name: "IsSimulator", kind: .bool),
+                  Key(name: "PasswordProtected", kind: .bool),
+                  Key(name: "ActivationState", kind: .string),
+                  Key(name: "ActivationStateAcknowledged", kind: .bool),
+                  Key(name: "RegulatoryModelNumber", kind: .string),
+                  Key(name: "ReleaseType", kind: .string),
+                  Key(name: "SigningFuse", kind: .bool),
+                  Key(name: "SupportsExternalAccessory", kind: .bool),
+                  Key(name: "SupportsSiri", kind: .bool),
+                  Key(name: "SupportsTouchID", kind: .bool),
+                  Key(name: "SupportsFaceID", kind: .bool),
+                  Key(name: "BatteryCurrentCapacity", kind: .int),
+                  Key(name: "BatteryIsCharging", kind: .bool),
+                  Key(name: "BatteryIsFullyCharged", kind: .bool),
+                  Key(name: "DiskUsage", kind: .int),
+                  Key(name: "ScreenDimensions", kind: .string),
+                  Key(name: "FrontCameraCapturedMTF", kind: .float),
+                  Key(name: "RearCameraCapturedMTF", kind: .float),
+                  Key(name: "WifiChipset", kind: .string),
+                  Key(name: "WifiVendor", kind: .string),
+                  Key(name: "AirplaneMode", kind: .bool),
+                  Key(name: "AssistedGPS", kind: .bool),
+              ]
+          }
+          SWIFT
+          echo "wrote MobileGestalt.swift"
+
       - name: Write ContentView.swift
         run: |
           cat > natsuk1/Views/ContentView.swift <<'SWIFT'
@@ -545,17 +1039,21 @@ jobs:
                   TabView {
                       OverviewView()
                           .tabItem {
-                              Label(state.t("Overview", "Обзор"), systemImage: "house.fill")
+                              Label(state.t("Overview", "Обзор"),
+                                    systemImage: "syringe.fill")
                           }
                       ToolsView()
                           .tabItem {
-                              Label(state.t("Tools", "Инструменты"), systemImage: "wrench.and.screwdriver.fill")
+                              Label(state.t("Tools", "Инструменты"),
+                                    systemImage: "slider.vertical.3")
                           }
                       SettingsView()
                           .tabItem {
-                              Label(state.t("Settings", "Настройки"), systemImage: "gear")
+                              Label(state.t("Settings", "Настройки"),
+                                    systemImage: "gearshape.fill")
                           }
                   }
+                  .tint(.accentColor)
               }
           }
           SWIFT
@@ -569,30 +1067,21 @@ jobs:
 
           struct OverviewView: View {
               @EnvironmentObject var state: AppState
-              @EnvironmentObject var airlift: AirliftBridge
-              @State private var show_device = false
 
               var body: some View {
                   NavigationStack {
                       List {
-                          Section {
-                              NavigationLink {
-                                  AirliftView().environmentObject(airlift)
-                              } label: {
-                                  Text(state.t("Airlift", "Airlift"))
-                              }
-                          } header: {
-                              Label(state.t("Sandbox Escape", "Побег из песочницы"), systemImage: "bolt.shield")
-                          }
-
                           Section {
                               Button {
                                   state.run()
                               } label: {
                                   HStack(spacing: 12) {
                                       Image(systemName: "bolt.fill")
+                                          .symbolRenderingMode(.hierarchical)
+                                          .foregroundStyle(.tint)
                                           .frame(width: 22, alignment: .center)
                                       Text(state.t("Run Exploit", "Запустить эксплойт"))
+                                          .foregroundStyle(.primary)
                                       Spacer(minLength: 8)
                                       if state.running {
                                           ProgressView().scaleEffect(0.8)
@@ -601,7 +1090,7 @@ jobs:
                               }
                               .disabled(state.running)
                           } header: {
-                              Label(state.t("Exploit", "Эксплойт"), systemImage: "cpu")
+                              Label(state.t("Exploit", "Эксплойт"), systemImage: "bolt.shield")
                           }
 
                           Section {
@@ -613,25 +1102,12 @@ jobs:
                                       .frame(width: 8, height: 8)
                                       .shadow(color: state.status.color.opacity(0.7), radius: 3)
                               }
-                              Button {
-                                  show_device = true
-                              } label: {
-                                  HStack(spacing: 8) {
-                                      Text(state.t("Device", "Устройство"))
-                                          .foregroundColor(.primary)
-                                      Spacer(minLength: 8)
-                                      Text(DeviceName.full())
-                                          .font(.system(size: 13, design: .monospaced))
-                                          .foregroundColor(.secondary)
-                                          .lineLimit(1)
-                                          .minimumScaleFactor(0.7)
-                                      Image(systemName: "chevron.right")
-                                          .font(.system(size: 13, weight: .semibold))
-                                          .foregroundStyle(Color(UIColor.tertiaryLabel))
-                                  }
-                              }
                           } header: {
                               Label(state.t("Runtime", "Состояние"), systemImage: "waveform.path.ecg")
+                          } footer: {
+                              Text(DeviceName.full())
+                                  .font(.system(size: 12, design: .monospaced))
+                                  .foregroundStyle(.secondary)
                           }
 
                           Section {
@@ -647,13 +1123,16 @@ jobs:
                               Button {
                                   UIPasteboard.general.string = state.log
                               } label: {
-                                  Text(state.t("Copy All", "Копировать всё"))
+                                  Label(state.t("Copy All", "Копировать всё"),
+                                        systemImage: "doc.on.doc")
                               }
                               .disabled(state.log.isEmpty)
+
                               Button(role: .destructive) {
                                   state.clear()
                               } label: {
-                                  Text(state.t("Clear", "Очистить"))
+                                  Label(state.t("Clear", "Очистить"),
+                                        systemImage: "trash")
                               }
                               .disabled(state.log.isEmpty)
                           } header: {
@@ -665,10 +1144,6 @@ jobs:
                       .background(Color(UIColor.systemGroupedBackground))
                       .navigationTitle("natsuk1")
                       .navigationBarTitleDisplayMode(.inline)
-                      .sheet(isPresented: $show_device) {
-                          DeviceInfoView()
-                              .presentationBackground(Color(UIColor.systemGroupedBackground))
-                      }
                   }
               }
           }
@@ -701,8 +1176,7 @@ jobs:
                       .frame(maxWidth: .infinity)
                       .frame(minHeight: 180, idealHeight: 260, maxHeight: 400)
                       .padding(10)
-                      .background(Color(UIColor.secondarySystemGroupedBackground))
-                      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
               }
           }
           SWIFT
@@ -726,27 +1200,67 @@ jobs:
                               NavigationLink {
                                   AirliftView().environmentObject(airlift)
                               } label: {
-                                  Label("Airlift", systemImage: "airplane")
+                                  Label {
+                                      Text("Airlift")
+                                  } icon: {
+                                      Image(systemName: "airplane")
+                                          .symbolRenderingMode(.hierarchical)
+                                          .foregroundStyle(.tint)
+                                  }
                               }
                               NavigationLink {
                                   OffsetsView().environmentObject(offsets)
                               } label: {
-                                  Label("Offsets", systemImage: "list.number")
+                                  Label {
+                                      Text("Offsets")
+                                  } icon: {
+                                      Image(systemName: "list.number")
+                                          .symbolRenderingMode(.hierarchical)
+                                          .foregroundStyle(.tint)
+                                  }
                               }
                           } header: {
                               Label("Exploit", systemImage: "bolt.shield")
                           }
 
                           Section {
+                              NavigationLink {
+                                  MobileGestaltView()
+                              } label: {
+                                  Label {
+                                      Text("MobileGestalt")
+                                  } icon: {
+                                      Image(systemName: "wand.and.stars")
+                                          .symbolRenderingMode(.hierarchical)
+                                          .foregroundStyle(.tint)
+                                  }
+                              }
+                          } header: {
+                              Label("Spoof", systemImage: "wand.and.stars")
+                          }
+
+                          Section {
                               Button {
                                   show_device = true
                               } label: {
-                                  Label("Device Info", systemImage: "iphone")
+                                  Label {
+                                      Text("Device Info")
+                                  } icon: {
+                                      Image(systemName: "iphone")
+                                          .symbolRenderingMode(.hierarchical)
+                                          .foregroundStyle(.tint)
+                                  }
                               }
                               Button {
                                   state.respring()
                               } label: {
-                                  Label("Respring", systemImage: "arrow.clockwise")
+                                  Label {
+                                      Text("Respring")
+                                  } icon: {
+                                      Image(systemName: "arrow.clockwise")
+                                          .symbolRenderingMode(.hierarchical)
+                                          .foregroundStyle(.tint)
+                                  }
                               }
                           } header: {
                               Label("Device", systemImage: "cpu")
@@ -756,7 +1270,13 @@ jobs:
                               NavigationLink {
                                   PathAccessView()
                               } label: {
-                                  Label("Path Access", systemImage: "folder.badge.gearshape")
+                                  Label {
+                                      Text("Path Access")
+                                  } icon: {
+                                      Image(systemName: "folder.badge.gearshape")
+                                          .symbolRenderingMode(.hierarchical)
+                                          .foregroundStyle(.tint)
+                                  }
                               }
                           } header: {
                               Label("Diagnostics", systemImage: "checkmark.shield")
@@ -769,13 +1289,587 @@ jobs:
                       .navigationBarTitleDisplayMode(.large)
                       .sheet(isPresented: $show_device) {
                           DeviceInfoView()
-                              .presentationBackground(Color(UIColor.systemGroupedBackground))
+                              .presentationBackground(.regularMaterial)
                       }
                   }
               }
           }
           SWIFT
           echo "wrote ToolsView.swift"
+
+      - name: Write SettingsView.swift
+        run: |
+          cat > natsuk1/Views/SettingsView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct SettingsView: View {
+              @EnvironmentObject var state: AppState
+
+              @AppStorage("auto_run") private var auto_run: Bool = false
+              @AppStorage("verbose") private var verbose: Bool = true
+              @AppStorage("keep_alive_audio") private var keep_alive_audio: Bool = false
+              @AppStorage("keep_alive_location") private var keep_alive_location: Bool = false
+
+              private var appName: String {
+                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+                      ?? "natsuk1"
+              }
+
+              private var version: String {
+                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+              }
+
+              private var appIcon: UIImage? {
+                  if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+                     let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+                     let files = primary["CFBundleIconFiles"] as? [String],
+                     let last = files.last {
+                      return UIImage(named: last)
+                  }
+                  return UIImage(named: "AppIcon")
+              }
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section {
+                              HStack(spacing: 14) {
+                                  Group {
+                                      if let icon = appIcon {
+                                          Image(uiImage: icon)
+                                              .resizable()
+                                              .aspectRatio(contentMode: .fill)
+                                      } else {
+                                          ZStack {
+                                              LinearGradient(
+                                                  colors: [Color.accentColor,
+                                                           Color.accentColor.opacity(0.6)],
+                                                  startPoint: .topLeading,
+                                                  endPoint: .bottomTrailing)
+                                              Image(systemName: "bolt.fill")
+                                                  .font(.system(size: 26, weight: .semibold))
+                                                  .foregroundStyle(.white)
+                                          }
+                                      }
+                                  }
+                                  .frame(width: 56, height: 56)
+                                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text(appName)
+                                          .font(.title3)
+                                          .fontWeight(.semibold)
+                                      Text("Version \(version)")
+                                          .font(.subheadline)
+                                          .foregroundColor(.secondary)
+                                  }
+                                  Spacer(minLength: 8)
+                              }
+                              .padding(.vertical, 4)
+
+                              NavigationLink {
+                                  AboutView().environmentObject(state)
+                              } label: {
+                                  Label("About", systemImage: "info.circle")
+                              }
+                          } header: {
+                              Label("App", systemImage: "info.circle")
+                          }
+
+                          Section {
+                              Toggle(isOn: $keep_alive_audio) {
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text("Silent Audio")
+                                      Text("Plays inaudible audio so iOS keeps the app running.")
+                                          .font(.caption)
+                                          .foregroundColor(.secondary)
+                                  }
+                              }
+                              Toggle(isOn: $keep_alive_location) {
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text("Background Location")
+                                      Text("Uses low-accuracy location to stay alive when needed.")
+                                          .font(.caption)
+                                          .foregroundColor(.secondary)
+                                  }
+                              }
+                          } header: {
+                              Label("Background Keep-Alive", systemImage: "waveform.circle")
+                          }
+
+                          Section {
+                              Toggle("Auto Run on Launch", isOn: $auto_run)
+                              Toggle("Verbose Output", isOn: $verbose)
+                          } header: {
+                              Label("Options", systemImage: "gearshape")
+                          }
+                      }
+                      .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .background(Color(UIColor.systemGroupedBackground))
+                      .navigationTitle("Settings")
+                      .navigationBarTitleDisplayMode(.large)
+                  }
+              }
+          }
+          SWIFT
+          echo "wrote SettingsView.swift"
+
+      - name: Write AirliftView.swift
+        run: |
+          cat > natsuk1/Views/AirliftView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct AirliftView: View {
+              @EnvironmentObject var airlift: AirliftBridge
+              @State private var didLogPaths = false
+
+              private var localDevVPNUp: Bool {
+                  NetworkStatus.interfaces().contains {
+                      NetworkStatus.isTunnelInterface($0.name)
+                  }
+              }
+
+              var body: some View {
+                  List {
+                      if !localDevVPNUp {
+                          Section {
+                              HStack(spacing: 10) {
+                                  Image(systemName: "exclamationmark.triangle.fill")
+                                      .symbolRenderingMode(.hierarchical)
+                                      .foregroundStyle(.orange)
+                                  Text("LocalDevVPN is not active. Enable it before running Airlift.")
+                                      .font(.subheadline)
+                                      .foregroundColor(.secondary)
+                              }
+                          }
+                      }
+
+                      switch airlift.state {
+                      case .idle, .pairing:
+                          pairingSection
+                      case .ready, .running, .done:
+                          exploitSection
+                      }
+
+                      Section {
+                          AirliftLogView(lines: airlift.exploitLog, onClear: { airlift.clearLog() })
+                              .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                      } header: {
+                          Label("Log", systemImage: "apple.terminal")
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .background(Color(UIColor.systemGroupedBackground))
+                  .navigationTitle("Airlift")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .onAppear {
+                      if !didLogPaths {
+                          didLogPaths = true
+                          airlift.logAccessibleFolders()
+                      }
+                  }
+              }
+
+              @ViewBuilder
+              private var pairingSection: some View {
+                  Section {
+                      VStack(alignment: .leading, spacing: 6) {
+                          HStack(spacing: 8) {
+                              Image(systemName: "checkmark.shield.fill")
+                                  .symbolRenderingMode(.hierarchical)
+                                  .foregroundStyle(airlift.hasPairing() ? .green : .orange)
+                              Text(airlift.hasPairing() ? "Paired" : "Not paired")
+                                  .font(.subheadline.bold())
+                          }
+                      }
+                      .padding(.vertical, 4)
+
+                      if case .pairing = airlift.state {
+                          HStack(spacing: 8) {
+                              ProgressView().scaleEffect(0.85)
+                              Text(airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus)
+                                  .font(.subheadline)
+                                  .foregroundColor(.secondary)
+                          }
+                      }
+
+                      if let pin = airlift.pairPIN {
+                          VStack(alignment: .leading, spacing: 10) {
+                              Text("ENTER THIS PIN")
+                                  .font(.caption2.bold())
+                                  .foregroundStyle(.secondary)
+                              Text(pin)
+                                  .font(.system(size: 36, weight: .black, design: .monospaced))
+                                  .foregroundStyle(.orange)
+                              Button {
+                                  if let url = URL(string: UIApplication.openSettingsURLString) {
+                                      UIApplication.shared.open(url)
+                                  }
+                              } label: {
+                                  Label("Open Settings", systemImage: "arrow.up.forward.app")
+                                      .frame(maxWidth: .infinity)
+                              }
+                              .buttonStyle(.borderedProminent)
+                              .tint(.orange)
+                          }
+                          .padding(12)
+                          .background(Color.orange.opacity(0.12),
+                                      in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                      }
+                  } header: {
+                      Label("Pairing", systemImage: "antenna.radiowaves.left.and.right")
+                  }
+
+                  Section {
+                      if case .pairing = airlift.state {
+                          Button(role: .destructive) {
+                              airlift.cancelPairing()
+                          } label: {
+                              Text("Cancel Pairing").frame(maxWidth: .infinity)
+                          }
+                      } else if airlift.hasPairing() {
+                          Button(role: .destructive) {
+                              airlift.deletePairing()
+                          } label: {
+                              Text("Delete Pairing").frame(maxWidth: .infinity)
+                          }
+                      } else {
+                          Button {
+                              airlift.runPairing()
+                          } label: {
+                              HStack {
+                                  Image(systemName: "antenna.radiowaves.left.and.right")
+                                      .symbolRenderingMode(.hierarchical)
+                                      .foregroundStyle(.tint)
+                                  Text("Start Pairing")
+                                  Spacer()
+                              }
+                          }
+                      }
+                  }
+              }
+
+              @ViewBuilder
+              private var exploitSection: some View {
+                  Section {
+                      HStack {
+                          Text("Target")
+                          Spacer()
+                          TextField("/var/mobile/Library/SpringBoard", text: Binding(
+                              get: { airlift.target },
+                              set: { airlift.target = $0 }
+                          ))
+                          .font(.system(size: 12, design: .monospaced))
+                          .multilineTextAlignment(.trailing)
+                          .autocorrectionDisabled()
+                          .textInputAutocapitalization(.never)
+                      }
+                  } header: {
+                      Label("Exploit", systemImage: "bolt.shield")
+                  }
+
+                  Section {
+                      Button {
+                          airlift.runExploit()
+                      } label: {
+                          HStack {
+                              Image(systemName: "bolt.fill")
+                                  .symbolRenderingMode(.hierarchical)
+                                  .foregroundStyle(.tint)
+                              Text("Run Exploit")
+                              Spacer()
+                          }
+                      }
+                      .disabled(airlift.state == .running || !localDevVPNUp)
+
+                      Button {
+                          airlift.respring()
+                      } label: {
+                          HStack {
+                              Image(systemName: "arrow.clockwise")
+                                  .symbolRenderingMode(.hierarchical)
+                                  .foregroundStyle(.tint)
+                              Text("Respring (device)")
+                              Spacer()
+                          }
+                      }
+                      .disabled(airlift.state == .running)
+
+                      Button(role: .destructive) {
+                          airlift.deletePairing()
+                      } label: {
+                          Text("Delete Pairing").frame(maxWidth: .infinity)
+                      }
+                      .disabled(airlift.state == .running)
+                  }
+              }
+          }
+
+          struct AirliftLogView: View {
+              let lines: [String]
+              let onClear: () -> Void
+              @State private var copied = false
+
+              var body: some View {
+                  ScrollViewReader { proxy in
+                      ScrollView(showsIndicators: false) {
+                          Text(lines.isEmpty ? "No output yet." : lines.joined(separator: "\n"))
+                              .font(.system(size: 9, design: .monospaced))
+                              .multilineTextAlignment(.leading)
+                              .foregroundColor(lines.isEmpty ? .secondary : .primary)
+                              .frame(maxWidth: .infinity, alignment: .leading)
+                          Spacer(minLength: 0).id(0)
+                      }
+                      .frame(maxHeight: 260)
+                      .padding(10)
+                      .background(.regularMaterial,
+                                  in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                      .onChange(of: lines.count) { _, _ in
+                          withAnimation(.linear(duration: 0.05)) {
+                              proxy.scrollTo(0, anchor: .bottom)
+                          }
+                      }
+                  }
+                  .contextMenu {
+                      Button {
+                          UIPasteboard.general.string = lines.joined(separator: "\n")
+                      } label: {
+                          Label("Copy All", systemImage: "doc.on.doc")
+                      }
+                      Button(role: .destructive) {
+                          onClear()
+                      } label: {
+                          Label("Clear", systemImage: "trash")
+                      }
+                  }
+              }
+          }
+          SWIFT
+          echo "wrote AirliftView.swift"
+
+      - name: Write MobileGestaltView.swift
+        run: |
+          cat > natsuk1/Views/MobileGestaltView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct MobileGestaltView: View {
+              @State private var query: String = ""
+              @State private var editing: MobileGestaltCatalog.Key? = nil
+              @State private var showClear = false
+              @State private var refreshTick = 0
+
+              private var keys: [MobileGestaltCatalog.Key] {
+                  if query.isEmpty { return MobileGestaltCatalog.all }
+                  let q = query.lowercased()
+                  return MobileGestaltCatalog.all.filter { $0.name.lowercased().contains(q) }
+              }
+
+              var body: some View {
+                  List {
+                      Section {
+                          HStack {
+                              Text("Library")
+                              Spacer()
+                              badge(MobileGestalt.shared.loaded ? "loaded" : "missing",
+                                    color: MobileGestalt.shared.loaded ? .green : .red)
+                          }
+                          if let err = MobileGestalt.shared.loadError {
+                              Text(err)
+                                  .font(.system(size: 11, design: .monospaced))
+                                  .foregroundStyle(.red)
+                          }
+                          HStack {
+                              Text("Overrides")
+                              Spacer()
+                              Text("\(MobileGestalt.shared.overrideCount)")
+                                  .font(.system(.body, design: .monospaced))
+                                  .foregroundColor(.secondary)
+                          }
+                          Button(role: .destructive) {
+                              showClear = true
+                          } label: {
+                              Label("Clear All Overrides", systemImage: "trash")
+                          }
+                          .disabled(MobileGestalt.shared.overrideCount == 0)
+                      } header: {
+                          Label("Status", systemImage: "checkmark.shield")
+                      }
+
+                      Section {
+                          ForEach(keys) { key in
+                              Button {
+                                  editing = key
+                              } label: {
+                                  VStack(alignment: .leading, spacing: 3) {
+                                      Text(key.name)
+                                          .font(.system(size: 12, design: .monospaced))
+                                          .foregroundStyle(.primary)
+                                      HStack(spacing: 6) {
+                                          Text(MobileGestalt.shared.describe(key.name, kind: key.kind))
+                                              .font(.system(size: 11, design: .monospaced))
+                                              .foregroundStyle(.secondary)
+                                              .lineLimit(2)
+                                          Spacer(minLength: 4)
+                                          if MobileGestalt.shared.overrideValue(for: key.name) != nil {
+                                              badge("override", color: .orange)
+                                          }
+                                      }
+                                  }
+                                  .padding(.vertical, 2)
+                              }
+                              .buttonStyle(.plain)
+                          }
+                      } header: {
+                          Label("Keys", systemImage: "list.bullet")
+                      }
+                  }
+                  .id(refreshTick)
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .background(Color(UIColor.systemGroupedBackground))
+                  .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+                  .navigationTitle("MobileGestalt")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .sheet(item: $editing) { key in
+                      EditMGOverrideView(key: key) {
+                          refreshTick &+= 1
+                      }
+                  }
+                  .alert("Clear all overrides?", isPresented: $showClear) {
+                      Button("Cancel", role: .cancel) {}
+                      Button("Clear", role: .destructive) {
+                          MobileGestalt.shared.clearAllOverrides()
+                          refreshTick &+= 1
+                      }
+                  }
+              }
+
+              private func badge(_ text: String, color: Color) -> some View {
+                  Text(text)
+                      .font(.system(size: 9, design: .monospaced))
+                      .padding(.horizontal, 4)
+                      .padding(.vertical, 1)
+                      .background(color.opacity(0.18),
+                                  in: RoundedRectangle(cornerRadius: 3))
+                      .foregroundStyle(color)
+              }
+          }
+
+          struct EditMGOverrideView: View {
+              let key: MobileGestaltCatalog.Key
+              let onDismiss: () -> Void
+
+              @Environment(\.dismiss) private var dismiss
+              @State private var text: String = ""
+              @State private var showError = false
+              @State private var errorMsg = ""
+
+              var body: some View {
+                  NavigationStack {
+                      Form {
+                          Section {
+                              Text(key.name)
+                                  .font(.system(size: 12, design: .monospaced))
+                                  .foregroundStyle(.secondary)
+                              Text("Kind: \(key.kind.rawValue)")
+                                  .font(.system(size: 11, design: .monospaced))
+                                  .foregroundStyle(.secondary)
+                          } header: {
+                              Text("Key")
+                          }
+
+                          Section {
+                              TextField("override value", text: $text)
+                                  .font(.system(size: 14, design: .monospaced))
+                                  .autocorrectionDisabled()
+                                  .textInputAutocapitalization(.never)
+                          } header: {
+                              Text("Override")
+                          } footer: {
+                              Text("Leave empty to remove the override. Applies only inside natsuk1.")
+                          }
+
+                          Section {
+                              Button {
+                                  MobileGestalt.shared.setOverride(key.name, value: nil)
+                                  onDismiss()
+                                  dismiss()
+                              } label: {
+                                  Label("Remove Override", systemImage: "arrow.uturn.backward")
+                              }
+                              .disabled(MobileGestalt.shared.overrideValue(for: key.name) == nil)
+                          }
+                      }
+                      .scrollContentBackground(.hidden)
+                      .background(Color(UIColor.systemGroupedBackground))
+                      .navigationTitle("Edit")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarLeading) {
+                              Button("Cancel") { dismiss() }
+                          }
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Save") { save() }.fontWeight(.semibold)
+                          }
+                      }
+                      .alert("Invalid Value", isPresented: $showError) {
+                          Button("OK", role: .cancel) {}
+                      } message: {
+                          Text(errorMsg)
+                      }
+                      .onAppear {
+                          text = MobileGestalt.shared.overrideValue(for: key.name) ?? ""
+                      }
+                  }
+              }
+
+              private func save() {
+                  let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                  if trimmed.isEmpty {
+                      MobileGestalt.shared.setOverride(key.name, value: nil)
+                      onDismiss()
+                      dismiss()
+                      return
+                  }
+                  switch key.kind {
+                  case .bool:
+                      let lower = trimmed.lowercased()
+                      if !(lower == "true" || lower == "false" || lower == "1" || lower == "0" ||
+                           lower == "yes" || lower == "no") {
+                          errorMsg = "Bool accepts: true/false/1/0/yes/no"
+                          showError = true
+                          return
+                      }
+                  case .int:
+                      if Int64(trimmed) == nil && !(trimmed.hasPrefix("0x") && Int64(trimmed.dropFirst(2), radix: 16) != nil) {
+                          errorMsg = "Int accepts decimal or 0xHEX"
+                          showError = true
+                          return
+                      }
+                  case .float:
+                      if Float(trimmed) == nil {
+                          errorMsg = "Float accepts decimal"
+                          showError = true
+                          return
+                      }
+                  case .string:
+                      break
+                  }
+                  MobileGestalt.shared.setOverride(key.name, value: trimmed)
+                  onDismiss()
+                  dismiss()
+              }
+          }
+
+          extension MobileGestaltCatalog.Key: Identifiable {}
+          SWIFT
+          echo "wrote MobileGestaltView.swift"
 
       - name: Write PathAccessView.swift
         run: |
@@ -873,12 +1967,16 @@ jobs:
                   ("MobileActivation", "/usr/lib/libMobileActivation.dylib", []),
                   ("libmis", "/usr/lib/libmis.dylib", []),
                   ("libsandbox", "/usr/lib/libsandbox.1.dylib", []),
-                  ("AirTrafficDevice", "/System/Library/PrivateFrameworks/AirTrafficDevice.framework/AirTrafficDevice",
+                  ("AirTrafficDevice",
+                   "/System/Library/PrivateFrameworks/AirTrafficDevice.framework/AirTrafficDevice",
                    ["ATGrappaDeviceInfo"]),
-                  ("AirTrafficHost", "/System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost",
+                  ("AirTrafficHost",
+                   "/System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost",
                    ["ATGrappaDeviceInfo"]),
                   ("CoreFP", "/System/Library/PrivateFrameworks/CoreFP.framework/CoreFP", []),
-                  ("SpringBoardServices", "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", []),
+                  ("SpringBoardServices",
+                   "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices",
+                   []),
               ]
 
               var body: some View {
@@ -917,6 +2015,8 @@ jobs:
                           } label: {
                               HStack {
                                   Image(systemName: "magnifyingglass")
+                                      .symbolRenderingMode(.hierarchical)
+                                      .foregroundStyle(.tint)
                                   Text(busy ? "Scanning..." : "Run Scan")
                                   Spacer(minLength: 8)
                                   if busy { ProgressView().scaleEffect(0.8) }
@@ -934,7 +2034,8 @@ jobs:
                                       HStack(spacing: 6) {
                                           Text(r.name)
                                               .font(.system(size: 12, weight: .semibold))
-                                          badge(r.loaded ? "loaded" : "no", color: r.loaded ? .green : .red)
+                                          badge(r.loaded ? "loaded" : "no",
+                                                color: r.loaded ? .green : .red)
                                       }
                                       Text(r.path)
                                           .font(.system(size: 10, design: .monospaced))
@@ -964,7 +2065,8 @@ jobs:
                                       .foregroundStyle(r.exists ? .primary : .secondary)
                                       .lineLimit(2)
                                   HStack(spacing: 6) {
-                                      badge(r.exists ? "exists" : "missing", color: r.exists ? .green : .red)
+                                      badge(r.exists ? "exists" : "missing",
+                                            color: r.exists ? .green : .red)
                                       if r.isDirectory { badge("dir", color: .blue) }
                                       if r.readable { badge("r", color: .green) }
                                       if r.writable { badge("w", color: .orange) }
@@ -995,7 +2097,9 @@ jobs:
                               text += "# libraries\n"
                               for r in libs {
                                   text += "\(r.name) loaded=\(r.loaded) path=\(r.path)"
-                                  if !r.foundSymbols.isEmpty { text += " symbols=\(r.foundSymbols.joined(separator: ","))" }
+                                  if !r.foundSymbols.isEmpty {
+                                      text += " symbols=\(r.foundSymbols.joined(separator: ","))"
+                                  }
                                   text += "\n"
                               }
                               text += "# paths\n"
@@ -1021,9 +2125,9 @@ jobs:
                       .font(.system(size: 9, design: .monospaced))
                       .padding(.horizontal, 4)
                       .padding(.vertical, 1)
-                      .background(color.opacity(0.18))
+                      .background(color.opacity(0.18),
+                                  in: RoundedRectangle(cornerRadius: 3))
                       .foregroundStyle(color)
-                      .clipShape(RoundedRectangle(cornerRadius: 3))
               }
 
               private func scan() {
@@ -1092,344 +2196,6 @@ jobs:
           SWIFT
           echo "wrote PathAccessView.swift"
 
-      - name: Write SettingsView.swift
-        run: |
-          cat > natsuk1/Views/SettingsView.swift <<'SWIFT'
-          import SwiftUI
-          import UIKit
-
-          struct SettingsView: View {
-              @EnvironmentObject var state: AppState
-
-              @AppStorage("auto_run") private var auto_run: Bool = false
-              @AppStorage("verbose") private var verbose: Bool = true
-              @AppStorage("keep_alive_audio") private var keep_alive_audio: Bool = false
-              @AppStorage("keep_alive_location") private var keep_alive_location: Bool = false
-
-              private var appName: String {
-                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
-                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
-                      ?? "natsuk1"
-              }
-
-              private var version: String {
-                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-              }
-
-              private var appIcon: UIImage? {
-                  if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
-                     let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
-                     let files = primary["CFBundleIconFiles"] as? [String],
-                     let last = files.last {
-                      return UIImage(named: last)
-                  }
-                  return UIImage(named: "AppIcon")
-              }
-
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          Section {
-                              HStack(spacing: 14) {
-                                  Group {
-                                      if let icon = appIcon {
-                                          Image(uiImage: icon).resizable().aspectRatio(contentMode: .fill)
-                                      } else {
-                                          ZStack {
-                                              LinearGradient(
-                                                  colors: [Color(red: 0.65, green: 0.30, blue: 0.90),
-                                                           Color(red: 0.30, green: 0.65, blue: 0.95)],
-                                                  startPoint: .topLeading, endPoint: .bottomTrailing)
-                                              Image(systemName: "bolt.fill")
-                                                  .font(.system(size: 26, weight: .semibold))
-                                                  .foregroundStyle(.white)
-                                          }
-                                      }
-                                  }
-                                  .frame(width: 56, height: 56)
-                                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text(appName).font(.title3).fontWeight(.semibold)
-                                      Text("Version \(version)").font(.subheadline).foregroundColor(.secondary)
-                                  }
-                                  Spacer(minLength: 8)
-                              }
-                              .padding(.vertical, 4)
-
-                              NavigationLink {
-                                  AboutView().environmentObject(state)
-                              } label: {
-                                  Label("About", systemImage: "info.circle")
-                              }
-                          } header: {
-                              Label("App", systemImage: "info.circle")
-                          }
-
-                          Section {
-                              Toggle(isOn: $keep_alive_audio) {
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text("Silent Audio")
-                                      Text("Plays inaudible audio so iOS keeps the app running.")
-                                          .font(.caption).foregroundColor(.secondary)
-                                  }
-                              }
-                              Toggle(isOn: $keep_alive_location) {
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text("Background Location")
-                                      Text("Uses low-accuracy location to stay alive when needed.")
-                                          .font(.caption).foregroundColor(.secondary)
-                                  }
-                              }
-                          } header: {
-                              Label("Background Keep-Alive", systemImage: "waveform.circle")
-                          }
-
-                          Section {
-                              Toggle("Auto Run on Launch", isOn: $auto_run)
-                              Toggle("Verbose Output", isOn: $verbose)
-                          } header: {
-                              Label("Options", systemImage: "gearshape")
-                          }
-                      }
-                      .listStyle(.insetGrouped)
-                      .scrollContentBackground(.hidden)
-                      .background(Color(UIColor.systemGroupedBackground))
-                      .navigationTitle("Settings")
-                      .navigationBarTitleDisplayMode(.large)
-                  }
-              }
-          }
-          SWIFT
-          echo "wrote SettingsView.swift"
-
-      - name: Write AirliftView.swift
-        run: |
-          cat > natsuk1/Views/AirliftView.swift <<'SWIFT'
-          import SwiftUI
-          import UIKit
-
-          struct AirliftView: View {
-              @EnvironmentObject var airlift: AirliftBridge
-              @State private var didLogPaths = false
-
-              private var localDevVPNUp: Bool {
-                  NetworkStatus.interfaces().contains {
-                      NetworkStatus.isTunnelInterface($0.name)
-                  }
-              }
-
-              var body: some View {
-                  List {
-                      if !localDevVPNUp {
-                          Section {
-                              HStack(spacing: 10) {
-                                  Image(systemName: "exclamationmark.triangle.fill")
-                                      .foregroundStyle(.orange)
-                                  Text("LocalDevVPN is not active. Enable it before running Airlift.")
-                                      .font(.subheadline)
-                                      .foregroundColor(.secondary)
-                              }
-                          }
-                      }
-
-                      switch airlift.state {
-                      case .idle, .pairing:
-                          pairingSection
-                      case .ready, .running, .done:
-                          exploitSection
-                      }
-
-                      Section {
-                          AirliftLogView(lines: airlift.exploitLog, onClear: { airlift.clearLog() })
-                              .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                      } header: {
-                          Label("Log", systemImage: "apple.terminal")
-                      }
-                  }
-                  .listStyle(.insetGrouped)
-                  .scrollContentBackground(.hidden)
-                  .background(Color(UIColor.systemGroupedBackground))
-                  .navigationTitle("Airlift")
-                  .navigationBarTitleDisplayMode(.inline)
-                  .onAppear {
-                      if !didLogPaths {
-                          didLogPaths = true
-                          airlift.logAccessibleFolders()
-                      }
-                  }
-              }
-
-              @ViewBuilder
-              private var pairingSection: some View {
-                  Section {
-                      VStack(alignment: .leading, spacing: 6) {
-                          HStack(spacing: 8) {
-                              Image(systemName: "checkmark.shield.fill")
-                                  .foregroundStyle(airlift.hasPairing() ? .green : .orange)
-                              Text(airlift.hasPairing() ? "Paired" : "Not paired")
-                                  .font(.subheadline.bold())
-                          }
-                      }
-                      .padding(.vertical, 4)
-
-                      if case .pairing = airlift.state {
-                          HStack(spacing: 8) {
-                              ProgressView().scaleEffect(0.85)
-                              Text(airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus)
-                                  .font(.subheadline)
-                                  .foregroundColor(.secondary)
-                          }
-                      }
-
-                      if let pin = airlift.pairPIN {
-                          VStack(alignment: .leading, spacing: 10) {
-                              Text("ENTER THIS PIN")
-                                  .font(.caption2.bold())
-                                  .foregroundStyle(.secondary)
-                              Text(pin)
-                                  .font(.system(size: 36, weight: .black, design: .monospaced))
-                                  .foregroundStyle(.orange)
-                              Button {
-                                  if let url = URL(string: UIApplication.openSettingsURLString) {
-                                      UIApplication.shared.open(url)
-                                  }
-                              } label: {
-                                  Label("Open Settings", systemImage: "arrow.up.forward.app")
-                                      .frame(maxWidth: .infinity)
-                              }
-                              .buttonStyle(.borderedProminent)
-                              .tint(.orange)
-                          }
-                          .padding(12)
-                          .background(Color.orange.opacity(0.12))
-                          .clipShape(RoundedRectangle(cornerRadius: 12))
-                      }
-                  } header: {
-                      Label("Pairing", systemImage: "antenna.radiowaves.left.and.right")
-                  }
-
-                  Section {
-                      if case .pairing = airlift.state {
-                          Button(role: .destructive) {
-                              airlift.cancelPairing()
-                          } label: {
-                              Text("Cancel Pairing").frame(maxWidth: .infinity)
-                          }
-                      } else if airlift.hasPairing() {
-                          Button(role: .destructive) {
-                              airlift.deletePairing()
-                          } label: {
-                              Text("Delete Pairing").frame(maxWidth: .infinity)
-                          }
-                      } else {
-                          Button {
-                              airlift.runPairing()
-                          } label: {
-                              HStack {
-                                  Image(systemName: "antenna.radiowaves.left.and.right")
-                                  Text("Start Pairing")
-                                  Spacer()
-                              }
-                          }
-                      }
-                  }
-              }
-
-              @ViewBuilder
-              private var exploitSection: some View {
-                  Section {
-                      HStack {
-                          Text("Target")
-                          Spacer()
-                          TextField("/var/mobile/Library/SpringBoard", text: Binding(
-                              get: { airlift.target },
-                              set: { airlift.target = $0 }
-                          ))
-                          .font(.system(size: 12, design: .monospaced))
-                          .multilineTextAlignment(.trailing)
-                          .autocorrectionDisabled()
-                          .textInputAutocapitalization(.never)
-                      }
-                  } header: {
-                      Label("Exploit", systemImage: "bolt.shield")
-                  }
-
-                  Section {
-                      Button {
-                          airlift.runExploit()
-                      } label: {
-                          HStack {
-                              Image(systemName: "bolt.fill")
-                              Text("Run Exploit")
-                              Spacer()
-                          }
-                      }
-                      .disabled(airlift.state == .running || !localDevVPNUp)
-
-                      Button {
-                          airlift.respring()
-                      } label: {
-                          HStack {
-                              Image(systemName: "arrow.clockwise")
-                              Text("Respring (device)")
-                              Spacer()
-                          }
-                      }
-                      .disabled(airlift.state == .running)
-
-                      Button(role: .destructive) {
-                          airlift.deletePairing()
-                      } label: {
-                          Text("Delete Pairing").frame(maxWidth: .infinity)
-                      }
-                      .disabled(airlift.state == .running)
-                  }
-              }
-          }
-
-          struct AirliftLogView: View {
-              let lines: [String]
-              let onClear: () -> Void
-              @State private var copied = false
-
-              var body: some View {
-                  ScrollViewReader { proxy in
-                      ScrollView(showsIndicators: false) {
-                          Text(lines.isEmpty ? "No output yet." : lines.joined(separator: "\n"))
-                              .font(.system(size: 9, design: .monospaced))
-                              .multilineTextAlignment(.leading)
-                              .foregroundColor(lines.isEmpty ? .secondary : .primary)
-                              .frame(maxWidth: .infinity, alignment: .leading)
-                          Spacer(minLength: 0).id(0)
-                      }
-                      .frame(maxHeight: 260)
-                      .padding(10)
-                      .background(Color(UIColor.secondarySystemGroupedBackground))
-                      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                      .onChange(of: lines.count) { _, _ in
-                          withAnimation(.linear(duration: 0.05)) {
-                              proxy.scrollTo(0, anchor: .bottom)
-                          }
-                      }
-                  }
-                  .contextMenu {
-                      Button {
-                          UIPasteboard.general.string = lines.joined(separator: "\n")
-                      } label: {
-                          Label("Copy All", systemImage: "doc.on.doc")
-                      }
-                      Button(role: .destructive) {
-                          onClear()
-                      } label: {
-                          Label("Clear", systemImage: "trash")
-                      }
-                  }
-              }
-          }
-          SWIFT
-          echo "wrote AirliftView.swift"
-
       - name: Write AboutView.swift
         run: |
           cat > natsuk1/Views/AboutView.swift <<'SWIFT'
@@ -1460,7 +2226,9 @@ jobs:
                   List {
                       Section {
                           VStack(alignment: .leading, spacing: 6) {
-                              Text(appName).font(.title2).fontWeight(.semibold)
+                              Text(appName)
+                                  .font(.title2)
+                                  .fontWeight(.semibold)
                               Text("Version \(version) (\(build))")
                                   .font(.subheadline)
                                   .foregroundColor(.secondary)
@@ -1475,13 +2243,15 @@ jobs:
 
                       Section {
                           linkRow("Source Repository", url: repoURL)
-                          linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
+                          linkRow("MIT License",
+                                  url: repoURL.appendingPathComponent("blob/main/LICENSE"))
                       } header: {
                           Text("Open Source")
                       }
 
                       Section {
-                          linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
+                          linkRow("Star on GitHub",
+                                  url: repoURL.appendingPathComponent("stargazers"))
                       } header: {
                           Text("Community")
                       }
@@ -1524,6 +2294,110 @@ jobs:
           }
           SWIFT
           echo "wrote AboutView.swift"
+
+      - name: Write DeviceInfoView.swift
+        run: |
+          cat > natsuk1/Views/DeviceInfoView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct DeviceInfoView: View {
+              @Environment(\.dismiss) private var dismiss
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          row("Model", DeviceName.friendly())
+                          row("Identifier", machineID())
+                          row("Chip", DeviceName.chip())
+                          row("iOS", sysctlString("kern.osproductversion"))
+                          row("Build", sysctlString("kern.osversion"))
+                          row("RAM", ram())
+                          row("Architecture", arch())
+                          row("Locale", localeShort())
+                          row("Region", regionShort())
+                          row("Uptime", uptime())
+                      }
+                      .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .background(Color(UIColor.systemGroupedBackground))
+                      .navigationTitle("Device")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Done") { dismiss() }
+                          }
+                      }
+                  }
+              }
+
+              private func row(_ key: String, _ value: String) -> some View {
+                  HStack {
+                      Text(key)
+                      Spacer()
+                      Text(value)
+                          .font(.system(.body, design: .monospaced))
+                          .foregroundColor(.secondary)
+                          .lineLimit(1)
+                          .truncationMode(.middle)
+                  }
+              }
+
+              private func machineID() -> String {
+                  var sysinfo = utsname()
+                  uname(&sysinfo)
+                  return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
+                      guard let v = el.value as? Int8, v != 0 else { return id }
+                      return id + String(UnicodeScalar(UInt8(v)))
+                  }
+              }
+
+              private func sysctlString(_ name: String) -> String {
+                  var size = 0
+                  sysctlbyname(name, nil, &size, nil, 0)
+                  var buf = [CChar](repeating: 0, count: size)
+                  sysctlbyname(name, &buf, &size, nil, 0)
+                  let bytes = buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                  return String(decoding: bytes, as: UTF8.self)
+              }
+
+              private func ram() -> String {
+                  var size: UInt64 = 0
+                  var len = MemoryLayout<UInt64>.size
+                  if sysctlbyname("hw.memsize", &size, &len, nil, 0) != 0 { return "unknown" }
+                  return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .memory)
+              }
+
+              private func arch() -> String {
+                  #if arch(arm64)
+                  return "arm64"
+                  #else
+                  return "unknown"
+                  #endif
+              }
+
+              private func localeShort() -> String {
+                  Locale.current.identifier
+                      .split(separator: "_")
+                      .first
+                      .map(String.init)?
+                      .uppercased() ?? "—"
+              }
+
+              private func regionShort() -> String {
+                  let region = Locale.current.region?.identifier ?? ""
+                  return region.isEmpty ? "—" : region.uppercased()
+              }
+
+              private func uptime() -> String {
+                  let t = ProcessInfo.processInfo.systemUptime
+                  let h = Int(t) / 3600
+                  let m = (Int(t) % 3600) / 60
+                  return "\(h)h \(m)m"
+              }
+          }
+          SWIFT
+          echo "wrote DeviceInfoView.swift"
 
       - name: Write project.yml
         run: |
@@ -1691,15 +2565,24 @@ jobs:
           grep -q '_natsuk1probe._tcp' natsuk1/Resources/Info.plist || fail "Info.plist missing probe"
 
           grep -q 'TabView' natsuk1/Views/ContentView.swift || fail "ContentView missing TabView"
-          grep -q 'OverviewView' natsuk1/Views/ContentView.swift || fail "ContentView missing OverviewView"
-          grep -q 'ToolsView' natsuk1/Views/ContentView.swift || fail "ContentView missing ToolsView"
-          grep -q 'SettingsView' natsuk1/Views/ContentView.swift || fail "ContentView missing SettingsView"
+          grep -q 'syringe.fill' natsuk1/Views/ContentView.swift || fail "Overview tab icon missing"
+          grep -q 'slider.vertical.3' natsuk1/Views/ContentView.swift || fail "Tools tab icon missing"
+          grep -q 'gearshape.fill' natsuk1/Views/ContentView.swift || fail "Settings tab icon missing"
+          grep -q '.tint(.accentColor)' natsuk1/Views/ContentView.swift || fail "TabView missing tint"
 
           grep -q 'Run Exploit' natsuk1/Views/OverviewView.swift || fail "OverviewView missing Run Exploit"
           grep -q 'OverviewLogView' natsuk1/Views/OverviewView.swift || fail "OverviewView missing log view"
+          if grep -q 'AirliftView' natsuk1/Views/OverviewView.swift; then
+            fail "OverviewView still references Airlift"
+          fi
+          if grep -q 'show_device' natsuk1/Views/OverviewView.swift; then
+            fail "OverviewView still has device sheet"
+          fi
+          grep -q 'DeviceName.full()' natsuk1/Views/OverviewView.swift || fail "OverviewView missing DeviceName footer"
 
           grep -q 'Path Access' natsuk1/Views/ToolsView.swift || fail "ToolsView missing Path Access"
           grep -q 'AirliftView' natsuk1/Views/ToolsView.swift || fail "ToolsView missing Airlift"
+          grep -q 'MobileGestaltView' natsuk1/Views/ToolsView.swift || fail "ToolsView missing MobileGestalt"
           grep -q 'OffsetsView' natsuk1/Views/ToolsView.swift || fail "ToolsView missing Offsets"
           grep -q 'DeviceInfoView' natsuk1/Views/ToolsView.swift || fail "ToolsView missing DeviceInfo"
           grep -q 'respring' natsuk1/Views/ToolsView.swift || fail "ToolsView missing respring"
@@ -1708,14 +2591,19 @@ jobs:
           grep -q 'dlopen' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing dlopen"
           grep -q 'dlsym' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing dlsym"
           grep -q 'MGCopyAnswer' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing MGCopyAnswer"
-          grep -qi 'MobileGestalt' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing MobileGestalt"
           grep -q 'isReadableFile' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing read check"
           grep -q 'isWritableFile' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing write check"
-          grep -q 'LibResult' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing LibResult"
+
+          grep -q 'func setOverride' natsuk1/Helpers/MobileGestalt.swift || fail "MobileGestalt missing setOverride"
+          grep -q 'func clearAllOverrides' natsuk1/Helpers/MobileGestalt.swift || fail "MobileGestalt missing clearAllOverrides"
+          grep -q 'natsuk1_mg_overrides' natsuk1/Helpers/MobileGestalt.swift || fail "MobileGestalt missing storage key"
+          grep -q 'MobileGestaltView' natsuk1/Views/ToolsView.swift || fail "ToolsView missing MobileGestalt link"
+          grep -q 'EditMGOverrideView' natsuk1/Views/MobileGestaltView.swift || fail "MobileGestaltView missing editor"
 
           if grep -q '"Done"' natsuk1/Views/SettingsView.swift; then
             fail "SettingsView still has Done button"
           fi
+          grep -q 'accentColor' natsuk1/Views/SettingsView.swift || fail "SettingsView missing accentColor"
 
           if grep -q 'Credits' natsuk1/Views/AboutView.swift; then
             fail "AboutView still has Credits"
@@ -1725,6 +2613,13 @@ jobs:
           fi
           if grep -qi 'AirCard' natsuk1/Views/AboutView.swift; then
             fail "AboutView still has AirCard credit"
+          fi
+
+          if grep -q 'UIUserInterfaceStyle' natsuk1/Resources/Info.plist ; then
+            fail "Info.plist still forces dark mode"
+          fi
+          if grep -q 'preferredColorScheme' natsuk1/natsuk1.swift ; then
+            fail "natsuk1.swift still forces color scheme"
           fi
 
           grep -q 'SWIFT_VERSION: "5.0"' project.yml || fail "project.yml not in Swift 5 mode"
@@ -1803,7 +2698,7 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "Path Access: dlopen + symbols + first-byte preview"
+            --notes "Glass UI + tint-aware + simplified Overview"
 
       - name: Commit
         run: |
@@ -1814,5 +2709,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "Path Access: dlopen + dlsym + byte preview [skip ci]"
+          git commit -m "Glass UI + tint-aware + simplified Overview [skip ci]"
           git push
