@@ -140,7 +140,6 @@ jobs:
               open(p, "w").write(s)
               print("patched KeepAlive")
 
-          # Strip @MainActor / @preconcurrency across the entire project.
           for root, dirs, files in os.walk("natsuk1"):
               for fn in files:
                   if not fn.endswith(".swift"):
@@ -163,6 +162,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
+          import re
           p = "project.yml"
           s = open(p).read()
 
@@ -173,22 +173,33 @@ jobs:
               '    SWIFT_APPROACHABLE_CONCURRENCY: NO\n'
               '    SWIFT_STRICT_CONCURRENCY: minimal\n'
           )
-          if "SWIFT_DEFAULT_ACTOR_ISOLATION" not in s:
-              if anchor in s:
-                  s = s.replace(anchor, extra, 1)
-              else:
-                  s = s.replace("settings:\n", "settings:\n  base:\n" + extra, 1)
+          if "SWIFT_DEFAULT_ACTOR_ISOLATION" not in s and anchor in s:
+              s = s.replace(anchor, extra, 1)
 
-          tgt_anchor = "        SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h\n"
-          tgt_extra = (
-              "        SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h\n"
-              "        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated\n"
-              "        SWIFT_APPROACHABLE_CONCURRENCY: NO\n"
-              "        SWIFT_STRICT_CONCURRENCY: minimal\n"
-              '        OTHER_SWIFT_FLAGS: "$(inherited) -default-isolation nonisolated -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks"\n'
+          flags_value = (
+              '        OTHER_SWIFT_FLAGS: "$(inherited) -default-isolation nonisolated '
+              '-Xfrontend -disable-dynamic-actor-isolation '
+              '-Xfrontend -disable-actor-data-race-checks"\n'
           )
-          if "OTHER_SWIFT_FLAGS" not in s and tgt_anchor in s:
-              s = s.replace(tgt_anchor, tgt_extra, 1)
+
+          if re.search(r'^        OTHER_SWIFT_FLAGS:', s, re.M):
+              s = re.sub(
+                  r'^        OTHER_SWIFT_FLAGS:.*\n',
+                  flags_value,
+                  s,
+                  count=1,
+                  flags=re.M)
+          else:
+              tgt_anchor = "        SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h\n"
+              tgt_extra = (
+                  "        SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h\n"
+                  "        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated\n"
+                  "        SWIFT_APPROACHABLE_CONCURRENCY: NO\n"
+                  "        SWIFT_STRICT_CONCURRENCY: minimal\n"
+                  + flags_value
+              )
+              if tgt_anchor in s:
+                  s = s.replace(tgt_anchor, tgt_extra, 1)
 
           open(p, "w").write(s)
           print(s)
@@ -227,6 +238,7 @@ jobs:
           grep -q "SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated" project.yml || fail "project.yml missing SWIFT_DEFAULT_ACTOR_ISOLATION"
           grep -q "SWIFT_APPROACHABLE_CONCURRENCY: NO" project.yml || fail "project.yml missing SWIFT_APPROACHABLE_CONCURRENCY"
           grep -q "disable-dynamic-actor-isolation" project.yml || fail "project.yml missing disable-dynamic-actor-isolation"
+          grep -q "disable-actor-data-race-checks" project.yml || fail "project.yml missing disable-actor-data-race-checks"
 
           echo "verify OK"
 
