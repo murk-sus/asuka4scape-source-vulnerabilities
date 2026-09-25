@@ -126,15 +126,18 @@ struct LogView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView(showsIndicators: false) {
-                Text(state.log.isEmpty ? "Awaiting execution." : state.log)
-                    .font(.system(size: 9, design: .monospaced))
-                    .multilineTextAlignment(.leading)
-                    .foregroundColor(state.log.isEmpty ? .secondary : .primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            ScrollView(.horizontal, showsIndicators: false) {
+                ScrollView(.vertical, showsIndicators: false) {
+                    Text(state.log.isEmpty ? "Awaiting execution." : state.log)
+                        .font(.system(size: 9, design: .monospaced))
+                        .multilineTextAlignment(.leading)
+                        .foregroundColor(state.log.isEmpty ? .secondary : .primary)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                Spacer(minLength: 0)
-                    .id(0)
+                    Spacer(minLength: 0)
+                        .id(0)
+                }
             }
             .onChange(of: state.log) { _, _ in
                 withAnimation(.linear(duration: 0.05)) {

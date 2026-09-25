@@ -81,8 +81,6 @@ struct SettingsView: View {
                         AboutView().environmentObject(state)
                     } label: {
                         HStack(spacing: 12) {
-                            Image(systemName: "info.circle")
-                                .frame(width: 22, alignment: .center)
                             Text("Credits")
                             Spacer(minLength: 8)
                         }
