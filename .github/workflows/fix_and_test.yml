@@ -842,10 +842,10 @@ jobs:
                   if running { return }
                   running = true; status = .running
                   Task.detached {
-                      _ = nk_necp_run()
+                      let rc = nk_necp_run()
                       await MainActor.run {
                           AppState.shared.running = false
-                          AppState.shared.status = .ok
+                          AppState.shared.status = (rc == 0) ? .ok : .failed
                       }
                   }
               }
@@ -1922,10 +1922,11 @@ jobs:
 
           grep -q 'necp_run' natsuk1/Views/OverviewView.swift || fail "OverviewView missing necp button"
           grep -q 'StatusDot' natsuk1/Views/OverviewView.swift || fail "OverviewView missing StatusDot"
-          grep -q 'circle.fill' natsuk1/Views/OverviewView.swift || fail "StatusDot missing idle symbol"
-          grep -q 'checkmark.circle.fill' natsuk1/Views/OverviewView.swift || fail "StatusDot missing success symbol"
-          grep -q 'xmark.circle.fill' natsuk1/Views/OverviewView.swift || fail "StatusDot missing fail symbol"
           grep -q 'shadow' natsuk1/Views/OverviewView.swift || fail "StatusDot missing glow"
+
+          grep -q 'circle.fill' natsuk1/natsuk1.swift || fail "AppState missing idle/running symbol"
+          grep -q 'checkmark.circle.fill' natsuk1/natsuk1.swift || fail "AppState missing success symbol"
+          grep -q 'xmark.circle.fill' natsuk1/natsuk1.swift || fail "AppState missing fail symbol"
 
           grep -q 'PathAccessView' natsuk1/Views/ToolsView.swift || fail "no PathAccess"
 
