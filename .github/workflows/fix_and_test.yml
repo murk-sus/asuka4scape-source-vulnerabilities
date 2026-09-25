@@ -14,11 +14,11 @@ permissions:
 
 concurrency:
   group: fix-test-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v11
+  CACHE_SALT: v12
 
 jobs:
   fix-and-test:
@@ -52,7 +52,8 @@ jobs:
 
           test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a
           test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers/airlift.h
-          echo "airlift files ok"
+          test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers/module.modulemap
+          echo "airlift files verified"
           ls -la natsuk1/External/AirliftFFI.xcframework/ios-arm64/
 
       - name: Patch PairingController
@@ -66,9 +67,32 @@ jobs:
           open(p, "w").write(s)
           PYEOF
 
-      - name: Write Exploit nk_api.h
+      - name: Write all Swift and C sources
         run: |
-          cat > natsuk1/Exploit/nk_api.h <<'EOF'
+          python3 <<'PYEOF'
+          import os
+
+          def w(path, content):
+              d = os.path.dirname(path)
+              if d:
+                  os.makedirs(d, exist_ok=True)
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(content)
+              print(f"wrote {path} ({len(content)} bytes)")
+
+          w("natsuk1/bridging.h", """\
+          #ifndef NATSUK1_BRIDGING_H
+          #define NATSUK1_BRIDGING_H
+
+          #include <stdint.h>
+          #include "Exploit/nk_api.h"
+          #import "Exploit/GrappaHelper.h"
+          #include "airlift.h"
+
+          #endif
+          """)
+
+          w("natsuk1/Exploit/nk_api.h", """\
           #ifndef NK_API_H
           #define NK_API_H
 
@@ -88,11 +112,9 @@ jobs:
           #define NK_ERR(tag, ...)  nk_logx(tag, __VA_ARGS__)
 
           #endif
-          EOF
+          """)
 
-      - name: Write Exploit nk_api.c
-        run: |
-          cat > natsuk1/Exploit/nk_api.c <<'EOF'
+          w("natsuk1/Exploit/nk_api.c", """\
           #include "nk_api.h"
           #include "nk_offsets.h"
           #include <stdarg.h>
@@ -149,11 +171,9 @@ jobs:
           }
 
           int nk_full_exploit(void) { return nk_run(); }
-          EOF
+          """)
 
-      - name: Write Exploit nk_offsets.h
-        run: |
-          cat > natsuk1/Exploit/nk_offsets.h <<'EOF'
+          w("natsuk1/Exploit/nk_offsets.h", """\
           #ifndef NK_OFFSETS_H
           #define NK_OFFSETS_H
 
@@ -172,25 +192,9 @@ jobs:
           #define NK_OFF_TASK_THREAD        0x50
 
           #endif
-          EOF
+          """)
 
-      - name: Write bridging.h
-        run: |
-          cat > natsuk1/bridging.h <<'EOF'
-          #ifndef NATSUK1_BRIDGING_H
-          #define NATSUK1_BRIDGING_H
-
-          #include <stdint.h>
-          #include "Exploit/nk_apiStatus =.h"
-          #import " "Exploit/GrappaHelperStarting.h"
-          #include "airlift.h"
-
-          #endif
-          EOF
-
-      - name: Write AirliftBridge.swift
-        run: |
-          cat > natsuk1/Helpers/AirliftBridge.swift <<'EOF'
+          w("natsuk1/Helpers/AirliftBridge.swift", '''\
           import Foundation
           import Combine
 
@@ -258,7 +262,7 @@ jobs:
                   }
 
                   state = .pairing
-                  pairing host…"
+                  pairingStatus = "Starting host..."
                   pairPIN = nil
 
                   let ctrl = PairingController.shared
@@ -273,7 +277,7 @@ jobs:
                           self.pairingStatus = "Cancelled"
                       } catch {
                           self.state = .idle
-                          self.pairingStatus = "Failed: \(error.localizedDescription)"
+                          self.pairingStatus = "Failed: \\(error.localizedDescription)"
                       }
                   }
                   Task {
@@ -333,7 +337,7 @@ jobs:
                               let msg = jsonStr ?? "Canary write confirmed"
                               self.state = .done(ok: true, message: msg)
                           } else {
-                              let msg = errStr ?? "rc=\(rc)"
+                              let msg = errStr ?? "rc=\\(rc)"
                               self.state = .done(ok: false, message: msg)
                           }
                       }
@@ -381,11 +385,9 @@ jobs:
                   }
               }
           }
-          EOF
+          ''')
 
-      - name: Write AirliftView.swift
-        run: |
-          cat > natsuk1/Views/AirliftView.swift <<'EOF'
+          w("natsuk1/Views/AirliftView.swift", '''\
           import SwiftUI
           import UIKit
 
@@ -436,7 +438,7 @@ jobs:
                       if case .pairing = airlift.state {
                           HStack(spacing: 8) {
                               ProgressView().scaleEffect(0.85)
-                              Text(airlift.pairingStatus.isEmpty ? "Starting…" : airlift.pairingStatus)
+                              Text(airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus)
                                   .font(.subheadline)
                                   .foregroundColor(.secondary)
                           }
@@ -579,7 +581,7 @@ jobs:
               var body: some View {
                   ScrollViewReader { proxy in
                       ScrollView(showsIndicators: false) {
-                          Text(lines.isEmpty ? "No output yet." : lines.joined(separator: "\n"))
+                          Text(lines.isEmpty ? "No output yet." : lines.joined(separator: "\\n"))
                               .font(.system(size: 9, design: .monospaced))
                               .multilineTextAlignment(.leading)
                               .foregroundColor(lines.isEmpty ? .secondary : .primary)
@@ -600,7 +602,7 @@ jobs:
                   }
                   .contextMenu {
                       Button {
-                          UIPasteboard.general.string = lines.joined(separator: "\n")
+                          UIPasteboard.general.string = lines.joined(separator: "\\n")
                       } label: {
                           Label("Copy All", systemImage: "doc.on.doc")
                       }
@@ -612,11 +614,9 @@ jobs:
                   }
               }
           }
-          EOF
+          ''')
 
-      - name: Write ContentView
-        run: |
-          cat > natsuk1/Views/ContentView.swift <<'EOF'
+          w("natsuk1/Views/ContentView.swift", '''\
           import SwiftUI
           import UIKit
 
@@ -780,16 +780,14 @@ jobs:
                       .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
               }
           }
-          EOF
+          ''')
 
-      - name: Write SettingsView
-        run: |
-          cat > natsuk1/Views/SettingsView.swift <<'EOF'
+          w("natsuk1/Views/SettingsView.swift", '''\
           import SwiftUI
           import UIKit
 
           struct SettingsView: View {
-              @Environment(\.dismiss) private var dismiss
+              @Environment(\\.dismiss) private var dismiss
               @EnvironmentObject var state: AppState
               @EnvironmentObject var offsets: OffsetsStore
 
@@ -820,7 +818,7 @@ jobs:
 
               private var activeVersionLabel: String {
                   guard let v = OffsetsStore.activeVersion else { return "unknown" }
-                  return "\(v.device) / iOS \(v.ios) (\(v.build))"
+                  return "\\(v.device) / iOS \\(v.ios) (\\(v.build))"
               }
 
               var body: some View {
@@ -856,7 +854,7 @@ jobs:
                                       Text(appName)
                                           .font(.title3)
                                           .fontWeight(.semibold)
-                                      Text("Version \(version)")
+                                      Text("Version \\(version)")
                                           .font(.subheadline)
                                           .foregroundColor(.secondary)
                                   }
@@ -900,7 +898,7 @@ jobs:
                                           .frame(width: 22, alignment: .center)
                                       Text("Modify Offsets")
                                       Spacer(minLength: 8)
-                                      Text("\(offsets.filledCount())/\(offsets.totalCount())")
+                                      Text("\\(offsets.filledCount())/\\(offsets.totalCount())")
                                           .font(.system(size: 13, design: .monospaced))
                                           .foregroundColor(.secondary)
                                   }
@@ -967,11 +965,9 @@ jobs:
                   }
               }
           }
-          EOF
+          ''')
 
-      - name: Write KeepAlive
-        run: |
-          cat > natsuk1/Helpers/KeepAlive.swift <<'EOF'
+          w("natsuk1/Helpers/KeepAlive.swift", '''\
           import AVFoundation
           import CoreLocation
           import Foundation
@@ -1011,7 +1007,7 @@ jobs:
                       player = p
                       audioActive = true
                   } catch {
-                      NSLog("[KeepAlive] audio failed: \(error)")
+                      NSLog("[KeepAlive] audio failed: \\(error)")
                       audioActive = false
                   }
               }
@@ -1094,14 +1090,12 @@ jobs:
               }
 
               func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-                  NSLog("[KeepAlive] location error: \(error)")
+                  NSLog("[KeepAlive] location error: \\(error)")
               }
           }
-          EOF
+          ''')
 
-      - name: Write OffsetsStore
-        run: |
-          cat > natsuk1/Helpers/OffsetsStore.swift <<'EOF'
+          w("natsuk1/Helpers/OffsetsStore.swift", '''\
           import Foundation
           import Combine
 
@@ -1160,7 +1154,7 @@ jobs:
                   guard let index = loadIndex() else { return nil }
                   let device = DeviceName.machineID()
                   let v = ProcessInfo.processInfo.operatingSystemVersion
-                  let ios = "\(v.majorVersion).\(v.minorVersion)"
+                  let ios = "\\(v.majorVersion).\\(v.minorVersion)"
                   return index.versions.first(where: { $0.device == device && $0.ios == ios })
                       ?? index.versions.first(where: { $0.device == device })
               }
@@ -1220,11 +1214,9 @@ jobs:
                   Self.groups.reduce(0) { $0 + $1.items.count }
               }
           }
-          EOF
+          ''')
 
-      - name: Write DeviceName
-        run: |
-          cat > natsuk1/Helpers/DeviceName.swift <<'EOF'
+          w("natsuk1/Helpers/DeviceName.swift", '''\
           import Foundation
           import UIKit
 
@@ -1289,7 +1281,7 @@ jobs:
 
               static func full() -> String {
                   let v = ProcessInfo.processInfo.operatingSystemVersion
-                  return "\(friendly()) · iOS \(v.majorVersion).\(v.minorVersion)"
+                  return "\\(friendly()) · iOS \\(v.majorVersion).\\(v.minorVersion)"
               }
 
               static func machineID() -> String {
@@ -1301,11 +1293,9 @@ jobs:
                   }
               }
           }
-          EOF
+          ''')
 
-      - name: Write Respring
-        run: |
-          cat > natsuk1/Helpers/Respring.swift <<'EOF'
+          w("natsuk1/Helpers/Respring.swift", '''\
           import UIKit
           import Foundation
           import WebKit
@@ -1338,7 +1328,7 @@ jobs:
                                           let x = new Uint8Array(1024 * 1024 * 10);
                                           crypto.getRandomValues(x);
                                       }, 0);
-                                  <\\/script>
+                                  <\\\\/script>
                               </body>
                               </html>
                           `;
@@ -1359,16 +1349,14 @@ jobs:
                   webView.loadHTMLString(Self.html, baseURL: nil)
               }
           }
-          EOF
+          ''')
 
-      - name: Write AboutView
-        run: |
-          cat > natsuk1/Views/AboutView.swift <<'EOF'
+          w("natsuk1/Views/AboutView.swift", '''\
           import SwiftUI
           import UIKit
 
           struct AboutView: View {
-              @Environment(\.openURL) private var openURL
+              @Environment(\\.openURL) private var openURL
               @EnvironmentObject var state: AppState
 
               private let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")!
@@ -1395,7 +1383,7 @@ jobs:
                                   .font(.title2)
                                   .fontWeight(.semibold)
 
-                              Text("Version \(version) (\(build))")
+                              Text("Version \\(version) (\\(build))")
                                   .font(.subheadline)
                                   .foregroundColor(.secondary)
 
@@ -1464,16 +1452,14 @@ jobs:
                   .buttonStyle(.plain)
               }
           }
-          EOF
+          ''')
 
-      - name: Write DeviceInfoView
-        run: |
-          cat > natsuk1/Views/DeviceInfoView.swift <<'EOF'
+          w("natsuk1/Views/DeviceInfoView.swift", '''\
           import SwiftUI
           import UIKit
 
           struct DeviceInfoView: View {
-              @Environment(\.dismiss) private var dismiss
+              @Environment(\\.dismiss) private var dismiss
 
               var body: some View {
                   NavigationStack {
@@ -1564,14 +1550,12 @@ jobs:
                   let t = ProcessInfo.processInfo.systemUptime
                   let h = Int(t) / 3600
                   let m = (Int(t) % 3600) / 60
-                  return "\(h)h \(m)m"
+                  return "\\(h)h \\(m)m"
               }
           }
-          EOF
+          ''')
 
-      - name: Write OffsetsView
-        run: |
-          cat > natsuk1/Views/OffsetsView.swift <<'EOF'
+          w("natsuk1/Views/OffsetsView.swift", '''\
           import SwiftUI
           import UIKit
 
@@ -1588,15 +1572,15 @@ jobs:
                           HStack {
                               Text("Filled")
                               Spacer()
-                              Text("\(store.filledCount()) / \(store.totalCount())")
+                              Text("\\(store.filledCount()) / \\(store.totalCount())")
                                   .font(.system(.body, design: .monospaced))
                                   .foregroundColor(.secondary)
                           }
                       }
 
-                      ForEach(filteredGroups, id: \.title) { group in
+                      ForEach(filteredGroups, id: \\.title) { group in
                           Section {
-                              ForEach(group.items, id: \.self) { name in
+                              ForEach(group.items, id: \\.self) { name in
                                   Button {
                                       editing = name
                                   } label: {
@@ -1692,7 +1676,7 @@ jobs:
 
           struct EditOffsetView: View {
               @EnvironmentObject var store: OffsetsStore
-              @Environment(\.dismiss) private var dismiss
+              @Environment(\\.dismiss) private var dismiss
               let name: String
 
               @State private var text: String = ""
@@ -1719,7 +1703,7 @@ jobs:
                           } header: {
                               Text("Value")
                           } footer: {
-                              Text("Hex (0x...) or decimal. Default: \(OffsetsStore.defaults[name] ?? "0x0")")
+                              Text("Hex (0x...) or decimal. Default: \\(OffsetsStore.defaults[name] ?? "0x0")")
                           }
 
                           Section {
@@ -1768,14 +1752,14 @@ jobs:
                       errorMsg = "Invalid numeric value."; showError = true; return
                   }
                   store.update(name, value: trimmed)
-                  dismiss()
-              }
+                  dismissState()
+              private }
           }
 
-          struct ExportOffsetsView: View {
-              @EnvironmentObject var store: OffsetsStore
-              @Environment(\.dismiss) private var dismiss
-              @State private var copied = false
+          struct Export varOffsetsView: View {
+              @ copiedEnvironmentObject var store: Offsets =Store
+              @Environment(\\.dismiss) private var dismiss
+              @ false
 
               private var json: String {
                   let sorted = store.values.sorted { $0.key < $1.key }
@@ -1819,11 +1803,9 @@ jobs:
                   }
               }
           }
-          EOF
+          ''')
 
-      - name: Write natsuk1.swift
-        run: |
-          cat > natsuk1/natsuk1.swift <<'EOF'
+          w("natsuk1/natsuk1.swift", '''\
           import SwiftUI
           import UIKit
           import Foundation
@@ -1838,7 +1820,7 @@ jobs:
               func append(_ s: String) {
                   lock.lock()
                   value += s
-                  value += "\n"
+                  value += "\\n"
                   if value.count > 10000 {
                       value = String(value.suffix(6000))
                   }
@@ -1873,7 +1855,7 @@ jobs:
 
           private func osVersionString() -> String {
               let v = ProcessInfo.processInfo.operatingSystemVersion
-              return "\(v.majorVersion).\(v.minorVersion)"
+              return "\\(v.majorVersion).\\(v.minorVersion)"
           }
 
           private func appVersionString() -> String {
@@ -1920,10 +1902,10 @@ jobs:
                               .onAppear {
                                   nk_set_log(cCallback)
                                   if state.log.isEmpty {
-                                      state.append("[*] natsuk1 v\(appVersionString())")
-                                      state.append("[*] iOS \(osVersionString()) / arm64e")
+                                      state.append("[*] natsuk1 v\\(appVersionString())")
+                                      state.append("[*] iOS \\(osVersionString()) / arm64e")
                                       if let version = OffsetsStore.activeVersion {
-                                          state.append("[*] offsets: \(version.device) / iOS \(version.ios) (\(version.build))")
+                                          state.append("[*] offsets: \\(version.device) / iOS \\(version.ios) (\\(version.build))")
                                       }
                                       state.append("")
                                   }
@@ -1964,7 +1946,7 @@ jobs:
                       Image(systemName: "exclamationmark.triangle.fill")
                           .font(.system(size: 56))
                           .foregroundStyle(.orange)
-                      Text("Not supported for iOS \(version)")
+                      Text("Not supported for iOS \\(version)")
                           .font(.title3)
                           .fontWeight(.semibold)
                           .multilineTextAlignment(.center)
@@ -2057,7 +2039,10 @@ jobs:
                   log = ""
               }
           }
-          EOF
+          ''')
+
+          print("all source files written")
+          PYEOF
 
       - name: Patch Info.plist
         run: |
@@ -2097,17 +2082,24 @@ jobs:
           p = "project.yml"
           s = open(p).read()
 
+          # 1. Remove broken xcframework framework dependency if present
           s = re.sub(
               r'^\s*- framework: natsuk1/External/AirliftFFI\.xcframework\n\s*embed: false\n',
               '',
               s, flags=re.M,
           )
+
+          # 2. Remove External path from sources if present
           s = re.sub(
-              r'^\s*- path: natsuk1/External\n\s*excludes:\n\s*- "\*\*/\*\.xcframework/\*\*"\n',
+              r'^\s*- path: natsuk1/External\n(?:\s*excludes:\n(?:\s*-.*\n)*)?',
               '',
               s, flags=re.M,
           )
 
+          # 3. Remove duplicated -lc++ if already present
+          s = re.sub(r'(-lc\+\+)(\s+-lc\+\+)', r'\1', s)
+
+          # 4. Add HEADER_SEARCH_PATHS with xcframework headers
           hdr = '        HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers $(SRCROOT)/natsuk1/Exploit"'
           if "HEADER_SEARCH_PATHS" in s:
               s = re.sub(r'^\s*HEADER_SEARCH_PATHS:.*\n', hdr + '\n', s, flags=re.M)
@@ -2118,6 +2110,7 @@ jobs:
                   s, flags=re.M,
               )
 
+          # 5. Add .a to OTHER_LDFLAGS if not already there
           lib = '$(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a'
           if lib not in s:
               s = re.sub(
@@ -2125,12 +2118,13 @@ jobs:
                   r'\1\2 ' + lib + ' -lc++',
                   s, flags=re.M,
               )
-          elif "-lc++" not in s:
-              s = re.sub(
-                  r'^(\s*OTHER_LDFLAGS:\s*)(.*)$',
-                  r'\1\2 -lc++',
-                  s, flags=re.M,
-              )
+          else:
+              if "-lc++" not in s:
+                  s = re.sub(
+                      r'^(\s*OTHER_LDFLAGS:\s*)(.*)$',
+                      r'\1\2 -lc++',
+                      s, flags=re.M,
+                  )
 
           open(p, "w").write(s)
           print("---- project.yml ----")
@@ -2217,5 +2211,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "Airlift: direct .a linking, HEADER_SEARCH_PATHS, no xcframework dep [skip ci]"
+          git commit -m "Airlift integration: direct .a linking, Python-written sources, safe concurrency [skip ci]"
           git push
