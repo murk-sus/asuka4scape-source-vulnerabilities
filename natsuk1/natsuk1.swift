@@ -121,14 +121,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
             case .failed: return .red
             }
         }
-        var symbol: String {
-            switch self {
-            case .idle: return "circle.fill"
-            case .running: return "circle.fill"
-            case .ok: return "checkmark.circle.fill"
-            case .failed: return "xmark.circle.fill"
-            }
-        }
     }
     @Published var log: String = ""
     @Published var status: Status = .idle

@@ -59,25 +59,20 @@ struct OverviewView: View {
 struct StatusDot: View {
     let status: AppState.Status
     @State private var pulse = false
-
     var body: some View {
-        Image(systemName: status.symbol)
+        Image(systemName: "circle.fill")
             .font(.system(size: 14))
             .foregroundStyle(status.color)
-            .shadow(color: status.color.opacity(0.8), radius: 6)
-            .scaleEffect(pulse ? 1.15 : 1.0)
+            .shadow(color: status.color.opacity(0.85), radius: pulse ? 8 : 4)
+            .scaleEffect(pulse ? 1.2 : 1.0)
             .animation(
                 status == .running
                     ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
                     : .default,
                 value: pulse
             )
-            .onAppear {
-                if status == .running { pulse = true }
-            }
-            .onChange(of: status) { _, newStatus in
-                pulse = (newStatus == .running)
-            }
+            .onAppear { if status == .running { pulse = true } }
+            .onChange(of: status) { _, s in pulse = (s == .running) }
     }
 }
 
