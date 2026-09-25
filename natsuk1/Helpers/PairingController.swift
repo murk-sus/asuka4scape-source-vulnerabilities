@@ -4,7 +4,7 @@ import Foundation
 /// Drives the RPPairing host: requests Local Network, keeps the app alive while
 /// the user approves the PIN in Settings, advertises the service over Bonjour,
 /// and runs `al_pairing_run_host` off the main thread.
-final class PairingController: @unchecked Sendable {
+nonisolated final class PairingController: @unchecked Sendable {
 
     static let shared = PairingController()
 
@@ -307,7 +307,7 @@ private func cStr(_ ptr: UnsafeMutablePointer<CChar>?) -> String {
 }
 
 
-final class RawPtrBox: @unchecked Sendable {
+nonisolated final class RawPtrBox: @unchecked Sendable {
     let ptr: UnsafeMutableRawPointer
     init(_ ptr: UnsafeMutableRawPointer) { self.ptr = ptr }
 }

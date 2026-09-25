@@ -2,7 +2,7 @@ import AVFoundation
 import CoreLocation
 import Foundation
 import Combine
-final class KeepAlive: NSObject, @unchecked Sendable {
+nonisolated final class KeepAlive: NSObject, @unchecked Sendable {
 static let shared = KeepAlive()
 private(set) var audioActive: Bool = false
 private(set) var locationActive: Bool = false
