@@ -29,84 +29,79 @@ jobs:
         with:
           xcode-version: "26.5"
 
-      - name: Show current files
-        run: |
-          echo "===== PairingController ====="
-          cat natsuk1/Helpers/PairingController.swift || echo "missing"
-          echo "===== KeepAlive ====="
-          cat natsuk1/Helpers/KeepAlive.swift || echo "missing"
-
-      - name: Patch MainActor isolation
+      - name: Patch sources
         run: |
           cat > /tmp/patch.py <<'PYEOF'
           import re, os
 
-          def patch(path):
-              if not os.path.exists(path):
-                  print("skip missing: " + path)
-                  return
-              s = open(path).read()
-              orig = s
+          # --- PairingController ---
+          p = "natsuk1/Helpers/PairingController.swift"
+          if os.path.exists(p):
+              s = open(p).read()
+
+              s = re.sub(r'\n*final class UnmanagedBox[^\n]*\n(?:\s[^\n]*\n|\}\n)*', '\n', s)
 
               s = re.sub(r'^[ \t]*@MainActor[ \t]*\n', '', s, flags=re.M)
               s = re.sub(r'^[ \t]*@Published[ \t]+', '', s, flags=re.M)
-              s = re.sub(r'\bnonisolated[ \t]+(?!\()', '', s)
 
-              s = s.replace(
-                  'final class PairingController: ObservableObject, @unchecked Sendable {',
-                  'final class PairingController: @unchecked Sendable {')
-              s = s.replace(
-                  'final class PairingController: ObservableObject {',
-                  'final class PairingController: @unchecked Sendable {')
-              s = s.replace(
-                  'final class KeepAlive: NSObject, ObservableObject, @unchecked Sendable {',
-                  'final class KeepAlive: NSObject, @unchecked Sendable {')
-              s = s.replace(
-                  'final class KeepAlive: NSObject, ObservableObject {',
-                  'final class KeepAlive: NSObject, @unchecked Sendable {')
+              s = re.sub(
+                  r'final class PairingController: ObservableObject, @unchecked Sendable \{',
+                  'final class PairingController: @unchecked Sendable {', s)
+              s = re.sub(
+                  r'final class PairingController: ObservableObject \{',
+                  'final class PairingController: @unchecked Sendable {', s)
 
               s = s.replace(
                   '    static var customPairingFilePath: String? = nil',
                   '    nonisolated(unsafe) static var customPairingFilePath: String? = nil')
 
-              if 'UnmanagedBox' not in s:
-                  s = s + (
-                      "\n"
-                      "final class UnmanagedBox: @unchecked Sendable {\n"
-                      "    let value: UnsafeMutableRawPointer\n"
-                      "    init(_ value: UnsafeMutableRawPointer) { self.value = value }\n"
-                      "}\n")
+              s = s.replace(
+                  "    let id = String(cString: serviceID)\n    let box = UnmanagedBox(ctx)\n",
+                  "    let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n    let id = String(cString: serviceID)\n")
+              s = s.replace(
+                  "    DispatchQueue.main.async {\n        let controller = Unmanaged<PairingController>.fromOpaque(box.value).takeUnretainedValue()\n        controller.startAdvertising(serviceID: id, port: Int32(port), txt: txt)\n    }",
+                  "    DispatchQueue.main.async {\n        controller.startAdvertising(serviceID: id, port: Int32(port), txt: txt)\n    }")
+              s = s.replace(
+                  "    let pinString = String(cString: pin)\n    let box = UnmanagedBox(ctx)\n",
+                  "    let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n    let pinString = String(cString: pin)\n")
+              s = s.replace(
+                  "    DispatchQueue.main.async {\n        let controller = Unmanaged<PairingController>.fromOpaque(box.value).takeUnretainedValue()\n        controller.presentPin(pinString)\n    }",
+                  "    DispatchQueue.main.async {\n        controller.presentPin(pinString)\n    }")
 
-              s = s.replace(
-                  "    let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n    let id = String(cString: serviceID)\n",
-                  "    let id = String(cString: serviceID)\n    let box = UnmanagedBox(ctx)\n")
-              s = s.replace(
-                  "    DispatchQueue.main.async {\n        controller.startAdvertising(serviceID: id, port: Int32(port), txt: txt)\n    }",
-                  "    DispatchQueue.main.async {\n        let controller = Unmanaged<PairingController>.fromOpaque(box.value).takeUnretainedValue()\n        controller.startAdvertising(serviceID: id, port: Int32(port), txt: txt)\n    }")
-              s = s.replace(
-                  "    let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n    let pinString = String(cString: pin)\n",
-                  "    let pinString = String(cString: pin)\n    let box = UnmanagedBox(ctx)\n")
-              s = s.replace(
-                  "    DispatchQueue.main.async {\n        controller.presentPin(pinString)\n    }",
-                  "    DispatchQueue.main.async {\n        let controller = Unmanaged<PairingController>.fromOpaque(box.value).takeUnretainedValue()\n        controller.presentPin(pinString)\n    }")
+              s = re.sub(r'^(private let pairReadyCallback)', r'nonisolated(unsafe) \1', s, flags=re.M)
+              s = re.sub(r'^(private let pairPinCallback)', r'nonisolated(unsafe) \1', s, flags=re.M)
 
-              if s != orig:
-                  open(path, "w").write(s)
-                  print("patched " + path)
-              else:
-                  print("no changes: " + path)
+              open(p, "w").write(s)
+              print("patched PairingController")
 
-          patch("natsuk1/Helpers/PairingController.swift")
-          patch("natsuk1/Helpers/KeepAlive.swift")
+          # --- KeepAlive ---
+          p = "natsuk1/Helpers/KeepAlive.swift"
+          if os.path.exists(p):
+              s = open(p).read()
+              s = re.sub(r'\n*final class UnmanagedBox[^\n]*\n(?:\s[^\n]*\n|\}\n)*', '\n', s)
+              s = re.sub(r'^[ \t]*@MainActor[ \t]*\n', '', s, flags=re.M)
+              s = re.sub(r'^[ \t]*@Published[ \t]+', '', s, flags=re.M)
+              s = re.sub(
+                  r'final class KeepAlive: NSObject, ObservableObject, @unchecked Sendable \{',
+                  'final class KeepAlive: NSObject, @unchecked Sendable {', s)
+              s = re.sub(
+                  r'final class KeepAlive: NSObject, ObservableObject \{',
+                  'final class KeepAlive: NSObject, @unchecked Sendable {', s)
+              open(p, "w").write(s)
+              print("patched KeepAlive")
+
+          # --- AirliftBridge uses PairingController as plain class now, keep @MainActor on bridge only ---
           PYEOF
           python3 /tmp/patch.py
 
-      - name: Show patched files
-        run: |
-          echo "===== PairingController after patch ====="
-          cat natsuk1/Helpers/PairingController.swift
-          echo "===== KeepAlive after patch ====="
-          cat natsuk1/Helpers/KeepAlive.swift
+          echo "===== PairingController head ====="
+          head -40 natsuk1/Helpers/PairingController.swift
+          echo "===== PairingController tail ====="
+          tail -40 natsuk1/Helpers/PairingController.swift
+          echo "===== KeepAlive head ====="
+          head -20 natsuk1/Helpers/KeepAlive.swift
+          echo "===== KeepAlive tail ====="
+          tail -10 natsuk1/Helpers/KeepAlive.swift
 
       - name: Install tools
         run: |
@@ -152,7 +147,7 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "Fix MainActor crash"
+            --notes "Fix MainActor isolation on top-level C callbacks"
 
       - name: Commit
         run: |
@@ -163,5 +158,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "Strip ObservableObject/MainActor from PairingController and KeepAlive [skip ci]"
+          git commit -m "nonisolated(unsafe) on top-level C callbacks [skip ci]"
           git push
