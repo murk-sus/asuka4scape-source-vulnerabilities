@@ -111,59 +111,79 @@ jobs:
           s = re.sub(
               r"static func syncCanonicalPairingFile\(from sourcePath: String\) -> String \{.*?\n    \}",
               '''static func syncCanonicalPairingFile(from sourcePath: String) -> String {
-                  let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                  let fm = FileManager.default
+                  let dir = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
                   let canonicalURL = dir.appendingPathComponent("natsuk1_pairing.plist")
 
                   if let data = try? Data(contentsOf: URL(fileURLWithPath: sourcePath)), !data.isEmpty {
                       if sourcePath != canonicalURL.path {
                           try? data.write(to: canonicalURL, options: .atomic)
+                          try? fm.removeItem(atPath: sourcePath)
                       }
-                      customPairingFilePath = canonicalURL.path
-                      return canonicalURL.path
                   }
-                  return sourcePath
+
+                  if let files = try? fm.contentsOfDirectory(atPath: dir.path) {
+                      for f in files {
+                          guard f.hasSuffix(".plist")
+                             || f.hasSuffix(".mobilepairing")
+                             || f.hasSuffix(".mobilepair") else { continue }
+                          let path = dir.appendingPathComponent(f).path
+                          if path == canonicalURL.path { continue }
+                          try? fm.removeItem(atPath: path)
+                      }
+                  }
+
+                  customPairingFilePath = canonicalURL.path
+                  return canonicalURL.path
               }''',
               s, count=1, flags=re.S)
 
           s = re.sub(
               r"static func pairingFilePath\(\) -> String \{.*?\n    \}",
               '''static func pairingFilePath() -> String {
-                  let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                  let fm = FileManager.default
+                  let dir = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
                   let canonical = dir.appendingPathComponent("natsuk1_pairing.plist").path
-                  if FileManager.default.fileExists(atPath: canonical) {
-                      let size = (try? FileManager.default.attributesOfItem(atPath: canonical)[.size] as? Int) ?? 0
-                      if size > 0 { return canonical }
-                  }
-                  if let custom = customPairingFilePath, FileManager.default.fileExists(atPath: custom) {
-                      let size = (try? FileManager.default.attributesOfItem(atPath: custom)[.size] as? Int) ?? 0
+
+                  if fm.fileExists(atPath: canonical) {
+                      let size = (try? fm.attributesOfItem(atPath: canonical)[.size] as? Int) ?? 0
                       if size > 0 {
-                          _ = syncCanonicalPairingFile(from: custom)
+                          if let files = try? fm.contentsOfDirectory(atPath: dir.path) {
+                              for f in files {
+                                  guard f.hasSuffix(".plist")
+                                     || f.hasSuffix(".mobilepairing")
+                                     || f.hasSuffix(".mobilepair") else { continue }
+                                  let path = dir.appendingPathComponent(f).path
+                                  if path == canonical { continue }
+                                  try? fm.removeItem(atPath: path)
+                              }
+                          }
                           return canonical
                       }
                   }
-                  if let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
+
+                  if let custom = customPairingFilePath, fm.fileExists(atPath: custom) {
+                      let size = (try? fm.attributesOfItem(atPath: custom)[.size] as? Int) ?? 0
+                      if size > 0 {
+                          return syncCanonicalPairingFile(from: custom)
+                      }
+                  }
+
+                  if let files = try? fm.contentsOfDirectory(atPath: dir.path) {
                       for candidate in files {
                           guard candidate.hasSuffix(".plist")
                              || candidate.hasSuffix(".mobiledevicepairing")
                              || candidate.hasSuffix(".mobilepair") else { continue }
                           let candidatePath = dir.appendingPathComponent(candidate).path
-                          let size = (try? FileManager.default.attributesOfItem(atPath: candidatePath)[.size] as? Int) ?? 0
+                          let size = (try? fm.attributesOfItem(atPath: candidatePath)[.size] as? Int) ?? 0
                           if size > 0 {
-                              _ = syncCanonicalPairingFile(from: candidatePath)
-                              return canonical
+                              return syncCanonicalPairingFile(from: candidatePath)
                           }
                       }
                   }
                   return canonical
               }''',
               s, count=1, flags=re.S)
-
-          s = s.replace(
-              "/// Ensures the given pairing file is mirrored to canonical aircard_pairing.plist and airlift_pairing.plist.",
-              "/// Ensures the given pairing file is mirrored to canonical natsuk1_pairing.plist.")
-          s = s.replace(
-              "/// Checks for canonical aircard_pairing.plist, custom path, or any plist in Documents,",
-              "/// Checks for canonical natsuk1_pairing.plist, custom path, or any plist in Documents,")
 
           s = s.replace("AirCard-iOS", "natsuk1")
           s = s.replace("aircardPairingHostAltIRK", "natsuk1PairingHostAltIRK")
@@ -256,7 +276,7 @@ jobs:
       - name: Apply patch
         run: python3 /tmp/patch.py
 
-      - name: Rewrite AirliftBridge.swift
+      - name: Write AirliftBridge.swift
         run: |
           cat > natsuk1/Helpers/AirliftBridge.swift <<'SWIFT'
           import Foundation
@@ -306,42 +326,30 @@ jobs:
                   var lines: [String] = []
                   lines.append("[paths] home: \(NSHomeDirectory())")
                   lines.append("[paths] bundle: \(Bundle.main.bundlePath)")
-
                   let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].path
                   lines.append("[paths] documents: \(docs)")
-
                   if let lib = fm.urls(for: .libraryDirectory, in: .userDomainMask).first?.path {
                       lines.append("[paths] library: \(lib)")
                   }
                   lines.append("[paths] tmp: \(NSTemporaryDirectory())")
-
                   if let items = try? fm.contentsOfDirectory(atPath: docs) {
                       lines.append("[docs] \(items.count) entries:")
-                      for f in items.prefix(80) {
-                          lines.append("[docs]   \(f)")
-                      }
-                  } else {
-                      lines.append("[docs] cannot list")
+                      for f in items.prefix(80) { lines.append("[docs]   \(f)") }
                   }
-
                   let probes = [
-                      "/var/mobile",
-                      "/var/mobile/Library",
-                      "/private/var/mobile",
-                      "/private/var/mobile/Library",
+                      "/var/mobile", "/var/mobile/Library",
+                      "/private/var/mobile", "/private/var/mobile/Library",
                       "/var/containers/Bundle/Application",
                       "/private/var/containers/Bundle/Application",
                       "/var/mobile/Containers/Data/Application",
                       "/private/var/mobile/Containers/Data/Application",
-                      "/System/Library/PrivateFrameworks",
-                      "/var/jb",
+                      "/System/Library/PrivateFrameworks", "/var/jb",
                   ]
                   for p in probes {
                       var isDir: ObjCBool = false
                       let ok = fm.fileExists(atPath: p, isDirectory: &isDir)
                       lines.append("[probe] \(p) exists=\(ok) dir=\(isDir.boolValue)")
                   }
-
                   for l in lines { appendLog(l) }
               }
 
@@ -366,11 +374,9 @@ jobs:
                       state = .ready(pairingPath: pairingFilePath())
                       return
                   }
-
                   state = .pairing
                   pairingStatus = "Starting host..."
                   pairPIN = nil
-
                   let ctrl = PairingController.shared
                   Task {
                       do {
@@ -406,13 +412,11 @@ jobs:
                   let fm = FileManager.default
                   let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
                   var removed: [String] = []
-
                   let canonicalURL = docs.appendingPathComponent("natsuk1_pairing.plist")
                   if fm.fileExists(atPath: canonicalURL.path) {
                       try? fm.removeItem(at: canonicalURL)
                       removed.append("natsuk1_pairing.plist")
                   }
-
                   if let custom = PairingController.customPairingFilePath {
                       if fm.fileExists(atPath: custom) {
                           try? fm.removeItem(atPath: custom)
@@ -420,7 +424,6 @@ jobs:
                       }
                   }
                   PairingController.customPairingFilePath = nil
-
                   if let files = try? fm.contentsOfDirectory(atPath: docs.path) {
                       for f in files {
                           guard f.hasSuffix(".plist")
@@ -430,13 +433,10 @@ jobs:
                           removed.append(f)
                       }
                   }
-
                   UserDefaults.standard.removeObject(forKey: "natsuk1PairingHostAltIRK")
-
                   state = .idle
                   pairingStatus = ""
                   pairPIN = nil
-
                   appendLog("[delete] removed: \(removed.isEmpty ? "none" : removed.joined(separator: ", "))")
                   appendLog("[delete] hasPairing now: \(hasPairing())")
               }
@@ -447,30 +447,25 @@ jobs:
                       state = .done(ok: false, message: "No pairing file")
                       return
                   }
-
                   state = .running
                   loggedLines.removeAll()
                   exploitLog = []
                   appendLog("[exploit] start path=\(pairingPath) target=\(target)")
                   let targetDir = target
-
                   Task.detached {
                       var outJson: UnsafeMutablePointer<CChar>? = nil
                       var outError: UnsafeMutablePointer<CChar>? = nil
-
                       let rc: Int32 = pairingPath.withCString { pc in
                           targetDir.withCString { tc in
                               al_exploit_run(pc, tc, nil, nil, &outJson, &outError)
                           }
                       }
-
                       let jsonStr = outJson.flatMap { p -> String? in
                           let s = String(cString: p); al_string_free(p); return s
                       }
                       let errStr = outError.flatMap { p -> String? in
                           let s = String(cString: p); al_string_free(p); return s
                       }
-
                       await MainActor.run {
                           if rc == 0 {
                               let msg = jsonStr ?? "Canary write confirmed"
@@ -513,23 +508,19 @@ jobs:
               func findContainer(bundleID: String) async -> String? {
                   let pairingPath = pairingFilePath()
                   guard FileManager.default.fileExists(atPath: pairingPath) else { return nil }
-
                   return await withCheckedContinuation { cont in
                       DispatchQueue.global(qos: .userInitiated).async {
                           var outContainer: UnsafeMutablePointer<CChar>? = nil
                           var outError: UnsafeMutablePointer<CChar>? = nil
-
                           let rc: Int32 = pairingPath.withCString { pc in
                               bundleID.withCString { bc in
                                   al_find_app_container(pc, bc, nil, nil, &outContainer, &outError)
                               }
                           }
-
                           let containerStr = outContainer.flatMap { p -> String? in
                               let s = String(cString: p); al_string_free(p); return s
                           }
                           if let p = outError { al_string_free(p) }
-
                           if rc == 0, let c = containerStr {
                               cont.resume(returning: c)
                           } else {
@@ -542,18 +533,44 @@ jobs:
           SWIFT
           echo "wrote AirliftBridge.swift"
 
-      - name: Rewrite ContentView.swift
+      - name: Write ContentView.swift
         run: |
           cat > natsuk1/Views/ContentView.swift <<'SWIFT'
           import SwiftUI
-          import UIKit
 
           struct ContentView: View {
               @EnvironmentObject var state: AppState
-              @EnvironmentObject var airlift: AirliftBridge
 
-              @State private var show_settings: Bool = false
-              @State private var show_device: Bool = false
+              var body: some View {
+                  TabView {
+                      OverviewView()
+                          .tabItem {
+                              Label(state.t("Overview", "Обзор"), systemImage: "house.fill")
+                          }
+                      ToolsView()
+                          .tabItem {
+                              Label(state.t("Tools", "Инструменты"), systemImage: "wrench.and.screwdriver.fill")
+                          }
+                      SettingsView()
+                          .tabItem {
+                              Label(state.t("Settings", "Настройки"), systemImage: "gear")
+                          }
+                  }
+              }
+          }
+          SWIFT
+          echo "wrote ContentView.swift"
+
+      - name: Write OverviewView.swift
+        run: |
+          cat > natsuk1/Views/OverviewView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct OverviewView: View {
+              @EnvironmentObject var state: AppState
+              @EnvironmentObject var airlift: AirliftBridge
+              @State private var show_device = false
 
               var body: some View {
                   NavigationStack {
@@ -596,7 +613,6 @@ jobs:
                                       .frame(width: 8, height: 8)
                                       .shadow(color: state.status.color.opacity(0.7), radius: 3)
                               }
-
                               Button {
                                   show_device = true
                               } label: {
@@ -619,7 +635,7 @@ jobs:
                           }
 
                           Section {
-                              LogView()
+                              OverviewLogView()
                                   .environmentObject(state)
                                   .terminalPlatter()
                                   .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
@@ -634,7 +650,6 @@ jobs:
                                   Text(state.t("Copy All", "Копировать всё"))
                               }
                               .disabled(state.log.isEmpty)
-
                               Button(role: .destructive) {
                                   state.clear()
                               } label: {
@@ -650,21 +665,6 @@ jobs:
                       .background(Color(UIColor.systemGroupedBackground))
                       .navigationTitle("natsuk1")
                       .navigationBarTitleDisplayMode(.inline)
-                      .toolbar {
-                          ToolbarItem(placement: .navigationBarTrailing) {
-                              Button {
-                                  show_settings = true
-                              } label: {
-                                  Image(systemName: "gear")
-                                      .foregroundStyle(Color(UIColor.tertiaryLabel))
-                              }
-                          }
-                      }
-                      .sheet(isPresented: $show_settings) {
-                          SettingsView()
-                              .environmentObject(state)
-                              .presentationBackground(Color(UIColor.systemGroupedBackground))
-                      }
                       .sheet(isPresented: $show_device) {
                           DeviceInfoView()
                               .presentationBackground(Color(UIColor.systemGroupedBackground))
@@ -673,7 +673,7 @@ jobs:
               }
           }
 
-          struct LogView: View {
+          struct OverviewLogView: View {
               @EnvironmentObject var state: AppState
 
               var body: some View {
@@ -684,9 +684,7 @@ jobs:
                               .multilineTextAlignment(.leading)
                               .foregroundColor(state.log.isEmpty ? .secondary : .primary)
                               .frame(maxWidth: .infinity, alignment: .leading)
-
-                          Spacer(minLength: 0)
-                              .id(0)
+                          Spacer(minLength: 0).id(0)
                       }
                       .onChange(of: state.log) { _, _ in
                           withAnimation(.linear(duration: 0.05)) {
@@ -697,7 +695,7 @@ jobs:
               }
           }
 
-          private extension View {
+          extension View {
               func terminalPlatter() -> some View {
                   self
                       .frame(maxWidth: .infinity)
@@ -708,9 +706,355 @@ jobs:
               }
           }
           SWIFT
-          echo "wrote ContentView.swift"
+          echo "wrote OverviewView.swift"
 
-      - name: Rewrite AirliftView.swift
+      - name: Write ToolsView.swift
+        run: |
+          cat > natsuk1/Views/ToolsView.swift <<'SWIFT'
+          import SwiftUI
+
+          struct ToolsView: View {
+              @EnvironmentObject var state: AppState
+              @EnvironmentObject var airlift: AirliftBridge
+              @EnvironmentObject var offsets: OffsetsStore
+              @State private var show_device = false
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section {
+                              NavigationLink {
+                                  AirliftView().environmentObject(airlift)
+                              } label: {
+                                  Label("Airlift", systemImage: "airplane")
+                              }
+                              NavigationLink {
+                                  OffsetsView().environmentObject(offsets)
+                              } label: {
+                                  Label("Offsets", systemImage: "list.number")
+                              }
+                          } header: {
+                              Label("Exploit", systemImage: "bolt.shield")
+                          }
+
+                          Section {
+                              Button {
+                                  show_device = true
+                              } label: {
+                                  Label("Device Info", systemImage: "iphone")
+                              }
+                              Button {
+                                  state.respring()
+                              } label: {
+                                  Label("Respring", systemImage: "arrow.clockwise")
+                              }
+                          } header: {
+                              Label("Device", systemImage: "cpu")
+                          }
+
+                          Section {
+                              NavigationLink {
+                                  PathAccessView()
+                              } label: {
+                                  Label("Path Access", systemImage: "folder.badge.gearshape")
+                              }
+                          } header: {
+                              Label("Diagnostics", systemImage: "checkmark.shield")
+                          }
+                      }
+                      .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .background(Color(UIColor.systemGroupedBackground))
+                      .navigationTitle("Tools")
+                      .navigationBarTitleDisplayMode(.large)
+                      .sheet(isPresented: $show_device) {
+                          DeviceInfoView()
+                              .presentationBackground(Color(UIColor.systemGroupedBackground))
+                      }
+                  }
+              }
+          }
+          SWIFT
+          echo "wrote ToolsView.swift"
+
+      - name: Write PathAccessView.swift
+        run: |
+          cat > natsuk1/Views/PathAccessView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct PathAccessView: View {
+              struct PathResult: Identifiable {
+                  let id = UUID()
+                  let path: String
+                  let exists: Bool
+                  let isDirectory: Bool
+                  let readable: Bool
+                  let writable: Bool
+                  let size: Int64?
+              }
+
+              @State private var results: [PathResult] = []
+              @State private var busy = false
+
+              private let paths: [String] = [
+                  "/usr/lib/libMobileGestalt.dylib",
+                  "/System/Library/PrivateFrameworks/MobileGestalt.framework",
+                  "/System/Library/PrivateFrameworks/MobileGestalt.framework/MobileGestalt",
+                  "/System/Library/PrivateFrameworks/MobileGestalt.framework/Resources",
+                  "/System/Library/CoreServices/SystemVersion.plist",
+                  "/System/Library/CoreServices/SystemVersionCompat.plist",
+                  "/var/mobile/Library/Preferences/com.apple.MobileGestalt.plist",
+                  "/var/mobile/Library/Caches/com.apple.MobileGestalt.plist",
+                  "/var/mobile/Library/Preferences/.GlobalPreferences.plist",
+                  "/var/mobile/Library/Preferences/com.apple.springboard.plist",
+                  "/var/mobile/Library/Caches",
+                  "/var/mobile/Library",
+                  "/var/mobile/Media",
+                  "/var/mobile/Containers/Data/Application",
+                  "/var/mobile/Containers/Data/System",
+                  "/var/mobile/Containers/Shared/AppGroup",
+                  "/var/containers/Bundle/Application",
+                  "/var/containers/Shared/SystemGroup",
+                  "/private/var/mobile",
+                  "/private/var/mobile/Library",
+                  "/private/var/containers/Shared/SystemGroup",
+                  "/System/Library",
+                  "/System/Library/Frameworks",
+                  "/System/Library/PrivateFrameworks",
+                  "/System/Library/PrivateFrameworks/AirTrafficDevice.framework",
+                  "/System/Library/PrivateFrameworks/AirTrafficHost.framework",
+                  "/System/Library/Caches/com.apple.kernelcaches",
+                  "/System/Library/Kernels",
+                  "/usr/lib",
+                  "/usr/libexec",
+                  "/usr/bin",
+                  "/bin",
+                  "/sbin",
+                  "/etc",
+                  "/private/etc",
+                  "/var/jb",
+                  "/var/jb/usr/bin",
+                  NSHomeDirectory(),
+                  FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path,
+                  FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].path,
+                  NSTemporaryDirectory(),
+              ]
+
+              var body: some View {
+                  List {
+                      Section {
+                          Button {
+                              scan()
+                          } label: {
+                              HStack {
+                                  Image(systemName: "magnifyingglass")
+                                  Text(busy ? "Scanning..." : "Run Scan")
+                                  Spacer(minLength: 8)
+                                  if busy { ProgressView().scaleEffect(0.8) }
+                              }
+                          }
+                          .disabled(busy)
+                      }
+
+                      Section {
+                          ForEach(results) { r in
+                              VStack(alignment: .leading, spacing: 4) {
+                                  Text(r.path)
+                                      .font(.system(size: 11, design: .monospaced))
+                                      .foregroundStyle(r.exists ? .primary : .secondary)
+                                      .lineLimit(2)
+                                  HStack(spacing: 6) {
+                                      badge(r.exists ? "exists" : "missing", color: r.exists ? .green : .red)
+                                      if r.isDirectory { badge("dir", color: .blue) }
+                                      if r.readable { badge("r", color: .green) }
+                                      if r.writable { badge("w", color: .orange) }
+                                      if let s = r.size { badge("\(s)B", color: .gray) }
+                                  }
+                              }
+                              .padding(.vertical, 2)
+                          }
+                      } header: {
+                          Label("Paths", systemImage: "folder")
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .background(Color(UIColor.systemGroupedBackground))
+                  .navigationTitle("Path Access")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .toolbar {
+                      ToolbarItem(placement: .navigationBarTrailing) {
+                          Button {
+                              let text = results.map { r in
+                                  "\(r.path) exists=\(r.exists) dir=\(r.isDirectory) r=\(r.readable) w=\(r.writable)"
+                              }.joined(separator: "\n")
+                              UIPasteboard.general.string = text
+                          } label: {
+                              Image(systemName: "doc.on.doc")
+                          }
+                          .disabled(results.isEmpty)
+                      }
+                  }
+                  .onAppear {
+                      if results.isEmpty { scan() }
+                  }
+              }
+
+              private func badge(_ text: String, color: Color) -> some View {
+                  Text(text)
+                      .font(.system(size: 9, design: .monospaced))
+                      .padding(.horizontal, 4)
+                      .padding(.vertical, 1)
+                      .background(color.opacity(0.18))
+                      .foregroundStyle(color)
+                      .clipShape(RoundedRectangle(cornerRadius: 3))
+              }
+
+              private func scan() {
+                  busy = true
+                  let list = paths
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      let fm = FileManager.default
+                      var out: [PathResult] = []
+                      for p in list {
+                          var isDir: ObjCBool = false
+                          let exists = fm.fileExists(atPath: p, isDirectory: &isDir)
+                          let readable = fm.isReadableFile(atPath: p)
+                          let writable = fm.isWritableFile(atPath: p)
+                          var size: Int64? = nil
+                          if exists, !isDir.boolValue {
+                              if let attrs = try? fm.attributesOfItem(atPath: p),
+                                 let n = attrs[.size] as? NSNumber {
+                                  size = n.int64Value
+                              }
+                          }
+                          out.append(PathResult(
+                              path: p, exists: exists, isDirectory: isDir.boolValue,
+                              readable: readable, writable: writable, size: size))
+                      }
+                      DispatchQueue.main.async {
+                          self.results = out
+                          self.busy = false
+                      }
+                  }
+              }
+          }
+          SWIFT
+          echo "wrote PathAccessView.swift"
+
+      - name: Write SettingsView.swift
+        run: |
+          cat > natsuk1/Views/SettingsView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct SettingsView: View {
+              @EnvironmentObject var state: AppState
+
+              @AppStorage("auto_run") private var auto_run: Bool = false
+              @AppStorage("verbose") private var verbose: Bool = true
+              @AppStorage("keep_alive_audio") private var keep_alive_audio: Bool = false
+              @AppStorage("keep_alive_location") private var keep_alive_location: Bool = false
+
+              private var appName: String {
+                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+                      ?? "natsuk1"
+              }
+
+              private var version: String {
+                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+              }
+
+              private var appIcon: UIImage? {
+                  if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+                     let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+                     let files = primary["CFBundleIconFiles"] as? [String],
+                     let last = files.last {
+                      return UIImage(named: last)
+                  }
+                  return UIImage(named: "AppIcon")
+              }
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section {
+                              HStack(spacing: 14) {
+                                  Group {
+                                      if let icon = appIcon {
+                                          Image(uiImage: icon).resizable().aspectRatio(contentMode: .fill)
+                                      } else {
+                                          ZStack {
+                                              LinearGradient(
+                                                  colors: [Color(red: 0.65, green: 0.30, blue: 0.90),
+                                                           Color(red: 0.30, green: 0.65, blue: 0.95)],
+                                                  startPoint: .topLeading, endPoint: .bottomTrailing)
+                                              Image(systemName: "bolt.fill")
+                                                  .font(.system(size: 26, weight: .semibold))
+                                                  .foregroundStyle(.white)
+                                          }
+                                      }
+                                  }
+                                  .frame(width: 56, height: 56)
+                                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text(appName).font(.title3).fontWeight(.semibold)
+                                      Text("Version \(version)").font(.subheadline).foregroundColor(.secondary)
+                                  }
+                                  Spacer(minLength: 8)
+                              }
+                              .padding(.vertical, 4)
+
+                              NavigationLink {
+                                  AboutView().environmentObject(state)
+                              } label: {
+                                  Label("About", systemImage: "info.circle")
+                              }
+                          } header: {
+                              Label("App", systemImage: "info.circle")
+                          }
+
+                          Section {
+                              Toggle(isOn: $keep_alive_audio) {
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text("Silent Audio")
+                                      Text("Plays inaudible audio so iOS keeps the app running.")
+                                          .font(.caption).foregroundColor(.secondary)
+                                  }
+                              }
+                              Toggle(isOn: $keep_alive_location) {
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text("Background Location")
+                                      Text("Uses low-accuracy location to stay alive when needed.")
+                                          .font(.caption).foregroundColor(.secondary)
+                                  }
+                              }
+                          } header: {
+                              Label("Background Keep-Alive", systemImage: "waveform.circle")
+                          }
+
+                          Section {
+                              Toggle("Auto Run on Launch", isOn: $auto_run)
+                              Toggle("Verbose Output", isOn: $verbose)
+                          } header: {
+                              Label("Options", systemImage: "gearshape")
+                          }
+                      }
+                      .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .background(Color(UIColor.systemGroupedBackground))
+                      .navigationTitle("Settings")
+                      .navigationBarTitleDisplayMode(.large)
+                  }
+              }
+          }
+          SWIFT
+          echo "wrote SettingsView.swift"
+
+      - name: Write AirliftView.swift
         run: |
           cat > natsuk1/Views/AirliftView.swift <<'SWIFT'
           import SwiftUI
@@ -821,15 +1165,13 @@ jobs:
                           Button(role: .destructive) {
                               airlift.cancelPairing()
                           } label: {
-                              Text("Cancel Pairing")
-                                  .frame(maxWidth: .infinity)
+                              Text("Cancel Pairing").frame(maxWidth: .infinity)
                           }
                       } else if airlift.hasPairing() {
                           Button(role: .destructive) {
                               airlift.deletePairing()
                           } label: {
-                              Text("Delete Pairing")
-                                  .frame(maxWidth: .infinity)
+                              Text("Delete Pairing").frame(maxWidth: .infinity)
                           }
                       } else {
                           Button {
@@ -890,8 +1232,7 @@ jobs:
                       Button(role: .destructive) {
                           airlift.deletePairing()
                       } label: {
-                          Text("Delete Pairing")
-                              .frame(maxWidth: .infinity)
+                          Text("Delete Pairing").frame(maxWidth: .infinity)
                       }
                       .disabled(airlift.state == .running)
                   }
@@ -911,9 +1252,7 @@ jobs:
                               .multilineTextAlignment(.leading)
                               .foregroundColor(lines.isEmpty ? .secondary : .primary)
                               .frame(maxWidth: .infinity, alignment: .leading)
-
-                          Spacer(minLength: 0)
-                              .id(0)
+                          Spacer(minLength: 0).id(0)
                       }
                       .frame(maxHeight: 260)
                       .padding(10)
@@ -942,7 +1281,7 @@ jobs:
           SWIFT
           echo "wrote AirliftView.swift"
 
-      - name: Rewrite AboutView.swift
+      - name: Write AboutView.swift
         run: |
           cat > natsuk1/Views/AboutView.swift <<'SWIFT'
           import SwiftUI
@@ -972,14 +1311,10 @@ jobs:
                   List {
                       Section {
                           VStack(alignment: .leading, spacing: 6) {
-                              Text(appName)
-                                  .font(.title2)
-                                  .fontWeight(.semibold)
-
+                              Text(appName).font(.title2).fontWeight(.semibold)
                               Text("Version \(version) (\(build))")
                                   .font(.subheadline)
                                   .foregroundColor(.secondary)
-
                               Text("Research project iOS.")
                                   .font(.footnote)
                                   .foregroundColor(.secondary)
@@ -1041,7 +1376,7 @@ jobs:
           SWIFT
           echo "wrote AboutView.swift"
 
-      - name: Rewrite project.yml
+      - name: Write project.yml
         run: |
           cat > project.yml <<'YAML'
           name: natsuk1
@@ -1176,16 +1511,13 @@ jobs:
           SRC_PATHS="natsuk1/Helpers natsuk1/Views natsuk1/Exploit natsuk1/Resources natsuk1/Offsets natsuk1/natsuk1.swift natsuk1/bridging.h"
 
           if grep -rqi "aircard" $SRC_PATHS ; then
-            echo "===== aircard still present ====="
             grep -rni "aircard" $SRC_PATHS || true
-            fail "aircard must be replaced with natsuk1"
+            fail "aircard still present"
           fi
           if grep -rqi "airlift_pairing" $SRC_PATHS ; then
-            echo "===== airlift_pairing still present ====="
             grep -rni "airlift_pairing" $SRC_PATHS || true
-            fail "airlift_pairing must be replaced with natsuk1_pairing"
+            fail "airlift_pairing still present"
           fi
-
           if grep -rq "@MainActor" $SRC_PATHS ; then
             grep -rn "@MainActor" $SRC_PATHS || true
             fail "@MainActor still present"
@@ -1200,43 +1532,53 @@ jobs:
           fi
 
           grep -q 'natsuk1_pairing.plist' natsuk1/Helpers/PairingController.swift || fail "PairingController missing natsuk1_pairing.plist"
-          grep -q 'natsuk1PairingHostAltIRK' natsuk1/Helpers/PairingController.swift || fail "PairingController missing natsuk1 altIRK key"
-          grep -q 'PairingController.pairingFilePath()' natsuk1/Helpers/AirliftBridge.swift || fail "AirliftBridge not using canonical pairing path"
-          grep -q '"natsuk1_pairing.plist"' natsuk1/Helpers/AirliftBridge.swift || fail "deletePairing missing natsuk1 file"
-          grep -q "func logAccessibleFolders" natsuk1/Helpers/AirliftBridge.swift || fail "logAccessibleFolders missing"
-          grep -q "al_device_respring" natsuk1/Helpers/AirliftBridge.swift || fail "respring not wired"
+          grep -q 'natsuk1PairingHostAltIRK' natsuk1/Helpers/PairingController.swift || fail "PairingController missing altIRK key"
+          grep -q 'removeItem(atPath: sourcePath)' natsuk1/Helpers/PairingController.swift || fail "sync does not sweep"
+          grep -q 'PairingController.pairingFilePath()' natsuk1/Helpers/AirliftBridge.swift || fail "AirliftBridge wrong path"
+          grep -q 'logAccessibleFolders' natsuk1/Helpers/AirliftBridge.swift || fail "logAccessibleFolders missing"
+          grep -q 'al_device_respring' natsuk1/Helpers/AirliftBridge.swift || fail "respring not wired"
 
-          grep -q '_natsuk1probe._tcp' natsuk1/Helpers/LocalNetworkAuthorization.swift || fail "LocalNetworkAuthorization missing natsuk1 probe"
-          grep -q '_natsuk1probe._tcp' natsuk1/Resources/Info.plist || fail "Info.plist missing natsuk1 probe"
+          grep -q '_natsuk1probe._tcp' natsuk1/Helpers/LocalNetworkAuthorization.swift || fail "LocalNetworkAuthorization missing probe"
+          grep -q '_natsuk1probe._tcp' natsuk1/Resources/Info.plist || fail "Info.plist missing probe"
 
-          grep -q '"Run Exploit"' natsuk1/Views/ContentView.swift || fail "ContentView missing Run Exploit"
-          grep -q 'Label(state.t("Exploit"' natsuk1/Views/ContentView.swift || fail "ContentView missing Exploit section"
+          grep -q 'TabView' natsuk1/Views/ContentView.swift || fail "ContentView missing TabView"
+          grep -q 'OverviewView' natsuk1/Views/ContentView.swift || fail "ContentView missing OverviewView"
+          grep -q 'ToolsView' natsuk1/Views/ContentView.swift || fail "ContentView missing ToolsView"
+          grep -q 'SettingsView' natsuk1/Views/ContentView.swift || fail "ContentView missing SettingsView"
 
-          grep -q "localDevVPNUp" natsuk1/Views/AirliftView.swift || fail "AirliftView missing localDevVPNUp"
-          grep -q "LocalDevVPN is not active" natsuk1/Views/AirliftView.swift || fail "AirliftView missing LocalDevVPN warning"
-          grep -q '"Run Exploit"' natsuk1/Views/AirliftView.swift || fail "AirliftView missing Run Exploit"
-          grep -q "logAccessibleFolders" natsuk1/Views/AirliftView.swift || fail "AirliftView missing logAccessibleFolders"
-          if grep -q "!airlift.exploitLog.isEmpty" natsuk1/Views/AirliftView.swift; then
-            fail "AirliftView hides Log section when empty"
+          grep -q 'Run Exploit' natsuk1/Views/OverviewView.swift || fail "OverviewView missing Run Exploit"
+          grep -q 'OverviewLogView' natsuk1/Views/OverviewView.swift || fail "OverviewView missing log view"
+
+          grep -q 'Path Access' natsuk1/Views/ToolsView.swift || fail "ToolsView missing Path Access"
+          grep -q 'AirliftView' natsuk1/Views/ToolsView.swift || fail "ToolsView missing Airlift"
+          grep -q 'OffsetsView' natsuk1/Views/ToolsView.swift || fail "ToolsView missing Offsets"
+          grep -q 'DeviceInfoView' natsuk1/Views/ToolsView.swift || fail "ToolsView missing DeviceInfo"
+          grep -q 'respring' natsuk1/Views/ToolsView.swift || fail "ToolsView missing respring"
+
+          grep -qi 'MobileGestalt' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing MobileGestalt"
+          grep -q 'isReadableFile' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing read check"
+          grep -q 'isWritableFile' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing write check"
+
+          if grep -q '"Done"' natsuk1/Views/SettingsView.swift; then
+            fail "SettingsView still has Done button"
           fi
-          grep -q "AirliftLogView" natsuk1/Views/AirliftView.swift || fail "AirliftView missing AirliftLogView"
 
-          if grep -q "Credits" natsuk1/Views/AboutView.swift; then
+          if grep -q 'Credits' natsuk1/Views/AboutView.swift; then
             fail "AboutView still has Credits"
           fi
-          if grep -q "0xjohnnydev" natsuk1/Views/AboutView.swift; then
+          if grep -q '0xjohnnydev' natsuk1/Views/AboutView.swift; then
             fail "AboutView still has Airlift credit"
           fi
-          if grep -qi "AirCard" natsuk1/Views/AboutView.swift; then
+          if grep -qi 'AirCard' natsuk1/Views/AboutView.swift; then
             fail "AboutView still has AirCard credit"
           fi
 
           grep -q 'SWIFT_VERSION: "5.0"' project.yml || fail "project.yml not in Swift 5 mode"
           if grep -q "SWIFT_DEFAULT_ACTOR_ISOLATION" project.yml ; then
-            fail "project.yml still has SWIFT_DEFAULT_ACTOR_ISOLATION"
+            fail "project.yml has SWIFT_DEFAULT_ACTOR_ISOLATION"
           fi
           if grep -q "default-isolation" project.yml ; then
-            fail "project.yml still has default-isolation flag"
+            fail "project.yml has default-isolation flag"
           fi
           grep -q "disable-dynamic-actor-isolation" project.yml || fail "missing disable-dynamic-actor-isolation"
 
@@ -1307,7 +1649,7 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "Complete aircard→natsuk1 rename"
+            --notes "TabView Overview/Tools/Settings + Path Access"
 
       - name: Commit
         run: |
@@ -1318,5 +1660,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "Complete aircard→natsuk1 rename [skip ci]"
+          git commit -m "TabView + Tools + Path Access diagnostics [skip ci]"
           git push
