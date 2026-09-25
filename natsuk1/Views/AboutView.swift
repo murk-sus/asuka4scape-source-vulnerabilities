@@ -47,7 +47,7 @@ struct AboutView: View {
                             .truncationMode(.middle)
                     }
 
-                    Text("Research project for iOS. Kernel offset viewer, NECP probe, syscall 525 probe and SPTM target listing.")
+                    Text("Research project iOS.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -86,7 +86,7 @@ struct AboutView: View {
             } header: {
                 Text("Disclaimer")
             } footer: {
-                Text("This is an independent research project and is not affiliated with, endorsed by, or sponsored by Apple Inc. The software is provided \"as is\", without warranty of any kind. You are solely responsible for how you use it and for any consequences that follow.")
+                Text("Independent research project. Not affiliated with Apple Inc. Provided as-is.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             }
@@ -99,10 +99,14 @@ struct AboutView: View {
 
     private func linkRow(_ title: String, url: URL) -> some View {
         Button {
+            Haptics.tap()
             openURL(url)
         } label: {
             HStack(alignment: .top, spacing: 8) {
-                Text(title).foregroundStyle(.tint).font(.body).fontWeight(.medium)
+                Text(title)
+                    .foregroundStyle(.tint)
+                    .font(.body)
+                    .fontWeight(.medium)
                 Spacer(minLength: 8)
                 Image(systemName: "link")
                     .font(.system(size: 14, weight: .semibold))
@@ -139,10 +143,14 @@ struct AcknowledgementsView: View {
             Section {
                 ForEach(entries, id: \.name) { entry in
                     Button {
+                        Haptics.tap()
                         openURL(entry.url)
                     } label: {
                         HStack(alignment: .top, spacing: 8) {
-                            Text(entry.name).foregroundStyle(.tint).font(.body).fontWeight(.medium)
+                            Text(entry.name)
+                                .foregroundStyle(.tint)
+                                .font(.body)
+                                .fontWeight(.medium)
                             Spacer(minLength: 8)
                             Text(entry.license)
                                 .font(.system(.footnote, design: .monospaced))

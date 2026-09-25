@@ -4,7 +4,6 @@
       "title": "Kernel",
       "items": [
         "off_kernel_base",
-        "off_kernel_entry",
         "off_sysent_base",
         "off_sysent_count",
         "off_sysent_stride",
@@ -86,7 +85,6 @@
   ],
   "defaults": {
     "off_kernel_base": "0xFFFFFFF007004000",
-    "off_kernel_entry": "0xFFFFFFF00AA4C000",
     "off_sysent_base": "0xFFFFFFF007C192A0",
     "off_sysent_count": "558",
     "off_sysent_stride": "24",

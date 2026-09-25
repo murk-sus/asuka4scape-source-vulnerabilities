@@ -89,6 +89,7 @@ struct SettingsView: View {
                         }
                         .contentShape(Rectangle())
                     }
+                    .simultaneousGesture(TapGesture().onEnded { Haptics.tap() })
                 } header: {
                     Label("About", systemImage: "info.circle")
                 }
@@ -125,6 +126,7 @@ struct SettingsView: View {
                         }
                         .contentShape(Rectangle())
                     }
+                    .simultaneousGesture(TapGesture().onEnded { Haptics.tap() })
                 } header: {
                     Label("Exploit", systemImage: "cpu")
                 }
@@ -155,6 +157,7 @@ struct SettingsView: View {
 
                     Button {
                         state.clear()
+                        Haptics.warning()
                     } label: {
                         HStack(spacing: 10) {
                             Image(systemName: "trash")

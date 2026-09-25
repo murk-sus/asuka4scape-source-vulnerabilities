@@ -12,6 +12,7 @@ struct natsuk1App: App {
     @StateObject private var state = AppState.shared
     @StateObject private var offsets = OffsetsStore.shared
     @AppStorage("auto_run") private var auto_run = false
+    @AppStorage("keep_alive") private var keep_alive = false
 
     init() {
         UserDefaults.standard.register(defaults: [
@@ -38,10 +39,18 @@ struct natsuk1App: App {
                         }
                         state.append("")
                     }
+                    if keep_alive { KeepAlive.shared.start() }
                     if auto_run {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                             state.run()
                         }
+                    }
+                }
+                .onChange(of: keep_alive) { value in
+                    if value {
+                        KeepAlive.shared.start()
+                    } else {
+                        KeepAlive.shared.stop()
                     }
                 }
                 .overlay {
@@ -126,6 +135,7 @@ final class AppState: ObservableObject {
         if running { return }
         running = true
         status = .running
+        Haptics.tap()
 
         let t = Thread { [weak self] in
             _ = nk_full_exploit()
@@ -133,6 +143,7 @@ final class AppState: ObservableObject {
                 guard let self = self else { return }
                 self.running = false
                 self.status = .ok
+                Haptics.success()
             }
         }
         t.qualityOfService = .userInitiated
@@ -141,6 +152,7 @@ final class AppState: ObservableObject {
     }
 
     func respring() {
+        Haptics.tap()
         show_respring = true
     }
 

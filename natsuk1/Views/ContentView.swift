@@ -34,8 +34,8 @@ struct ContentView: View {
                 } header: {
                     Label(state.t("Actions", "Действия"), systemImage: "play.circle")
                 } footer: {
-                    Text(state.t("Runs kernel exploit, prints offsets, runs NECP probe, syscall 525 probe, and lists SPTM patch targets.",
-                                 "Запускает эксплойт ядра, выводит оффсеты, NECP probe, syscall 525 probe и список SPTM-таргетов."))
+                    Text(state.t("Runs kernel exploit, prints offsets and reference data.",
+                                 "Запускает эксплойт, выводит оффсеты и справочные данные."))
                 }
 
                 Section {
@@ -49,6 +49,7 @@ struct ContentView: View {
                     }
 
                     Button {
+                        Haptics.tap()
                         show_device = true
                     } label: {
                         HStack(spacing: 8) {
@@ -87,6 +88,7 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
+                        Haptics.tap()
                         show_settings = true
                     } label: {
                         Image(systemName: "gear")
@@ -116,7 +118,6 @@ struct LogView: View {
                     .multilineTextAlignment(.leading)
                     .foregroundColor(state.log.isEmpty ? .secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
 
                 Spacer(minLength: 0)
                     .id(0)
@@ -129,12 +130,15 @@ struct LogView: View {
             .contextMenu {
                 Button {
                     UIPasteboard.general.string = state.log
+                    Haptics.success()
                 } label: {
                     Label("Copy Output", systemImage: "doc.on.doc")
                 }
+                .tint(.blue)
 
-                Button {
+                Button(role: .destructive) {
                     state.clear()
+                    Haptics.warning()
                 } label: {
                     Label("Clear", systemImage: "trash")
                 }
