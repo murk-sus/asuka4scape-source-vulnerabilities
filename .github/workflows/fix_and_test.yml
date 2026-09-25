@@ -18,7 +18,7 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v21
+  CACHE_SALT: v23
 
 jobs:
   fix-and-test:
@@ -35,7 +35,7 @@ jobs:
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
-      - name: Fetch AirliftFFI from AirCard-iOS
+      - name: Fetch AirliftFFI and patch PairingController
         run: |
           set -euo pipefail
           rm -rf /tmp/aircard
@@ -46,11 +46,7 @@ jobs:
           cp /tmp/aircard/ios-app/GrappaHelper.h natsuk1/Exploit/
           cp /tmp/aircard/ios-app/GrappaHelper.m natsuk1/Exploit/
           cp /tmp/aircard/ios-app/PairingController.swift natsuk1/Helpers/
-          test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a
-          test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers/airlift.h
 
-      - name: Patch PairingController
-        run: |
           cat > /tmp/patch_pc.py <<'PYEOF'
           import re
 
@@ -104,15 +100,20 @@ jobs:
 
           p = "natsuk1/Helpers/PairingController.swift"
           s = strip_comments(open(p).read())
-
           s = re.sub(r'^\s*import\s+AirliftFFI\s*\n', '', s, flags=re.M)
           s = re.sub(r'^@MainActor\s*\n', '', s, flags=re.M)
-          s = re.sub(r'\bnonisolated\s+', '', s)
-
+          s = re.sub(r'\bnonisolated\s+(?!\()', '', s)
+          s = s.replace(
+              'final class PairingController: ObservableObject {',
+              'final class PairingController: ObservableObject, @unchecked Sendable {'
+          )
+          s = s.replace(
+              '    static var customPairingFilePath: String? = nil',
+              '    nonisolated(unsafe) static var customPairingFilePath: String? = nil'
+          )
           s = s.replace('private let hostName = "AirCard-iOS"', 'private let hostName = "natsuk1"')
           s = s.replace('Pair with AirCard-iOS', 'Pair with natsuk1')
           s = s.replace('Settings › AirCard-iOS › Local Network', 'Settings › natsuk1 › Local Network')
-
           s = s.replace(
               "    let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n    let id = String(cString: serviceID)\n",
               "    let id = String(cString: serviceID)\n"
@@ -121,7 +122,6 @@ jobs:
               "    DispatchQueue.main.async {\n        controller.startAdvertising(serviceID: id, port: Int32(port), txt: txt)\n    }",
               "    DispatchQueue.main.async {\n        let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n        controller.startAdvertising(serviceID: id, port: Int32(port), txt: txt)\n    }"
           )
-
           s = s.replace(
               "    let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n    let pinString = String(cString: pin)\n",
               "    let pinString = String(cString: pin)\n"
@@ -130,11 +130,13 @@ jobs:
               "    DispatchQueue.main.async {\n        controller.presentPin(pinString)\n    }",
               "    DispatchQueue.main.async {\n        let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n        controller.presentPin(pinString)\n    }"
           )
-
           open(p, "w").write(s)
           print("patched PairingController")
           PYEOF
           python3 /tmp/patch_pc.py
+
+          test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a
+          test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers/airlift.h
 
       - name: Clean target directories
         run: |
@@ -149,16 +151,16 @@ jobs:
           rm -f natsuk1/Helpers/OffsetsStore.swift
           rm -f natsuk1/Helpers/DeviceName.swift
           rm -f natsuk1/Helpers/Respring.swift
-          rm -f natsuk1/Helpers/Utilities.swift
           rm -f natsuk1/Helpers/LocalNetworkAuthorization.swift
           rm -f natsuk1/Helpers/NetworkStatus.swift
+          rm -f natsuk1/Helpers/Utilities.swift
           rm -f natsuk1/natsuk1.swift
           rm -f natsuk1/bridging.h
           rm -f natsuk1/Exploit/nk_api.h
           rm -f natsuk1/Exploit/nk_api.c
           rm -f natsuk1/Exploit/nk_offsets.h
 
-      - name: Write bridging and C files
+      - name: Write all sources
         run: |
           cat > natsuk1/bridging.h <<'EOF'
           #ifndef NATSUK1_BRIDGING_H
@@ -274,8 +276,6 @@ jobs:
           #endif
           EOF
 
-      - name: Write AirliftBridge.swift
-        run: |
           cat > natsuk1/Helpers/AirliftBridge.swift <<'EOF'
           import Foundation
           import Combine
@@ -469,14 +469,11 @@ jobs:
           }
           EOF
 
-      - name: Write LocalNetworkAuthorization.swift
-        run: |
           cat > natsuk1/Helpers/LocalNetworkAuthorization.swift <<'EOF'
           import Foundation
           import Network
 
-          @MainActor
-          final class LocalNetworkAuthorization {
+          final class LocalNetworkAuthorization: @unchecked Sendable {
               private var browser: NWBrowser?
               private var listener: NWListener?
               private var continuation: CheckedContinuation<Bool, Never>?
@@ -495,7 +492,7 @@ jobs:
                       listener?.newConnectionHandler = { $0.cancel() }
                       listener?.stateUpdateHandler = { [weak self] state in
                           if case .failed = state {
-                              MainActor.assumeIsolated { self?.finish(true) }
+                              DispatchQueue.main.async { self?.finish(true) }
                           }
                       }
                       self.listener = listener
@@ -503,12 +500,12 @@ jobs:
                       let browser = NWBrowser(for: .bonjour(type: probeType, domain: nil), using: params)
                       browser.stateUpdateHandler = { [weak self] state in
                           if case .failed = state {
-                              MainActor.assumeIsolated { self?.finish(true) }
+                              DispatchQueue.main.async { self?.finish(true) }
                           }
                       }
                       browser.browseResultsChangedHandler = { [weak self] results, _ in
                           if !results.isEmpty {
-                              MainActor.assumeIsolated { self?.finish(true) }
+                              DispatchQueue.main.async { self?.finish(true) }
                           }
                       }
                       self.browser = browser
@@ -517,7 +514,7 @@ jobs:
                       browser.start(queue: .main)
 
                       DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
-                          MainActor.assumeIsolated { self?.finish(true) }
+                          self?.finish(true)
                       }
                   }
               }
@@ -532,16 +529,13 @@ jobs:
           }
           EOF
 
-      - name: Write KeepAlive.swift
-        run: |
           cat > natsuk1/Helpers/KeepAlive.swift <<'EOF'
           import AVFoundation
           import CoreLocation
           import Foundation
           import Combine
 
-          @MainActor
-          final class KeepAlive: NSObject, ObservableObject {
+          final class KeepAlive: NSObject, ObservableObject, @unchecked Sendable {
               static let shared = KeepAlive()
 
               @Published private(set) var audioActive: Bool = false
@@ -617,7 +611,7 @@ jobs:
                   locationActive = false
               }
 
-              nonisolated private static func silentWavData() -> Data {
+              private static func silentWavData() -> Data {
                   let sampleRate: UInt32 = 8000
                   let channels: UInt16 = 1
                   let bitsPerSample: UInt16 = 16
@@ -667,8 +661,6 @@ jobs:
           }
           EOF
 
-      - name: Write OffsetsStore.swift
-        run: |
           cat > natsuk1/Helpers/OffsetsStore.swift <<'EOF'
           import Foundation
           import Combine
@@ -790,8 +782,6 @@ jobs:
           }
           EOF
 
-      - name: Write DeviceName.swift
-        run: |
           cat > natsuk1/Helpers/DeviceName.swift <<'EOF'
           import Foundation
           import UIKit
@@ -871,8 +861,6 @@ jobs:
           }
           EOF
 
-      - name: Write Respring.swift
-        run: |
           cat > natsuk1/Helpers/Respring.swift <<'EOF'
           import UIKit
           import Foundation
@@ -894,8 +882,6 @@ jobs:
           }
           EOF
 
-      - name: Write AirliftView.swift
-        run: |
           cat > natsuk1/Views/AirliftView.swift <<'EOF'
           import SwiftUI
           import UIKit
@@ -1125,8 +1111,6 @@ jobs:
           }
           EOF
 
-      - name: Write ContentView.swift
-        run: |
           cat > natsuk1/Views/ContentView.swift <<'EOF'
           import SwiftUI
           import UIKit
@@ -1220,6 +1204,13 @@ jobs:
 
                           Section {
                               Button {
+                                  UIPasteboard.general.string = state.log
+                              } label: {
+                                  Text(state.t("Copy All", "Копировать всё"))
+                              }
+                              .disabled(state.log.isEmpty)
+
+                              Button(role: .destructive) {
                                   state.clear()
                               } label: {
                                   Text(state.t("Clear", "Очистить"))
@@ -1293,8 +1284,6 @@ jobs:
           }
           EOF
 
-      - name: Write SettingsView.swift
-        run: |
           cat > natsuk1/Views/SettingsView.swift <<'EOF'
           import SwiftUI
           import UIKit
@@ -1480,8 +1469,6 @@ jobs:
           }
           EOF
 
-      - name: Write OffsetsView.swift
-        run: |
           cat > natsuk1/Views/OffsetsView.swift <<'EOF'
           import SwiftUI
           import UIKit
@@ -1732,8 +1719,6 @@ jobs:
           }
           EOF
 
-      - name: Write AboutView.swift
-        run: |
           cat > natsuk1/Views/AboutView.swift <<'EOF'
           import SwiftUI
           import UIKit
@@ -1837,8 +1822,6 @@ jobs:
           }
           EOF
 
-      - name: Write DeviceInfoView.swift
-        run: |
           cat > natsuk1/Views/DeviceInfoView.swift <<'EOF'
           import SwiftUI
           import UIKit
@@ -1940,8 +1923,6 @@ jobs:
           }
           EOF
 
-      - name: Write natsuk1.swift
-        run: |
           cat > natsuk1/natsuk1.swift <<'EOF'
           import SwiftUI
           import UIKit
@@ -2347,5 +2328,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "Airlift integration [skip ci]"
+          git commit -m "Airlift integration with all fixes [skip ci]"
           git push
