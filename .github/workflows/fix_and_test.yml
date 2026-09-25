@@ -78,12 +78,41 @@ jobs:
                       return s.replace(pat, repl, 1)
               return s
 
+          def protect_shared(s):
+              s = re.sub(
+                  r"(?<!nonisolated\(unsafe\) )\bstatic let shared\b",
+                  "nonisolated(unsafe) static let shared",
+                  s)
+              s = re.sub(
+                  r"(?<!nonisolated\(unsafe\) )\bstatic var shared\b",
+                  "nonisolated(unsafe) static var shared",
+                  s)
+              s = re.sub(
+                  r"(?<!nonisolated\(unsafe\) )\bstatic let sharedInstance\b",
+                  "nonisolated(unsafe) static let sharedInstance",
+                  s)
+              s = re.sub(
+                  r"(?<!nonisolated\(unsafe\) )\bstatic var sharedInstance\b",
+                  "nonisolated(unsafe) static var sharedInstance",
+                  s)
+              return s
+
+          def walk_all_swift(fn):
+              for root, dirs, files in os.walk("natsuk1"):
+                  for f in files:
+                      if not f.endswith(".swift"):
+                          continue
+                      fp = os.path.join(root, f)
+                      fn(fp)
+
+          # ---------------- PairingController ----------------
           p = "natsuk1/Helpers/PairingController.swift"
           s = open(p).read()
 
           s = s.replace("@preconcurrency import AirliftFFI\n", "import AirliftFFI\n")
           s = clean(s)
           s = mark_nonisolated(s, "PairingController")
+          s = protect_shared(s)
 
           s = s.replace(
               "static var customPairingFilePath: String? = nil",
@@ -123,36 +152,40 @@ jobs:
           open(p, "w").write(s)
           print("patched PairingController")
 
+          # ---------------- NetworkStatus ----------------
           p = "natsuk1/Helpers/NetworkStatus.swift"
           s = open(p).read()
           s = re.sub(
               r"return String\(cString: host\)",
               "let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }\n        return String(decoding: bytes, as: UTF8.self)",
               s)
+          s = protect_shared(s)
           open(p, "w").write(s)
           print("patched NetworkStatus")
 
+          # ---------------- KeepAlive ----------------
           p = "natsuk1/Helpers/KeepAlive.swift"
           if os.path.exists(p):
               s = open(p).read()
               s = clean(s)
               s = mark_nonisolated(s, "KeepAlive")
+              s = protect_shared(s)
               open(p, "w").write(s)
               print("patched KeepAlive")
 
-          for root, dirs, files in os.walk("natsuk1"):
-              for fn in files:
-                  if not fn.endswith(".swift"):
-                      continue
-                  fp = os.path.join(root, fn)
-                  src = open(fp).read()
-                  new = re.sub(r"@MainActor\s*", "", src)
-                  new = new.replace("@preconcurrency import AirliftFFI\n", "import AirliftFFI\n")
-                  new = new.replace("@preconcurrency import ", "import ")
-                  new = new.replace("@preconcurrency\n", "")
-                  if new != src:
-                      open(fp, "w").write(new)
-                      print("cleaned " + fp)
+          # ---------------- Global pass ----------------
+          def handle(fp):
+              src = open(fp).read()
+              new = re.sub(r"@MainActor\s*", "", src)
+              new = new.replace("@preconcurrency import AirliftFFI\n", "import AirliftFFI\n")
+              new = new.replace("@preconcurrency import ", "import ")
+              new = new.replace("@preconcurrency\n", "")
+              new = protect_shared(new)
+              if new != src:
+                  open(fp, "w").write(new)
+                  print("cleaned " + fp)
+
+          walk_all_swift(handle)
           ENDSCRIPT
 
       - name: Apply patch
@@ -235,6 +268,12 @@ jobs:
             fail "@preconcurrency still present in project"
           fi
 
+          if grep -rnE "(^|[^)] )static (let|var) shared(Instance)?\b" natsuk1/ ; then
+            echo "===== bare static shared present ====="
+            grep -rnE "(^|[^)] )static (let|var) shared(Instance)?\b" natsuk1/ || true
+            fail "static shared without nonisolated(unsafe)"
+          fi
+
           grep -q "SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated" project.yml || fail "project.yml missing SWIFT_DEFAULT_ACTOR_ISOLATION"
           grep -q "SWIFT_APPROACHABLE_CONCURRENCY: NO" project.yml || fail "project.yml missing SWIFT_APPROACHABLE_CONCURRENCY"
           grep -q "disable-dynamic-actor-isolation" project.yml || fail "project.yml missing disable-dynamic-actor-isolation"
@@ -308,7 +347,7 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "Disable dynamic actor isolation runtime checks"
+            --notes "Protect static shared singletons from nonisolated default"
 
       - name: Commit
         run: |
@@ -319,5 +358,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "Disable dynamic actor isolation runtime checks [skip ci]"
+          git commit -m "Protect static shared singletons [skip ci]"
           git push
