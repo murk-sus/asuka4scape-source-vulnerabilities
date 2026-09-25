@@ -209,7 +209,7 @@ jobs:
               s = f.read()
 
           if "natsuk1-kread-v4" in s:
-              print("already patched")
+              print("already patched to v4")
               sys.exit(0)
 
           orig = s
@@ -223,12 +223,25 @@ jobs:
           s = re.sub(
               r"static int kread_raw\(uint64_t kaddr, uint32_t len\) \{.*?\n\}\n",
               kread + "\n\n", s, count=1, flags=re.DOTALL)
+
           s = re.sub(
               r"static int calibrate_kread\(void\) \{.*?\n\}\n",
               calib + "\n\n", s, count=1, flags=re.DOTALL)
-          s = re.sub(
+
+          combined = re.compile(
+              r"static volatile int g_busy = 0;.*?int nk_necp_run\(void\) \{.*?\n\}\n",
+              flags=re.DOTALL)
+          single = re.compile(
               r"int nk_necp_run\(void\) \{.*?\n\}\n",
-              run + "\n", s, count=1, flags=re.DOTALL)
+              flags=re.DOTALL)
+
+          if combined.search(s):
+              s = combined.sub(run + "\n", s, count=1)
+          elif single.search(s):
+              s = single.sub(run + "\n", s, count=1)
+          else:
+              print("ERROR: nk_necp_run block not found")
+              sys.exit(1)
 
           if "natsuk1-kread-v4" not in s:
               print("ERROR: marker not inserted")
@@ -236,6 +249,12 @@ jobs:
 
           if s == orig:
               print("ERROR: no changes applied")
+              sys.exit(1)
+
+          g_busy_count = s.count("static volatile int g_busy = 0;")
+          impl_count   = s.count("static int nk_necp_run_impl(void)")
+          if g_busy_count != 1 or impl_count != 1:
+              print("ERROR: duplicate block: g_busy=%d impl=%d" % (g_busy_count, impl_count))
               sys.exit(1)
 
           with open(p, "w") as f:
@@ -355,6 +374,9 @@ jobs:
           grep -q "dump_buf_words" "$F"
           grep -q -e "----- attempt" "$F"
           grep -q "g_busy" "$F"
+          test "$(grep -c 'static volatile int g_busy = 0;' "$F")" = "1"
+          test "$(grep -c 'static int nk_necp_run_impl(void)' "$F")" = "1"
+          test "$(grep -c 'int nk_necp_run(void)' "$F")" = "1"
           python3 - <<'PYEOF'
           import json
           d = json.load(open("natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"))
