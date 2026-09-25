@@ -12,15 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Apply all changes
+      - name: Patch config files
         run: |
           python3 <<'PYEOF'
-          import os, re, textwrap
-
-          D = textwrap.dedent
+          import os, re
 
           def w(path, content):
-              os.makedirs(os.path.dirname(path), exist_ok=True)
+              d = os.path.dirname(path)
+              if d:
+                  os.makedirs(d, exist_ok=True)
               with open(path, "w") as f:
                   f.write(content)
 
@@ -28,10 +28,10 @@ jobs:
           s = open(p).read()
           s = re.sub(r'^\s*SWIFT_VERSION:.*\n', '    SWIFT_VERSION: "6.0"\n', s, flags=re.M)
           if "SWIFT_STRICT_CONCURRENCY" not in s:
-              s = re.sub(
-                  r'^    SWIFT_VERSION: "6\.0"\n',
+              s = s.replace(
+                  '    SWIFT_VERSION: "6.0"\n',
                   '    SWIFT_VERSION: "6.0"\n    SWIFT_STRICT_CONCURRENCY: minimal\n',
-                  s, flags=re.M
+                  1
               )
           s = re.sub(r'^\s*HEADER_SEARCH_PATHS:.*\n', '', s, flags=re.M)
           s = re.sub(r'^\s*USER_HEADER_SEARCH_PATHS:.*\n', '', s, flags=re.M)
@@ -45,6 +45,22 @@ jobs:
               s, flags=re.DOTALL
           )
           w("natsuk1/Resources/Info.plist", s)
+
+          print("config OK")
+          PYEOF
+
+      - name: Write natsuk1.swift
+        run: |
+          python3 <<'PYEOF'
+          import os, textwrap
+          D = textwrap.dedent
+
+          def w(path, content):
+              d = os.path.dirname(path)
+              if d:
+                  os.makedirs(d, exist_ok=True)
+              with open(path, "w") as f:
+                  f.write(content)
 
           w("natsuk1/natsuk1.swift", D(r"""
               import SwiftUI
@@ -259,6 +275,22 @@ jobs:
               }
               """))
 
+          print("natsuk1.swift OK")
+          PYEOF
+
+      - name: Write ContentView
+        run: |
+          python3 <<'PYEOF'
+          import os, textwrap
+          D = textwrap.dedent
+
+          def w(path, content):
+              d = os.path.dirname(path)
+              if d:
+                  os.makedirs(d, exist_ok=True)
+              with open(path, "w") as f:
+                  f.write(content)
+
           w("natsuk1/Views/ContentView.swift", D(r"""
               import SwiftUI
               import UIKit
@@ -424,6 +456,22 @@ jobs:
                   }
               }
               """))
+
+          print("ContentView OK")
+          PYEOF
+
+      - name: Write SettingsView
+        run: |
+          python3 <<'PYEOF'
+          import os, textwrap
+          D = textwrap.dedent
+
+          def w(path, content):
+              d = os.path.dirname(path)
+              if d:
+                  os.makedirs(d, exist_ok=True)
+              with open(path, "w") as f:
+                  f.write(content)
 
           w("natsuk1/Views/SettingsView.swift", D(r"""
               import SwiftUI
@@ -638,17 +686,19 @@ jobs:
               }
               """))
 
-          print("phase 1 OK")
+          print("SettingsView OK")
           PYEOF
 
-      - name: Write remaining views
+      - name: Write AboutView
         run: |
           python3 <<'PYEOF'
           import os, textwrap
           D = textwrap.dedent
 
           def w(path, content):
-              os.makedirs(os.path.dirname(path), exist_ok=True)
+              d = os.path.dirname(path)
+              if d:
+                  os.makedirs(d, exist_ok=True)
               with open(path, "w") as f:
                   f.write(content)
 
@@ -817,6 +867,22 @@ jobs:
               }
               """))
 
+          print("AboutView OK")
+          PYEOF
+
+      - name: Write DeviceInfoView
+        run: |
+          python3 <<'PYEOF'
+          import os, textwrap
+          D = textwrap.dedent
+
+          def w(path, content):
+              d = os.path.dirname(path)
+              if d:
+                  os.makedirs(d, exist_ok=True)
+              with open(path, "w") as f:
+                  f.write(content)
+
           w("natsuk1/Views/DeviceInfoView.swift", D(r"""
               import SwiftUI
               import UIKit
@@ -917,6 +983,22 @@ jobs:
                   }
               }
               """))
+
+          print("DeviceInfoView OK")
+          PYEOF
+
+      - name: Write OffsetsView
+        run: |
+          python3 <<'PYEOF'
+          import os, textwrap
+          D = textwrap.dedent
+
+          def w(path, content):
+              d = os.path.dirname(path)
+              if d:
+                  os.makedirs(d, exist_ok=True)
+              with open(path, "w") as f:
+                  f.write(content)
 
           w("natsuk1/Views/OffsetsView.swift", D(r"""
               import SwiftUI
@@ -1175,7 +1257,7 @@ jobs:
               }
               """))
 
-          print("phase 2 OK")
+          print("OffsetsView OK")
           PYEOF
 
       - name: Write README
@@ -1225,6 +1307,7 @@ jobs:
               - [@asuka4scape](https://t.me/asuka4scape_developer)
               """).lstrip()
           open("README.md", "w").write(content)
+          print("README OK")
           PYEOF
 
       - name: Commit and push
