@@ -72,7 +72,7 @@ jobs:
 
           static int nk_necp_run_impl(void) {
               nk_log("");
-              nk_log("=== natsuk1 v1.3 (kread-retry) ===");
+              nk_log("=== natsuk1 v1.3 (natsuk1-kread-v3) ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("device: iPhone14,5 / iPhone14,7");
               nk_log("");
@@ -140,21 +140,24 @@ jobs:
           import re, sys
           p = "natsuk1/Exploit/necp.c"
           s = open(p).read()
+
           if "natsuk1-kread-v3" in s:
               print("already patched")
               sys.exit(0)
+
           orig = s
+          calib = open("/tmp/nk/calib.c").read().rstrip()
+          run   = open("/tmp/nk/run.c").read().rstrip()
 
           s = re.sub(r"static int calibrate_kread\(void\) \{.*?\n\}\n",
-                     open("/tmp/nk/calib.c").read().rstrip() + "\n\n",
-                     s, count=1, flags=re.DOTALL)
+                     calib + "\n\n", s, count=1, flags=re.DOTALL)
 
           s = re.sub(r"int nk_necp_run\(void\) \{.*?\n\}\n",
-                     open("/tmp/nk/run.c").read().rstrip() + "\n",
-                     s, count=1, flags=re.DOTALL)
+                     run + "\n", s, count=1, flags=re.DOTALL)
 
-          s = s.replace("=== natsuk1 v1.2 (natsuk1-kread-fix-v2) ===",
-                        "=== natsuk1 v1.3 (natsuk1-kread-v3) ===")
+          if "natsuk1-kread-v3" not in s:
+              print("ERROR: marker not inserted")
+              sys.exit(1)
 
           assert s != orig, "no changes"
           open(p, "w").write(s)
