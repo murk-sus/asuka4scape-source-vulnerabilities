@@ -1,4 +1,4 @@
-name: Bump to iOS 27.0 and restore presentationBackground
+name: Bump to iOS 27 SDK
 
 on:
   workflow_dispatch:
@@ -7,33 +7,36 @@ permissions:
   contents: write
 
 jobs:
-  fix:
+  rebuild:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Bump deployment target
+      - name: Patch project.yml
         run: |
           python3 <<'PYEOF'
           import re
 
           p = "project.yml"
           s = open(p).read()
-          s = s.replace('    iOS: "16.0"', '    iOS: "27.0"')
-          s = s.replace('IPHONEOS_DEPLOYMENT_TARGET: "16.0"', 'IPHONEOS_DEPLOYMENT_TARGET: "27.0"')
-          open(p, "w").write(s)
-
-          p = "natsuk1/Resources/Info.plist"
-          s = open(p).read()
-          s = re.sub(
-              r'<key>MinimumOSVersion</key>\s*<string>[^<]*</string>',
-              '<key>MinimumOSVersion</key><string>27.0</string>',
-              s,
-          )
+          s = re.sub(r'(^\s*iOS:\s*)"[^"]*"', r'\1"27.0"', s, flags=re.M)
+          s = re.sub(r'(IPHONEOS_DEPLOYMENT_TARGET:\s*)"[^"]*"', r'\1"27.0"', s, flags=re.M)
+          s = re.sub(r'(SWIFT_VERSION:\s*)"[^"]*"', r'\1"6.0"', s, flags=re.M)
           open(p, "w").write(s)
           PYEOF
 
-      - name: Rewrite ContentView
+      - name: Patch Info.plist
+        run: |
+          python3 <<'PYEOF'
+          import re
+          p = "natsuk1/Resources/Info.plist"
+          s = open(p).read()
+          s = re.sub(r'<key>MinimumOSVersion</key>\s*<string>[^<]*</string>',
+                     '<key>MinimumOSVersion</key><string>27.0</string>', s)
+          open(p, "w").write(s)
+          PYEOF
+
+      - name: Write ContentView
         run: |
           cat > natsuk1/Views/ContentView.swift <<'NKEOF'
           import SwiftUI
@@ -41,7 +44,6 @@ jobs:
 
           struct ContentView: View {
               @EnvironmentObject var state: AppState
-              @AppStorage("verbose")  private var verbose: Bool = true
               @AppStorage("auto_run") private var auto_run: Bool = false
 
               @State private var show_settings: Bool = false
@@ -120,7 +122,6 @@ jobs:
                       }
                       .listStyle(.insetGrouped)
                       .scrollContentBackground(.hidden)
-                      .background(Color(UIColor.systemGroupedBackground))
                       .navigationTitle("natsuk1")
                       .navigationBarTitleDisplayMode(.inline)
                       .toolbar {
@@ -144,6 +145,7 @@ jobs:
                               .presentationBackground(Color(UIColor.systemGroupedBackground))
                       }
                   }
+                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
               }
           }
 
@@ -201,7 +203,482 @@ jobs:
           }
           NKEOF
 
-      - name: Rewrite OffsetsView
+      - name: Write SettingsView
+        run: |
+          cat > natsuk1/Views/SettingsView.swift <<'NKEOF'
+          import SwiftUI
+          import UIKit
+
+          struct SettingsView: View {
+              @Environment(\.dismiss) private var dismiss
+              @EnvironmentObject var state: AppState
+              @EnvironmentObject var offsets: OffsetsStore
+
+              @AppStorage("auto_run")   private var auto_run: Bool = false
+              @AppStorage("verbose")    private var verbose: Bool = true
+              @AppStorage("keep_alive") private var keep_alive: Bool = false
+
+              private var appName: String {
+                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+                      ?? "natsuk1"
+              }
+
+              private var version: String {
+                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+              }
+
+              private var appIcon: UIImage? {
+                  if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+                     let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+                     let files = primary["CFBundleIconFiles"] as? [String],
+                     let last = files.last {
+                      return UIImage(named: last)
+                  }
+                  return UIImage(named: "AppIcon")
+              }
+
+              private var activeVersionLabel: String {
+                  guard let v = OffsetsStore.activeVersion else { return "unknown" }
+                  return "\(v.device) / iOS \(v.ios) (\(v.build))"
+              }
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section {
+                              HStack(spacing: 14) {
+                                  Group {
+                                      if let icon = appIcon {
+                                          Image(uiImage: icon)
+                                              .resizable()
+                                              .aspectRatio(contentMode: .fill)
+                                      } else {
+                                          ZStack {
+                                              LinearGradient(
+                                                  colors: [
+                                                      Color(red: 0.65, green: 0.30, blue: 0.90),
+                                                      Color(red: 0.30, green: 0.65, blue: 0.95)
+                                                  ],
+                                                  startPoint: .topLeading,
+                                                  endPoint: .bottomTrailing
+                                              )
+                                              Image(systemName: "bolt.fill")
+                                                  .font(.system(size: 26, weight: .semibold))
+                                                  .foregroundStyle(.white)
+                                          }
+                                      }
+                                  }
+                                  .frame(width: 56, height: 56)
+                                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text(appName)
+                                          .font(.title3)
+                                          .fontWeight(.semibold)
+                                      Text("Version \(version)")
+                                          .font(.subheadline)
+                                          .foregroundColor(.secondary)
+                                  }
+                                  Spacer(minLength: 8)
+                              }
+                              .padding(.vertical, 4)
+
+                              NavigationLink {
+                                  AboutView().environmentObject(state)
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "info.circle")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Credits")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                  }
+                                  .contentShape(Rectangle())
+                              }
+                          } header: {
+                              Label("About", systemImage: "info.circle")
+                          }
+
+                          Section {
+                              HStack(spacing: 10) {
+                                  Image(systemName: "cpu")
+                                      .foregroundStyle(.secondary)
+                                      .frame(width: 20)
+                                  Text("Offsets")
+                                      .foregroundStyle(.secondary)
+                                  Spacer(minLength: 8)
+                                  Text(activeVersionLabel)
+                                      .font(.system(size: 12, design: .monospaced))
+                                      .foregroundColor(.secondary)
+                                      .lineLimit(1)
+                                      .truncationMode(.middle)
+                              }
+                              .padding(.vertical, 2)
+
+                              NavigationLink {
+                                  OffsetsView().environmentObject(offsets)
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "list.number")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Modify Offsets")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                      Text("\(offsets.filledCount())/\(offsets.totalCount())")
+                                          .font(.system(size: 13, design: .monospaced))
+                                          .foregroundColor(.secondary)
+                                  }
+                                  .contentShape(Rectangle())
+                              }
+                          } header: {
+                              Label("Exploit", systemImage: "cpu")
+                          }
+
+                          Section {
+                              Toggle("Auto Run on Launch", isOn: $auto_run)
+                              Toggle("Verbose Output", isOn: $verbose)
+                              Toggle("Keep Alive", isOn: $keep_alive)
+                          } header: {
+                              Label("Options", systemImage: "gearshape")
+                          }
+
+                          Section {
+                              Button {
+                                  state.respring()
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "arrow.clockwise")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Respring")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                  }
+                                  .contentShape(Rectangle())
+                              }
+                              .buttonStyle(.plain)
+
+                              Button {
+                                  state.clear()
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "trash")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Clear Log")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                  }
+                                  .contentShape(Rectangle())
+                              }
+                              .buttonStyle(.plain)
+                          } header: {
+                              Label("Tools", systemImage: "wrench.and.screwdriver")
+                          }
+                      }
+                      .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .navigationTitle("Settings")
+                      .navigationBarTitleDisplayMode(.large)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Done") { dismiss() }
+                                  .fontWeight(.semibold)
+                          }
+                      }
+                  }
+                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+              }
+          }
+          NKEOF
+
+      - name: Write AboutView
+        run: |
+          cat > natsuk1/Views/AboutView.swift <<'NKEOF'
+          import SwiftUI
+          import UIKit
+
+          struct AboutView: View {
+              @Environment(\.openURL) private var openURL
+              @EnvironmentObject var state: AppState
+
+              private let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")!
+
+              private var appName: String {
+                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+                      ?? "natsuk1"
+              }
+
+              private var version: String {
+                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+              }
+
+              private var build: String {
+                  Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+              }
+
+              private var commit: String? {
+                  let raw = Bundle.main.infoDictionary?["Natsuk1Commit"] as? String
+                  guard let raw, !raw.isEmpty else { return nil }
+                  return raw
+              }
+
+              var body: some View {
+                  List {
+                      Section {
+                          VStack(alignment: .leading, spacing: 6) {
+                              Text(appName)
+                                  .font(.title2)
+                                  .fontWeight(.semibold)
+
+                              Text("Version \(version) (\(build))")
+                                  .font(.subheadline)
+                                  .foregroundColor(.secondary)
+
+                              if let commit {
+                                  Text(commit)
+                                      .font(.system(size: 10, design: .monospaced))
+                                      .foregroundColor(.secondary)
+                                      .lineLimit(2)
+                                      .truncationMode(.middle)
+                              }
+
+                              Text("Research project iOS.")
+                                  .font(.footnote)
+                                  .foregroundColor(.secondary)
+                                  .fixedSize(horizontal: false, vertical: true)
+                                  .padding(.top, 2)
+                          }
+                          .padding(.vertical, 6)
+                      }
+
+                      Section {
+                          linkRow("Source Repository", url: repoURL)
+                          linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
+                      } header: {
+                          Text("Open Source")
+                      }
+
+                      Section {
+                          linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
+                      } header: {
+                          Text("Community")
+                      }
+
+                      Section {
+                          NavigationLink {
+                              AcknowledgementsView().environmentObject(state)
+                          } label: {
+                              HStack {
+                                  Text("Acknowledgements")
+                                      .foregroundColor(.primary)
+                                  Spacer(minLength: 8)
+                              }
+                              .contentShape(Rectangle())
+                          }
+                      }
+
+                      Section {
+                      } header: {
+                          Text("Disclaimer")
+                      } footer: {
+                          Text("Independent research project. Not affiliated with Apple Inc. Provided as-is.")
+                              .font(.footnote)
+                              .foregroundColor(.secondary)
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .navigationTitle("About")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+              }
+
+              private func linkRow(_ title: String, url: URL) -> some View {
+                  Button {
+                      openURL(url)
+                  } label: {
+                      HStack(alignment: .top, spacing: 8) {
+                          Text(title)
+                              .foregroundStyle(.tint)
+                              .font(.body)
+                              .fontWeight(.medium)
+                          Spacer(minLength: 8)
+                          Image(systemName: "link")
+                              .font(.system(size: 14, weight: .semibold))
+                              .foregroundStyle(.tint)
+                      }
+                      .padding(.vertical, 2)
+                      .contentShape(Rectangle())
+                  }
+                  .buttonStyle(.plain)
+              }
+          }
+
+          struct AcknowledgementsView: View {
+              @Environment(\.openURL) private var openURL
+              @EnvironmentObject var state: AppState
+
+              private struct Entry {
+                  let name: String
+                  let license: String
+                  let url: URL
+              }
+
+              private let entries: [Entry] = [
+                  Entry(name: "XcodeGen", license: "MIT",
+                        url: URL(string: "https://github.com/yonaskolb/XcodeGen")!),
+                  Entry(name: "ldid", license: "GPL-3.0",
+                        url: URL(string: "https://github.com/ProcursusTeam/ldid")!),
+                  Entry(name: "libplist", license: "LGPL-2.1",
+                        url: URL(string: "https://github.com/libimobiledevice/libplist")!),
+              ]
+
+              var body: some View {
+                  List {
+                      Section {
+                          ForEach(entries, id: \.name) { entry in
+                              Button {
+                                  openURL(entry.url)
+                              } label: {
+                                  HStack(alignment: .top, spacing: 8) {
+                                      Text(entry.name)
+                                          .foregroundStyle(.tint)
+                                          .font(.body)
+                                          .fontWeight(.medium)
+                                      Spacer(minLength: 8)
+                                      Text(entry.license)
+                                          .font(.system(.footnote, design: .monospaced))
+                                          .foregroundColor(.secondary)
+                                      Image(systemName: "link")
+                                          .font(.system(size: 14, weight: .semibold))
+                                          .foregroundStyle(.tint)
+                                  }
+                                  .padding(.vertical, 2)
+                                  .contentShape(Rectangle())
+                              }
+                              .buttonStyle(.plain)
+                          }
+                      } header: {
+                          Text("Libraries")
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .navigationTitle("Acknowledgements")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+              }
+          }
+          NKEOF
+
+      - name: Write DeviceInfoView
+        run: |
+          cat > natsuk1/Views/DeviceInfoView.swift <<'NKEOF'
+          import SwiftUI
+          import UIKit
+
+          struct DeviceInfoView: View {
+              @Environment(\.dismiss) private var dismiss
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          row("Model", DeviceName.friendly())
+                          row("Identifier", machineID())
+                          row("Chip", DeviceName.chip())
+                          row("iOS", sysctlString("kern.osproductversion"))
+                          row("Build", sysctlString("kern.osversion"))
+                          row("RAM", ram())
+                          row("Architecture", arch())
+                          row("Locale", localeShort())
+                          row("Region", regionShort())
+                          row("Uptime", uptime())
+                      }
+                      .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .navigationTitle("Device")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Done") { dismiss() }
+                          }
+                      }
+                  }
+                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+              }
+
+              private func row(_ key: String, _ value: String) -> some View {
+                  HStack {
+                      Text(key)
+                      Spacer()
+                      Text(value)
+                          .font(.system(.body, design: .monospaced))
+                          .foregroundColor(.secondary)
+                          .lineLimit(1)
+                          .truncationMode(.middle)
+                  }
+              }
+
+              private func machineID() -> String {
+                  var sysinfo = utsname()
+                  uname(&sysinfo)
+                  return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
+                      guard let v = el.value as? Int8, v != 0 else { return id }
+                      return id + String(UnicodeScalar(UInt8(v)))
+                  }
+              }
+
+              private func sysctlString(_ name: String) -> String {
+                  var size = 0
+                  sysctlbyname(name, nil, &size, nil, 0)
+                  var buf = [CChar](repeating: 0, count: size)
+                  sysctlbyname(name, &buf, &size, nil, 0)
+                  return String(cString: buf)
+              }
+
+              private func ram() -> String {
+                  var size: UInt64 = 0
+                  var len = MemoryLayout<UInt64>.size
+                  if sysctlbyname("hw.memsize", &size, &len, nil, 0) != 0 { return "unknown" }
+                  return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .memory)
+              }
+
+              private func arch() -> String {
+                  #if arch(arm64)
+                  return "arm64"
+                  #else
+                  return "unknown"
+                  #endif
+              }
+
+              private func localeShort() -> String {
+                  Locale.current.identifier
+                      .split(separator: "_")
+                      .first
+                      .map(String.init)?
+                      .uppercased() ?? "—"
+              }
+
+              private func regionShort() -> String {
+                  let region = Locale.current.region?.identifier ?? ""
+                  return region.isEmpty ? "—" : region.uppercased()
+              }
+
+              private func uptime() -> String {
+                  let t = ProcessInfo.processInfo.systemUptime
+                  let h = Int(t) / 3600
+                  let m = (Int(t) % 3600) / 60
+                  return "\(h)h \(m)m"
+              }
+          }
+          NKEOF
+
+      - name: Write OffsetsView
         run: |
           cat > natsuk1/Views/OffsetsView.swift <<'NKEOF'
           import SwiftUI
@@ -243,7 +720,6 @@ jobs:
                   }
                   .listStyle(.insetGrouped)
                   .scrollContentBackground(.hidden)
-                  .background(Color(UIColor.systemGroupedBackground))
                   .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
                   .navigationTitle("Modify Offsets")
                   .navigationBarTitleDisplayMode(.inline)
@@ -281,6 +757,7 @@ jobs:
                   } message: {
                       Text("All offsets will be set to built-in defaults.")
                   }
+                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
               }
 
               private var filteredGroups: [OffsetsStore.Group] {
@@ -385,6 +862,7 @@ jobs:
                       }
                       .onAppear { text = store.value(for: name) }
                   }
+                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
               }
 
               private func save() {
@@ -431,7 +909,6 @@ jobs:
                               .frame(maxWidth: .infinity, alignment: .leading)
                               .textSelection(.enabled)
                       }
-                      .background(Color(UIColor.systemGroupedBackground))
                       .navigationTitle("Export")
                       .navigationBarTitleDisplayMode(.inline)
                       .toolbar {
@@ -451,6 +928,7 @@ jobs:
                           }
                       }
                   }
+                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
               }
           }
           NKEOF
@@ -464,5 +942,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "Target iOS 27.0, restore presentationBackground"
+          git commit -m "iOS 27 SDK, unified grouped background everywhere"
           git push
