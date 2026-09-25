@@ -18,7 +18,7 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v6
+  CACHE_SALT: v7
 
 jobs:
   fix-and-test:
@@ -34,6 +34,338 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Write nk_api.c
+        run: |
+          cat > natsuk1/Exploit/nk_api.c <<'CEOF'
+          #include "nk_api.h"
+          #include "nk_offsets.h"
+          #include <stdarg.h>
+          #include <stdio.h>
+          #include <time.h>
+
+          static void (*g_fn)(const char *) = NULL;
+          static double g_t0 = 0.0;
+          static nk_log_level_t g_lvl = NK_LOG_INFO;
+
+          static double nk_now_ms(void) {
+              struct timespec ts;
+              clock_gettime(CLOCK_MONOTONIC, &ts);
+              return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+          }
+
+          void nk_set_log(void (*fn)(const char *)) {
+              g_fn = fn;
+              if (g_t0 == 0.0) g_t0 = nk_now_ms();
+          }
+
+          void nk_set_log_level(nk_log_level_t lvl) { g_lvl = lvl; }
+          nk_log_level_t nk_get_log_level(void) { return g_lvl; }
+
+          static const char *lvl_str(nk_log_level_t l) {
+              switch (l) {
+                  case NK_LOG_TRACE: return "TRC";
+                  case NK_LOG_DEBUG: return "DBG";
+                  case NK_LOG_INFO:  return "INF";
+                  case NK_LOG_WARN:  return "WRN";
+                  case NK_LOG_ERROR: return "ERR";
+              }
+              return "???";
+          }
+
+          void nk_logx(nk_log_level_t lvl, const char *tag, const char *fmt, ...) {
+              if (lvl < g_lvl || !g_fn) return;
+              char body[512];
+              va_list ap; va_start(ap, fmt);
+              vsnprintf(body, sizeof(body), fmt, ap);
+              va_end(ap);
+              char out[640];
+              double t = nk_now_ms() - g_t0;
+              snprintf(out, sizeof(out), "[%6.1f][%s][%-6s] %s", t, lvl_str(lvl), tag, body);
+              g_fn(out);
+          }
+
+          void nk_log(const char *fmt, ...) {
+              if (!g_fn) return;
+              char body[512];
+              va_list ap; va_start(ap, fmt);
+              vsnprintf(body, sizeof(body), fmt, ap);
+              va_end(ap);
+              char out[640];
+              double t = nk_now_ms() - g_t0;
+              snprintf(out, sizeof(out), "[%6.1f][INF][MAIN  ] %s", t, body);
+              g_fn(out);
+          }
+
+          void nk_rule(void) { nk_log("----"); }
+
+          int nk_run(void) {
+              NK_INFO("BASE", "kernel          %016llX", (unsigned long long)NK_KERNEL_BASE);
+              NK_INFO("BASE", "sysent          %016llX (%d)",
+                      (unsigned long long)NK_SYSENT_BASE, NK_SYSENT_COUNT);
+              NK_INFO("BASE", "mach_trap_table %016llX", (unsigned long long)NK_MACH_TRAP_TABLE);
+              nk_rule();
+
+              NK_INFO("PRIM", "copyin   %016llX", (unsigned long long)NK_FN_COPYIN);
+              NK_INFO("PRIM", "copyout  %016llX", (unsigned long long)NK_FN_COPYOUT);
+              NK_INFO("PRIM", "kalloc   %016llX", (unsigned long long)NK_FN_KALLOC_EXT);
+              NK_INFO("PRIM", "kfree    %016llX", (unsigned long long)NK_FN_KFREE_EXT);
+              nk_rule();
+
+              NK_INFO("STRUCT", "proc_pid    %X", NK_OFF_PROC_PID);
+              NK_INFO("STRUCT", "proc_ucred  %X", NK_OFF_PROC_UCRED);
+              NK_INFO("STRUCT", "task_thread %X", NK_OFF_TASK_THREAD);
+              nk_rule();
+
+              NK_WARN("STATE", "No kernel R/W primitive.");
+              NK_WARN("STATE", "Reference data only.");
+              nk_rule();
+
+              return 0;
+          }
+
+          int nk_full_exploit(void) { return nk_run(); }
+
+          uint64_t nk_get_kernel_base(void)     { return NK_KERNEL_BASE; }
+          uint64_t nk_get_sysent_base(void)     { return NK_SYSENT_BASE; }
+          uint64_t nk_get_mach_trap_table(void) { return NK_MACH_TRAP_TABLE; }
+          CEOF
+
+      - name: Write natsuk1.swift
+        run: |
+          cat > natsuk1/natsuk1.swift <<'SWIFTEOF'
+          import SwiftUI
+          import UIKit
+          import Foundation
+
+          final class LockedBuffer: @unchecked Sendable {
+              static let shared = LockedBuffer()
+              private let lock = NSLock()
+              private var value: String = ""
+
+              private init() {}
+
+              func append(_ s: String) {
+                  lock.lock()
+                  value += s
+                  value += "\n"
+                  if value.count > 10000 {
+                      value = String(value.suffix(6000))
+                  }
+                  lock.unlock()
+              }
+
+              func drain() -> String {
+                  lock.lock()
+                  let v = value
+                  value = ""
+                  lock.unlock()
+                  return v
+              }
+
+              func clear() {
+                  lock.lock()
+                  value = ""
+                  lock.unlock()
+              }
+          }
+
+          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
+              guard let line = line else { return }
+              var bytes: [UInt8] = []
+              var p = line
+              while p.pointee != 0 {
+                  bytes.append(UInt8(bitPattern: p.pointee))
+                  p = p.advanced(by: 1)
+              }
+              LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))
+          }
+
+          private func osVersionString() -> String {
+              let v = ProcessInfo.processInfo.operatingSystemVersion
+              return "\(v.majorVersion).\(v.minorVersion)"
+          }
+
+          private func appVersionString() -> String {
+              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+          }
+
+          private var isSupportedIOS: Bool {
+              ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
+          }
+
+          @main
+          struct natsuk1App: App {
+              var body: some Scene {
+                  WindowGroup {
+                      RootView()
+                  }
+              }
+          }
+
+          struct RootView: View {
+              @StateObject private var state = AppState.shared
+              @StateObject private var offsets = OffsetsStore.shared
+              @AppStorage("auto_run") private var auto_run = false
+              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
+              @AppStorage("keep_alive_location") private var keep_alive_location = false
+
+              init() {
+                  UserDefaults.standard.register(defaults: [
+                      "auto_run": false,
+                      "keep_alive_audio": false,
+                      "keep_alive_location": false,
+                      "lang": "en",
+                  ])
+              }
+
+              var body: some View {
+                  Group {
+                      if isSupportedIOS {
+                          ContentView()
+                              .environmentObject(state)
+                              .environmentObject(offsets)
+                              .onAppear {
+                                  nk_set_log(cCallback)
+                                  if state.log.isEmpty {
+                                      state.append("[*] natsuk1 v\(appVersionString())")
+                                      state.append("[*] iOS \(osVersionString()) / arm64e")
+                                      if let version = OffsetsStore.activeVersion {
+                                          state.append("[*] offsets: \(version.device) / iOS \(version.ios) (\(version.build))")
+                                      }
+                                      state.append("")
+                                  }
+                                  if keep_alive_audio { KeepAlive.shared.startAudio() }
+                                  if keep_alive_location { KeepAlive.shared.startLocation() }
+                                  if auto_run {
+                                      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                          state.run()
+                                      }
+                                  }
+                              }
+                              .onChange(of: keep_alive_audio) { _, value in
+                                  if value { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
+                              }
+                              .onChange(of: keep_alive_location) { _, value in
+                                  if value { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
+                              }
+                              .overlay {
+                                  if state.show_respring {
+                                      RespringView()
+                                          .brightness(-1.0)
+                                          .ignoresSafeArea()
+                                  }
+                              }
+                      } else {
+                          NotSupportedView(version: osVersionString())
+                      }
+                  }
+                  .preferredColorScheme(.dark)
+              }
+          }
+
+          struct NotSupportedView: View {
+              let version: String
+
+              var body: some View {
+                  VStack(spacing: 20) {
+                      Image(systemName: "exclamationmark.triangle.fill")
+                          .font(.system(size: 56))
+                          .foregroundStyle(.orange)
+                      Text("Not supported for iOS \(version)")
+                          .font(.title3)
+                          .fontWeight(.semibold)
+                          .multilineTextAlignment(.center)
+                      Text("natsuk1 runs on iOS 27 only.")
+                          .font(.subheadline)
+                          .foregroundColor(.secondary)
+                          .multilineTextAlignment(.center)
+                  }
+                  .padding(40)
+                  .frame(maxWidth: .infinity, maxHeight: .infinity)
+                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+              }
+          }
+
+          @MainActor
+          final class AppState: ObservableObject {
+              static let shared = AppState()
+
+              enum Status {
+                  case idle, running, ok, failed
+                  var color: Color {
+                      switch self {
+                      case .idle:    return .secondary
+                      case .running: return .orange
+                      case .ok:      return .green
+                      case .failed:  return .red
+                      }
+                  }
+              }
+
+              @Published var log: String = ""
+              @Published var status: Status = .idle
+              @Published var running: Bool = false
+              @Published var show_respring: Bool = false
+
+              @Published var lang: String {
+                  didSet { UserDefaults.standard.set(lang, forKey: "lang") }
+              }
+
+              private init() {
+                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
+                  startFlusher()
+              }
+
+              func t(_ en: String, _ ru: String) -> String {
+                  lang == "ru" ? ru : en
+              }
+
+              private func startFlusher() {
+                  Task { @MainActor [weak self] in
+                      while !Task.isCancelled {
+                          try? await Task.sleep(for: .milliseconds(300))
+                          guard let self else { return }
+                          let chunk = LockedBuffer.shared.drain()
+                          guard !chunk.isEmpty else { continue }
+                          var newLog = self.log
+                          newLog += chunk
+                          if newLog.count > 30000 {
+                              newLog = String(newLog.suffix(20000))
+                          }
+                          self.log = newLog
+                      }
+                  }
+              }
+
+              func append(_ s: String) {
+                  LockedBuffer.shared.append(s)
+              }
+
+              func run() {
+                  if running { return }
+                  running = true
+                  status = .running
+
+                  Task.detached {
+                      _ = nk_full_exploit()
+                      await MainActor.run {
+                          AppState.shared.running = false
+                          AppState.shared.status = .ok
+                      }
+                  }
+              }
+
+              func respring() {
+                  show_respring = true
+              }
+
+              func clear() {
+                  LockedBuffer.shared.clear()
+                  log = ""
+              }
+          }
+          SWIFTEOF
 
       - name: Write ContentView
         run: |
@@ -55,12 +387,10 @@ jobs:
                               Button {
                                   state.run()
                               } label: {
-                                  HStack(spacing: 10) {
+                                  HStack(spacing: 12) {
                                       Image(systemName: "bolt.fill")
-                                          .foregroundStyle(.secondary)
-                                          .frame(width: 20)
+                                          .frame(width: 22, alignment: .center)
                                       Text(state.t("Run Exploit", "Запустить эксплойт"))
-                                          .foregroundStyle(.primary)
                                       Spacer(minLength: 8)
                                       if state.running {
                                           ProgressView().scaleEffect(0.8)
@@ -87,7 +417,6 @@ jobs:
                               } label: {
                                   HStack(spacing: 8) {
                                       Text(state.t("Device", "Устройство"))
-                                          .foregroundColor(.primary)
                                       Spacer(minLength: 8)
                                       Text(DeviceName.full())
                                           .font(.system(size: 13, design: .monospaced))
@@ -141,6 +470,8 @@ jobs:
                       .scrollEdgeEffectHidden(true, for: .top)
                       .navigationTitle("natsuk1")
                       .navigationBarTitleDisplayMode(.inline)
+                      .toolbarBackground(.visible, for: .navigationBar)
+                      .toolbarBackground(Color(UIColor.systemGroupedBackground), for: .navigationBar)
                       .toolbar {
                           ToolbarItem(placement: .navigationBarTrailing) {
                               Button {
@@ -285,12 +616,10 @@ jobs:
                               NavigationLink {
                                   AboutView().environmentObject(state)
                               } label: {
-                                  HStack(spacing: 10) {
+                                  HStack(spacing: 12) {
                                       Image(systemName: "info.circle")
-                                          .foregroundStyle(.secondary)
-                                          .frame(width: 20)
+                                          .frame(width: 22, alignment: .center)
                                       Text("Credits")
-                                          .foregroundStyle(.primary)
                                       Spacer(minLength: 8)
                                   }
                               }
@@ -299,10 +628,10 @@ jobs:
                           }
 
                           Section {
-                              HStack(spacing: 10) {
+                              HStack(spacing: 12) {
                                   Image(systemName: "cpu")
+                                      .frame(width: 22, alignment: .center)
                                       .foregroundStyle(.secondary)
-                                      .frame(width: 20)
                                   Text("Offsets")
                                       .foregroundStyle(.secondary)
                                   Spacer(minLength: 8)
@@ -317,12 +646,10 @@ jobs:
                               NavigationLink {
                                   OffsetsView().environmentObject(offsets)
                               } label: {
-                                  HStack(spacing: 10) {
+                                  HStack(spacing: 12) {
                                       Image(systemName: "list.number")
-                                          .foregroundStyle(.secondary)
-                                          .frame(width: 20)
+                                          .frame(width: 22, alignment: .center)
                                       Text("Modify Offsets")
-                                          .foregroundStyle(.primary)
                                       Spacer(minLength: 8)
                                       Text("\(offsets.filledCount())/\(offsets.totalCount())")
                                           .font(.system(size: 13, design: .monospaced))
@@ -366,12 +693,10 @@ jobs:
                               Button {
                                   state.respring()
                               } label: {
-                                  HStack(spacing: 10) {
+                                  HStack(spacing: 12) {
                                       Image(systemName: "arrow.clockwise")
-                                          .foregroundStyle(.secondary)
-                                          .frame(width: 20)
+                                          .frame(width: 22, alignment: .center)
                                       Text("Respring")
-                                          .foregroundStyle(.primary)
                                       Spacer(minLength: 8)
                                   }
                               }
@@ -382,8 +707,11 @@ jobs:
                       .listStyle(.insetGrouped)
                       .scrollContentBackground(.hidden)
                       .background(Color(UIColor.systemGroupedBackground))
+                      .scrollEdgeEffectHidden(true, for: .top)
                       .navigationTitle("Settings")
                       .navigationBarTitleDisplayMode(.large)
+                      .toolbarBackground(.visible, for: .navigationBar)
+                      .toolbarBackground(Color(UIColor.systemGroupedBackground), for: .navigationBar)
                       .toolbar {
                           ToolbarItem(placement: .navigationBarTrailing) {
                               Button("Done") { dismiss() }
@@ -394,33 +722,6 @@ jobs:
               }
           }
           SWIFTEOF
-
-      - name: Patch natsuk1.swift version
-        run: |
-          python3 <<'PYEOF'
-          import re
-          p = "natsuk1/natsuk1.swift"
-          s = open(p).read()
-
-          if "private func appVersionString" not in s:
-              helper = '''
-          private func appVersionString() -> String {
-              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-          }
-
-          '''
-              s = s.replace(
-                  'private func osVersionString() -> String {',
-                  helper + 'private func osVersionString() -> String {'
-              )
-
-          s = s.replace(
-              'state.append("[*] natsuk1 v6.0")',
-              'state.append("[*] natsuk1 v\\(appVersionString())")'
-          )
-
-          open(p, "w").write(s)
-          PYEOF
 
       - name: Cache Homebrew
         uses: actions/cache@v5
@@ -502,5 +803,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "UI cleanup: log actions, no footer, no scroll edge, full row taps [skip ci]"
+          git commit -m "UI polish: tinted icons, solid nav bar, cleaner logs [skip ci]"
           git push
