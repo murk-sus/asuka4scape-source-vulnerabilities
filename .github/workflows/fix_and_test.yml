@@ -104,7 +104,6 @@ jobs:
 
           p = "natsuk1/Helpers/PairingController.swift"
           s = open(p).read()
-
           s = s.replace("@preconcurrency import AirliftFFI\n", "import AirliftFFI\n")
           s = clean(s)
 
@@ -189,7 +188,6 @@ jobs:
           s = s.replace("aircardPairingHostAltIRK", "natsuk1PairingHostAltIRK")
           s = s.replace("aircard_pairing.plist", "natsuk1_pairing.plist")
           s = s.replace("airlift_pairing.plist", "natsuk1_pairing.plist")
-
           s = s.replace(
               "static var customPairingFilePath: String? = nil",
               "nonisolated(unsafe) static var customPairingFilePath: String? = nil")
@@ -771,12 +769,13 @@ jobs:
 
               func respring() {
                   let pairingPath = pairingFilePath()
+                  let bridge = AirliftBridge.shared
                   guard FileManager.default.fileExists(atPath: pairingPath) else {
-                      appendLog("[respring] no pairing file at \(pairingPath)")
+                      bridge.appendLog("[respring] no pairing file at \(pairingPath)")
                       return
                   }
-                  appendLog("[respring] invoking with \(pairingPath)")
-                  Task.detached { [weak self] in
+                  bridge.appendLog("[respring] invoking with \(pairingPath)")
+                  Task.detached {
                       var outError: UnsafeMutablePointer<CChar>? = nil
                       let rc: Int32 = pairingPath.withCString { pc in
                           al_device_respring(pc, nil, nil, &outError)
@@ -786,9 +785,9 @@ jobs:
                       }
                       await MainActor.run {
                           if rc == 0 {
-                              self?.appendLog("[respring] ok")
+                              bridge.appendLog("[respring] ok")
                           } else {
-                              self?.appendLog("[respring] rc=\(rc) \(errStr ?? "")")
+                              bridge.appendLog("[respring] rc=\(rc) \(errStr ?? "")")
                           }
                       }
                   }
@@ -1116,7 +1115,7 @@ jobs:
                                   .terminalPlatter()
                                   .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                           } header: {
-                              Label(state.t("Logs", "Логи"), systemImage: "apple.terminal")
+                              Label(state.t("Logs", "Логи"), systemImage: "text.alignleft")
                           }
 
                           Section {
@@ -1124,7 +1123,7 @@ jobs:
                                   UIPasteboard.general.string = state.log
                               } label: {
                                   Label(state.t("Copy All", "Копировать всё"),
-                                        systemImage: "doc.on.doc")
+                                        systemImage: "document.on.document")
                               }
                               .disabled(state.log.isEmpty)
 
@@ -1136,7 +1135,7 @@ jobs:
                               }
                               .disabled(state.log.isEmpty)
                           } header: {
-                              Label(state.t("Log Actions", "Действия с логом"), systemImage: "doc.on.doc")
+                              Label(state.t("Log Actions", "Действия с логом"), systemImage: "ellipsis.circle")
                           }
                       }
                       .listStyle(.insetGrouped)
@@ -1176,7 +1175,8 @@ jobs:
                       .frame(maxWidth: .infinity)
                       .frame(minHeight: 180, idealHeight: 260, maxHeight: 400)
                       .padding(10)
-                      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                      .background(.regularMaterial,
+                                  in: RoundedRectangle(cornerRadius: 12, style: .continuous))
               }
           }
           SWIFT
@@ -1191,7 +1191,6 @@ jobs:
               @EnvironmentObject var state: AppState
               @EnvironmentObject var airlift: AirliftBridge
               @EnvironmentObject var offsets: OffsetsStore
-              @State private var show_device = false
 
               var body: some View {
                   NavigationStack {
@@ -1220,7 +1219,7 @@ jobs:
                                   }
                               }
                           } header: {
-                              Label("Exploit", systemImage: "bolt.shield")
+                              Label("Exploit", systemImage: "cross.case.fill")
                           }
 
                           Section {
@@ -1236,17 +1235,17 @@ jobs:
                                   }
                               }
                           } header: {
-                              Label("Spoof", systemImage: "wand.and.stars")
+                              Label("Spoof", systemImage: "wand.and.rays")
                           }
 
                           Section {
-                              Button {
-                                  show_device = true
+                              NavigationLink {
+                                  DeviceInfoView()
                               } label: {
                                   Label {
                                       Text("Device Info")
                                   } icon: {
-                                      Image(systemName: "iphone")
+                                      Image(systemName: "iphone.gen3")
                                           .symbolRenderingMode(.hierarchical)
                                           .foregroundStyle(.tint)
                                   }
@@ -1257,13 +1256,13 @@ jobs:
                                   Label {
                                       Text("Respring")
                                   } icon: {
-                                      Image(systemName: "arrow.clockwise")
+                                      Image(systemName: "arrow.clockwise.circle")
                                           .symbolRenderingMode(.hierarchical)
                                           .foregroundStyle(.tint)
                                   }
                               }
                           } header: {
-                              Label("Device", systemImage: "cpu")
+                              Label("Device", systemImage: "ipad.and.iphone")
                           }
 
                           Section {
@@ -1279,7 +1278,7 @@ jobs:
                                   }
                               }
                           } header: {
-                              Label("Diagnostics", systemImage: "checkmark.shield")
+                              Label("Diagnostics", systemImage: "stethoscope")
                           }
                       }
                       .listStyle(.insetGrouped)
@@ -1287,10 +1286,6 @@ jobs:
                       .background(Color(UIColor.systemGroupedBackground))
                       .navigationTitle("Tools")
                       .navigationBarTitleDisplayMode(.large)
-                      .sheet(isPresented: $show_device) {
-                          DeviceInfoView()
-                              .presentationBackground(.regularMaterial)
-                      }
                   }
               }
           }
@@ -1375,7 +1370,7 @@ jobs:
                                   Label("About", systemImage: "info.circle")
                               }
                           } header: {
-                              Label("App", systemImage: "info.circle")
+                              Label("App", systemImage: "person.crop.square")
                           }
 
                           Section {
@@ -1396,14 +1391,14 @@ jobs:
                                   }
                               }
                           } header: {
-                              Label("Background Keep-Alive", systemImage: "waveform.circle")
+                              Label("Background Keep-Alive", systemImage: "moon.stars.fill")
                           }
 
                           Section {
                               Toggle("Auto Run on Launch", isOn: $auto_run)
                               Toggle("Verbose Output", isOn: $verbose)
                           } header: {
-                              Label("Options", systemImage: "gearshape")
+                              Label("Options", systemImage: "slider.horizontal.3")
                           }
                       }
                       .listStyle(.insetGrouped)
@@ -1459,7 +1454,7 @@ jobs:
                           AirliftLogView(lines: airlift.exploitLog, onClear: { airlift.clearLog() })
                               .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                       } header: {
-                          Label("Log", systemImage: "apple.terminal")
+                          Label("Log", systemImage: "terminal")
                       }
                   }
                   .listStyle(.insetGrouped)
@@ -1543,7 +1538,7 @@ jobs:
                               airlift.runPairing()
                           } label: {
                               HStack {
-                                  Image(systemName: "antenna.radiowaves.left.and.right")
+                                  Image(systemName: "dot.radiowaves.left.and.right")
                                       .symbolRenderingMode(.hierarchical)
                                       .foregroundStyle(.tint)
                                   Text("Start Pairing")
@@ -1570,7 +1565,7 @@ jobs:
                           .textInputAutocapitalization(.never)
                       }
                   } header: {
-                      Label("Exploit", systemImage: "bolt.shield")
+                      Label("Exploit", systemImage: "scope")
                   }
 
                   Section {
@@ -1578,7 +1573,7 @@ jobs:
                           airlift.runExploit()
                       } label: {
                           HStack {
-                              Image(systemName: "bolt.fill")
+                              Image(systemName: "play.fill")
                                   .symbolRenderingMode(.hierarchical)
                                   .foregroundStyle(.tint)
                               Text("Run Exploit")
@@ -1591,7 +1586,7 @@ jobs:
                           airlift.respring()
                       } label: {
                           HStack {
-                              Image(systemName: "arrow.clockwise")
+                              Image(systemName: "restart")
                                   .symbolRenderingMode(.hierarchical)
                                   .foregroundStyle(.tint)
                               Text("Respring (device)")
@@ -1639,7 +1634,7 @@ jobs:
                       Button {
                           UIPasteboard.general.string = lines.joined(separator: "\n")
                       } label: {
-                          Label("Copy All", systemImage: "doc.on.doc")
+                          Label("Copy All", systemImage: "document.on.document")
                       }
                       Button(role: .destructive) {
                           onClear()
@@ -1698,7 +1693,7 @@ jobs:
                           }
                           .disabled(MobileGestalt.shared.overrideCount == 0)
                       } header: {
-                          Label("Status", systemImage: "checkmark.shield")
+                          Label("Status", systemImage: "checkmark.seal.fill")
                       }
 
                       Section {
@@ -1726,7 +1721,7 @@ jobs:
                               .buttonStyle(.plain)
                           }
                       } header: {
-                          Label("Keys", systemImage: "list.bullet")
+                          Label("Keys", systemImage: "key.fill")
                       }
                   }
                   .id(refreshTick)
@@ -1866,8 +1861,6 @@ jobs:
                   dismiss()
               }
           }
-
-          extension MobileGestaltCatalog.Key: Identifiable {}
           SWIFT
           echo "wrote MobileGestaltView.swift"
 
@@ -2024,7 +2017,7 @@ jobs:
                           }
                           .disabled(busy)
                       } header: {
-                          Label("Summary", systemImage: "chart.bar")
+                          Label("Summary", systemImage: "chart.bar.xaxis")
                       }
 
                       if !libs.isEmpty {
@@ -2053,7 +2046,7 @@ jobs:
                                   .padding(.vertical, 2)
                               }
                           } header: {
-                              Label("Libraries", systemImage: "shippingbox")
+                              Label("Libraries", systemImage: "books.vertical")
                           }
                       }
 
@@ -2082,7 +2075,7 @@ jobs:
                               .padding(.vertical, 2)
                           }
                       } header: {
-                          Label("Paths", systemImage: "folder")
+                          Label("Paths", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                       }
                   }
                   .listStyle(.insetGrouped)
@@ -2110,7 +2103,7 @@ jobs:
                               }
                               UIPasteboard.general.string = text
                           } label: {
-                              Image(systemName: "doc.on.doc")
+                              Image(systemName: "square.and.arrow.up")
                           }
                           .disabled(results.isEmpty && libs.isEmpty)
                       }
@@ -2282,7 +2275,7 @@ jobs:
                               .font(.body)
                               .fontWeight(.medium)
                           Spacer(minLength: 8)
-                          Image(systemName: "link")
+                          Image(systemName: "link.circle")
                               .font(.system(size: 14, weight: .semibold))
                               .foregroundStyle(.tint)
                       }
@@ -2302,33 +2295,43 @@ jobs:
           import UIKit
 
           struct DeviceInfoView: View {
-              @Environment(\.dismiss) private var dismiss
-
               var body: some View {
-                  NavigationStack {
-                      List {
+                  List {
+                      Section {
                           row("Model", DeviceName.friendly())
                           row("Identifier", machineID())
                           row("Chip", DeviceName.chip())
+                      } header: {
+                          Label("Hardware", systemImage: "cpu")
+                      }
+
+                      Section {
                           row("iOS", sysctlString("kern.osproductversion"))
                           row("Build", sysctlString("kern.osversion"))
-                          row("RAM", ram())
                           row("Architecture", arch())
+                      } header: {
+                          Label("Software", systemImage: "gear")
+                      }
+
+                      Section {
+                          row("RAM", ram())
+                          row("Uptime", uptime())
+                      } header: {
+                          Label("Resources", systemImage: "memorychip")
+                      }
+
+                      Section {
                           row("Locale", localeShort())
                           row("Region", regionShort())
-                          row("Uptime", uptime())
-                      }
-                      .listStyle(.insetGrouped)
-                      .scrollContentBackground(.hidden)
-                      .background(Color(UIColor.systemGroupedBackground))
-                      .navigationTitle("Device")
-                      .navigationBarTitleDisplayMode(.inline)
-                      .toolbar {
-                          ToolbarItem(placement: .navigationBarTrailing) {
-                              Button("Done") { dismiss() }
-                          }
+                      } header: {
+                          Label("Locale", systemImage: "globe")
                       }
                   }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .background(Color(UIColor.systemGroupedBackground))
+                  .navigationTitle("Device")
+                  .navigationBarTitleDisplayMode(.inline)
               }
 
               private func row(_ key: String, _ value: String) -> some View {
@@ -2554,12 +2557,21 @@ jobs:
             fail "static shared without nonisolated(unsafe)"
           fi
 
+          if grep -q 'extension MobileGestaltCatalog.Key: Identifiable' natsuk1/Views/MobileGestaltView.swift; then
+            fail "MobileGestaltView has redundant Identifiable extension"
+          fi
+
+          if grep -q '\[weak self\]' natsuk1/Helpers/AirliftBridge.swift; then
+            fail "AirliftBridge still uses weak self in respring"
+          fi
+
           grep -q 'natsuk1_pairing.plist' natsuk1/Helpers/PairingController.swift || fail "PairingController missing natsuk1_pairing.plist"
           grep -q 'natsuk1PairingHostAltIRK' natsuk1/Helpers/PairingController.swift || fail "PairingController missing altIRK key"
           grep -q 'removeItem(atPath: sourcePath)' natsuk1/Helpers/PairingController.swift || fail "sync does not sweep"
           grep -q 'PairingController.pairingFilePath()' natsuk1/Helpers/AirliftBridge.swift || fail "AirliftBridge wrong path"
           grep -q 'logAccessibleFolders' natsuk1/Helpers/AirliftBridge.swift || fail "logAccessibleFolders missing"
           grep -q 'al_device_respring' natsuk1/Helpers/AirliftBridge.swift || fail "respring not wired"
+          grep -q 'let bridge = AirliftBridge.shared' natsuk1/Helpers/AirliftBridge.swift || fail "respring strong self missing"
 
           grep -q '_natsuk1probe._tcp' natsuk1/Helpers/LocalNetworkAuthorization.swift || fail "LocalNetworkAuthorization missing probe"
           grep -q '_natsuk1probe._tcp' natsuk1/Resources/Info.plist || fail "Info.plist missing probe"
@@ -2584,8 +2596,12 @@ jobs:
           grep -q 'AirliftView' natsuk1/Views/ToolsView.swift || fail "ToolsView missing Airlift"
           grep -q 'MobileGestaltView' natsuk1/Views/ToolsView.swift || fail "ToolsView missing MobileGestalt"
           grep -q 'OffsetsView' natsuk1/Views/ToolsView.swift || fail "ToolsView missing Offsets"
-          grep -q 'DeviceInfoView' natsuk1/Views/ToolsView.swift || fail "ToolsView missing DeviceInfo"
           grep -q 'respring' natsuk1/Views/ToolsView.swift || fail "ToolsView missing respring"
+          if grep -q 'show_device' natsuk1/Views/ToolsView.swift; then
+            fail "ToolsView still opens DeviceInfo as sheet"
+          fi
+          grep -q 'NavigationLink' natsuk1/Views/ToolsView.swift || fail "ToolsView missing NavigationLink"
+          grep -q 'DeviceInfoView()' natsuk1/Views/ToolsView.swift || fail "ToolsView missing DeviceInfo navigation"
 
           grep -q 'import Darwin' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing Darwin"
           grep -q 'dlopen' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing dlopen"
@@ -2621,6 +2637,34 @@ jobs:
           if grep -q 'preferredColorScheme' natsuk1/natsuk1.swift ; then
             fail "natsuk1.swift still forces color scheme"
           fi
+
+          grep -q '"bolt.shield"' natsuk1/Views/OverviewView.swift || fail "OverviewView missing bolt.shield"
+          grep -q '"waveform.path.ecg"' natsuk1/Views/OverviewView.swift || fail "OverviewView missing waveform.path.ecg"
+          grep -q '"text.alignleft"' natsuk1/Views/OverviewView.swift || fail "OverviewView missing text.alignleft"
+          grep -q '"document.on.document"' natsuk1/Views/OverviewView.swift || fail "OverviewView missing document.on.document"
+          grep -q '"ellipsis.circle"' natsuk1/Views/OverviewView.swift || fail "OverviewView missing ellipsis.circle"
+          grep -q '"cross.case.fill"' natsuk1/Views/ToolsView.swift || fail "ToolsView missing cross.case.fill"
+          grep -q '"wand.and.rays"' natsuk1/Views/ToolsView.swift || fail "ToolsView missing wand.and.rays"
+          grep -q '"wand.and.stars"' natsuk1/Views/ToolsView.swift || fail "ToolsView missing wand.and.stars"
+          grep -q '"ipad.and.iphone"' natsuk1/Views/ToolsView.swift || fail "ToolsView missing ipad.and.iphone"
+          grep -q '"iphone.gen3"' natsuk1/Views/ToolsView.swift || fail "ToolsView missing iphone.gen3"
+          grep -q '"arrow.clockwise.circle"' natsuk1/Views/ToolsView.swift || fail "ToolsView missing arrow.clockwise.circle"
+          grep -q '"stethoscope"' natsuk1/Views/ToolsView.swift || fail "ToolsView missing stethoscope"
+          grep -q '"folder.badge.gearshape"' natsuk1/Views/ToolsView.swift || fail "ToolsView missing folder.badge.gearshape"
+          grep -q '"person.crop.square"' natsuk1/Views/SettingsView.swift || fail "SettingsView missing person.crop.square"
+          grep -q '"moon.stars.fill"' natsuk1/Views/SettingsView.swift || fail "SettingsView missing moon.stars.fill"
+          grep -q '"slider.horizontal.3"' natsuk1/Views/SettingsView.swift || fail "SettingsView missing slider.horizontal.3"
+          grep -q '"scope"' natsuk1/Views/AirliftView.swift || fail "AirliftView missing scope"
+          grep -q '"play.fill"' natsuk1/Views/AirliftView.swift || fail "AirliftView missing play.fill"
+          grep -q '"restart"' natsuk1/Views/AirliftView.swift || fail "AirliftView missing restart"
+          grep -q '"terminal"' natsuk1/Views/AirliftView.swift || fail "AirliftView missing terminal"
+          grep -q '"dot.radiowaves.left.and.right"' natsuk1/Views/AirliftView.swift || fail "AirliftView missing dot.radiowaves.left.and.right"
+          grep -q '"checkmark.seal.fill"' natsuk1/Views/MobileGestaltView.swift || fail "MobileGestaltView missing checkmark.seal.fill"
+          grep -q '"key.fill"' natsuk1/Views/MobileGestaltView.swift || fail "MobileGestaltView missing key.fill"
+          grep -q '"chart.bar.xaxis"' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing chart.bar.xaxis"
+          grep -q '"books.vertical"' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing books.vertical"
+          grep -q '"square.and.arrow.up"' natsuk1/Views/PathAccessView.swift || fail "PathAccessView missing square.and.arrow.up"
+          grep -q '"link.circle"' natsuk1/Views/AboutView.swift || fail "AboutView missing link.circle"
 
           grep -q 'SWIFT_VERSION: "5.0"' project.yml || fail "project.yml not in Swift 5 mode"
           if grep -q "SWIFT_DEFAULT_ACTOR_ISOLATION" project.yml ; then
@@ -2698,7 +2742,7 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "Glass UI + tint-aware + simplified Overview"
+            --notes "Fix Identifiable conformance, dedup SF Symbols, DeviceInfo as push"
 
       - name: Commit
         run: |
@@ -2709,5 +2753,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "Glass UI + tint-aware + simplified Overview [skip ci]"
+          git commit -m "Fix Identifiable, dedup SF Symbols, DeviceInfo as push [skip ci]"
           git push
