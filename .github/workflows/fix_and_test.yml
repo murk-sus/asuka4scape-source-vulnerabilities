@@ -29,7 +29,7 @@ jobs:
         with:
           xcode-version: "26.5"
 
-      - name: Restore missing files from AirCard
+      - name: Restore missing files
         run: |
           set -euo pipefail
           cd natsuk1/Helpers
@@ -46,10 +46,10 @@ jobs:
           cd natsuk1/Helpers
 
           if [ -f PairingController.swift ]; then
-            sed -i '' 's/^    private static let altIRKKey/    nonisolated(unsafe) private static let altIRKKey/' PairingController.swift
-            sed -i '' 's/^    static var customPairingFilePath/    nonisolated(unsafe) static var customPairingFilePath/' PairingController.swift
-            sed -i '' 's/^private let pairReadyCallback/nonisolated(unsafe) private let pairReadyCallback/' PairingController.swift
-            sed -i '' 's/^private let pairPinCallback/nonisolated(unsafe) private let pairPinCallback/' PairingController.swift
+            sed -i '' 's/^[[:space:]]*private static let altIRKKey/    nonisolated(unsafe) private static let altIRKKey/' PairingController.swift
+            sed -i '' 's/^[[:space:]]*static var customPairingFilePath/    nonisolated(unsafe) static var customPairingFilePath/' PairingController.swift
+            sed -i '' 's/^[[:space:]]*private let pairReadyCallback/nonisolated(unsafe) private let pairReadyCallback/' PairingController.swift
+            sed -i '' 's/^[[:space:]]*private let pairPinCallback/nonisolated(unsafe) private let pairPinCallback/' PairingController.swift
             sed -i '' 's/final class PairingController: ObservableObject, @unchecked Sendable/final class PairingController: @unchecked Sendable/' PairingController.swift
             sed -i '' 's/final class PairingController: ObservableObject/final class PairingController: @unchecked Sendable/' PairingController.swift
             sed -i '' '/^@MainActor$/d' PairingController.swift
@@ -58,7 +58,7 @@ jobs:
           fi
 
           if [ -f KeepAlive.swift ]; then
-            sed -i '' 's/^    static let shared = KeepAlive()/    nonisolated(unsafe) static let shared = KeepAlive()/' KeepAlive.swift
+            sed -i '' 's/^[[:space:]]*static let shared = KeepAlive()/    nonisolated(unsafe) static let shared = KeepAlive()/' KeepAlive.swift
             sed -i '' 's/final class KeepAlive: NSObject, ObservableObject, @unchecked Sendable/final class KeepAlive: NSObject, @unchecked Sendable/' KeepAlive.swift
             sed -i '' 's/final class KeepAlive: NSObject, ObservableObject/final class KeepAlive: NSObject, @unchecked Sendable/' KeepAlive.swift
             sed -i '' '/^@MainActor$/d' KeepAlive.swift
@@ -73,23 +73,31 @@ jobs:
 
           echo "===== altIRKKey ====="
           grep -n "altIRKKey" PairingController.swift || true
+          echo "===== callbacks ====="
+          grep -n "pairReadyCallback\|pairPinCallback" PairingController.swift || true
           echo "===== class decls ====="
-          grep -n "class PairingController" PairingController.swift || true
-          grep -n "class KeepAlive" KeepAlive.swift || true
-          echo "===== cString check ====="
-          grep -n "String(cString: host)" NetworkStatus.swift && echo "NOT FIXED" || echo "fixed"
+          grep -n "class PairingController\|class KeepAlive" PairingController.swift KeepAlive.swift || true
+          echo "===== shared ====="
+          grep -n "static let shared = KeepAlive" KeepAlive.swift || true
+          echo "===== cString ====="
+          grep -n "String(cString: host)" NetworkStatus.swift || true
 
       - name: Verify
         run: |
           set -euo pipefail
           cd natsuk1/Helpers
-          grep -q "nonisolated(unsafe) private static let altIRKKey" PairingController.swift
-          grep -q "nonisolated(unsafe) private let pairReadyCallback" PairingController.swift
-          grep -q "nonisolated(unsafe) private let pairPinCallback" PairingController.swift
-          grep -q "nonisolated(unsafe) static let shared = KeepAlive()" KeepAlive.swift
-          ! grep -q "final class PairingController.*ObservableObject" PairingController.swift
-          ! grep -q "final class KeepAlive.*ObservableObject" KeepAlive.swift
-          ! grep -q "String(cString: host)" NetworkStatus.swift
+
+          fail() { echo "FAIL: $1"; exit 1; }
+
+          grep -q "nonisolated(unsafe) private static let altIRKKey" PairingController.swift || fail "altIRKKey"
+          grep -q "nonisolated(unsafe) private let pairReadyCallback" PairingController.swift || fail "pairReadyCallback"
+          grep -q "nonisolated(unsafe) private let pairPinCallback" PairingController.swift || fail "pairPinCallback"
+          grep -q "nonisolated(unsafe) static let shared = KeepAlive()" KeepAlive.swift || fail "KeepAlive.shared"
+
+          if grep -q "final class PairingController.*ObservableObject" PairingController.swift; then fail "PairingController ObservableObject"; fi
+          if grep -q "final class KeepAlive.*ObservableObject" KeepAlive.swift; then fail "KeepAlive ObservableObject"; fi
+          if grep -q "String(cString: host)" NetworkStatus.swift; then fail "String(cString:)"; fi
+
           echo "verify OK"
 
       - name: Install tools
