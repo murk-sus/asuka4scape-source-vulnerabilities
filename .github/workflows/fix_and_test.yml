@@ -214,7 +214,6 @@ jobs:
           calib = open("/tmp/nk/calib.c").read().rstrip()
           run   = open("/tmp/nk/run.c").read().rstrip()
 
-          # inject dump_buf_words + new kread_raw
           s = re.sub(r"static int kread_raw\(uint64_t kaddr, uint32_t len\) \{.*?\n\}\n",
                      kread + "\n\n", s, count=1, flags=re.DOTALL)
 
@@ -224,7 +223,7 @@ jobs:
           s = re.sub(r"int nk_necp_run\(void\) \{.*?\n\}\n",
                      run + "\n", s, count=1, flags=re.DOTALL)
 
-          if "natsuk1-kread-v4" not in s:
+          if "natsuk1-kread-v4" not24 in s:
               print("ERROR: marker not inserted")
               sys.exit(1)
 
@@ -236,7 +235,7 @@ jobs:
       - name: Write Offsets JSON
         run: |
           mkdir -p natsuk1/Offsets
-          cat > natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json <<'JSON'
+          cat > natsuk1/Offsets/iPhone14,5_iOS27.0_A437.json <<'JSON'
           {
             "groups": [
               { "title": "Kernel",  "items": ["off_kernel_base","off_sysent_base","off_sysent_count","off_sysent_stride","off_mach_trap_table"] },
@@ -341,7 +340,7 @@ jobs:
           F=natsuk1/Exploit/necp.c
           grep -q "natsuk1-kread-v4" "$F"
           grep -q "dump_buf_words" "$F"
-          grep -q "----- attempt" "$F"
+          grep -q -e "----- attempt" "$F"
           grep -q "g_busy" "$F"
           python3 - <<'PYEOF'
           import json
