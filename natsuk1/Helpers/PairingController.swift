@@ -1,12 +1,12 @@
 import Foundation
-@preconcurrency import AirliftFFI
+import AirliftFFI
 
 /// Drives the RPPairing host: requests Local Network, keeps the app alive while
 /// the user approves the PIN in Settings, advertises the service over Bonjour,
 /// and runs `al_pairing_run_host` off the main thread.
-nonisolated final class PairingController: @unchecked Sendable {
+final class PairingController: @unchecked Sendable {
 
-    static let shared = PairingController()
+    nonisolated(unsafe) static let shared = PairingController()
 
     private let hostName = "natsuk1"
     private let hostModel = "Mac17,7"   // device sees a Mac-like pairing host
@@ -307,7 +307,7 @@ private func cStr(_ ptr: UnsafeMutablePointer<CChar>?) -> String {
 }
 
 
-nonisolated final class RawPtrBox: @unchecked Sendable {
+final class RawPtrBox: @unchecked Sendable {
     let ptr: UnsafeMutableRawPointer
     init(_ ptr: UnsafeMutableRawPointer) { self.ptr = ptr }
 }

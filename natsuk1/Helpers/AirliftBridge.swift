@@ -1,9 +1,8 @@
 import Foundation
 import Combine
 
-@MainActor
-final class AirliftBridge: ObservableObject {
-    static let shared = AirliftBridge()
+final class AirliftBridge: ObservableObject, @unchecked Sendable {
+    nonisolated(unsafe) static let shared = AirliftBridge()
 
     enum State: Equatable {
         case idle

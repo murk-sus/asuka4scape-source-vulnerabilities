@@ -1,9 +1,8 @@
 import Foundation
 import Combine
 
-@MainActor
-final class OffsetsStore: ObservableObject {
-    static let shared = OffsetsStore()
+final class OffsetsStore: ObservableObject, @unchecked Sendable {
+    nonisolated(unsafe) static let shared = OffsetsStore()
 
     struct Group: Codable {
         let title: String

@@ -3,7 +3,7 @@ import UIKit
 import Foundation
 
 final class LockedBuffer: @unchecked Sendable {
-    static let shared = LockedBuffer()
+    nonisolated(unsafe) static let shared = LockedBuffer()
     private let lock = NSLock()
     private var value: String = ""
 
@@ -153,9 +153,8 @@ struct NotSupportedView: View {
     }
 }
 
-@MainActor
-final class AppState: ObservableObject {
-    static let shared = AppState()
+final class AppState: ObservableObject, @unchecked Sendable {
+    nonisolated(unsafe) static let shared = AppState()
 
     enum Status {
         case idle, running, ok, failed
@@ -188,7 +187,7 @@ final class AppState: ObservableObject {
     }
 
     private func startFlusher() {
-        Task { @MainActor [weak self] in
+        Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard let self else { return }
