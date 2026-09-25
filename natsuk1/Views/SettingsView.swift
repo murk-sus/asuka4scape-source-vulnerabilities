@@ -195,6 +195,7 @@ struct SettingsView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
+            .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
@@ -204,6 +205,5 @@ struct SettingsView: View {
                 }
             }
         }
-        .background(Color.black.ignoresSafeArea())
     }
 }

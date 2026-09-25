@@ -20,6 +20,7 @@ struct DeviceInfoView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
+            .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("Device")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -28,7 +29,6 @@ struct DeviceInfoView: View {
                 }
             }
         }
-        .background(Color.black.ignoresSafeArea())
     }
 
     private func row(_ key: String, _ value: String) -> some View {

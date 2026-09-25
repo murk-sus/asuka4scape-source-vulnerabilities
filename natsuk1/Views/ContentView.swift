@@ -81,6 +81,7 @@ struct ContentView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
+            .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("natsuk1")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -94,16 +95,15 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                 }
             }
-        }
-        .background(Color.black.ignoresSafeArea())
-        .sheet(isPresented: $show_settings) {
-            SettingsView()
-                .environmentObject(state)
-                .presentationBackground(Color.black)
-        }
-        .sheet(isPresented: $show_device) {
-            DeviceInfoView()
-                .presentationBackground(Color.black)
+            .sheet(isPresented: $show_settings) {
+                SettingsView()
+                    .environmentObject(state)
+                    .presentationBackground(Color(UIColor.systemGroupedBackground))
+            }
+            .sheet(isPresented: $show_device) {
+                DeviceInfoView()
+                    .presentationBackground(Color(UIColor.systemGroupedBackground))
+            }
         }
     }
 }
@@ -156,7 +156,7 @@ private extension View {
             .frame(maxWidth: .infinity)
             .frame(minHeight: 180, idealHeight: 260, maxHeight: 400)
             .padding(10)
-            .background(Color(white: 0.11))
+            .background(Color(UIColor.secondarySystemGroupedBackground))
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }

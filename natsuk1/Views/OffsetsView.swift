@@ -37,6 +37,7 @@ struct OffsetsView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
+        .background(Color(UIColor.systemGroupedBackground))
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
         .navigationTitle("Modify Offsets")
         .navigationBarTitleDisplayMode(.inline)
@@ -61,12 +62,12 @@ struct OffsetsView: View {
         )) { target in
             EditOffsetView(name: target.name)
                 .environmentObject(store)
-                .presentationBackground(Color.black)
+                .presentationBackground(Color(UIColor.systemGroupedBackground))
         }
         .sheet(isPresented: $showExport) {
             ExportOffsetsView()
                 .environmentObject(store)
-                .presentationBackground(Color.black)
+                .presentationBackground(Color(UIColor.systemGroupedBackground))
         }
         .alert("Reset All Offsets?", isPresented: $showResetAll) {
             Button("Cancel", role: .cancel) {}
@@ -74,7 +75,6 @@ struct OffsetsView: View {
         } message: {
             Text("All offsets will be set to built-in defaults.")
         }
-        .background(Color.black.ignoresSafeArea())
     }
 
     private var filteredGroups: [OffsetsStore.Group] {
@@ -180,7 +180,6 @@ struct EditOffsetView: View {
             }
             .onAppear { text = store.value(for: name) }
         }
-        .background(Color.black.ignoresSafeArea())
     }
 
     private func save() {
@@ -227,6 +226,7 @@ struct ExportOffsetsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
+            .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("Export")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -246,6 +246,5 @@ struct ExportOffsetsView: View {
                 }
             }
         }
-        .background(Color.black.ignoresSafeArea())
     }
 }

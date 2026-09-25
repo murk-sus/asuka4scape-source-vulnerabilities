@@ -79,9 +79,9 @@ struct AboutView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
+        .background(Color(UIColor.systemGroupedBackground))
         .navigationTitle("About")
         .navigationBarTitleDisplayMode(.inline)
-        .background(Color.black.ignoresSafeArea())
     }
 
     private func linkRow(_ title: String, url: URL) -> some View {
@@ -155,8 +155,8 @@ struct AcknowledgementsView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
+        .background(Color(UIColor.systemGroupedBackground))
         .navigationTitle("Acknowledgements")
         .navigationBarTitleDisplayMode(.inline)
-        .background(Color.black.ignoresSafeArea())
     }
 }
