@@ -3,6 +3,7 @@ import UIKit
 
 struct AirliftView: View {
     @EnvironmentObject var airlift: AirliftBridge
+    @State private var didLogPaths = false
 
     private var localDevVPNUp: Bool {
         NetworkStatus.interfaces().contains {
@@ -31,13 +32,11 @@ struct AirliftView: View {
                 exploitSection
             }
 
-            if !airlift.exploitLog.isEmpty {
-                Section {
-                    AirliftLogView(lines: airlift.exploitLog, onClear: { airlift.clearLog() })
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                } header: {
-                    Label("Log", systemImage: "apple.terminal")
-                }
+            Section {
+                AirliftLogView(lines: airlift.exploitLog, onClear: { airlift.clearLog() })
+                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+            } header: {
+                Label("Log", systemImage: "apple.terminal")
             }
         }
         .listStyle(.insetGrouped)
@@ -45,6 +44,12 @@ struct AirliftView: View {
         .background(Color(UIColor.systemGroupedBackground))
         .navigationTitle("Airlift")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if !didLogPaths {
+                didLogPaths = true
+                airlift.logAccessibleFolders()
+            }
+        }
     }
 
     @ViewBuilder
@@ -150,7 +155,7 @@ struct AirliftView: View {
             } label: {
                 HStack {
                     Image(systemName: "bolt.fill")
-                    Text("Run Airlift")
+                    Text("Run Exploit")
                     Spacer()
                 }
             }

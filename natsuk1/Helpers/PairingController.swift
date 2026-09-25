@@ -4,7 +4,7 @@ import AirliftFFI
 /// Drives the RPPairing host: requests Local Network, keeps the app alive while
 /// the user approves the PIN in Settings, advertises the service over Bonjour,
 /// and runs `al_pairing_run_host` off the main thread.
-final class PairingController: @unchecked Sendable {
+final class PairingController: ObservableObject, @unchecked Sendable {
 
     nonisolated(unsafe) static let shared = PairingController()
 
@@ -25,7 +25,7 @@ final class PairingController: @unchecked Sendable {
 
     /// Persisted altIRK keeps the host identity stable across pairings so a
     /// device that has already paired recognises this host.
-    private static let altIRKKey = "aircardPairingHostAltIRK"
+    private static let altIRKKey = "natsuk1PairingHostAltIRK"
     private static var storedAltIRK: String {
         get { UserDefaults.standard.string(forKey: altIRKKey) ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: altIRKKey) }
@@ -51,70 +51,53 @@ final class PairingController: @unchecked Sendable {
         }
     }
 
-    /// Ensures the given pairing file is mirrored to canonical aircard_pairing.plist and airlift_pairing.plist.
+    /// Ensures the given pairing file is mirrored to canonical natsuk1_pairing.plist.
     @discardableResult
     static func syncCanonicalPairingFile(from sourcePath: String) -> String {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let aircardURL = dir.appendingPathComponent("aircard_pairing.plist")
-        let airliftURL = dir.appendingPathComponent("airlift_pairing.plist")
+        let canonicalURL = dir.appendingPathComponent("natsuk1_pairing.plist")
 
         if let data = try? Data(contentsOf: URL(fileURLWithPath: sourcePath)), !data.isEmpty {
-            if sourcePath != aircardURL.path {
-                try? data.write(to: aircardURL, options: .atomic)
+            if sourcePath != canonicalURL.path {
+                try? data.write(to: canonicalURL, options: .atomic)
             }
-            if sourcePath != airliftURL.path {
-                try? data.write(to: airliftURL, options: .atomic)
-            }
-            customPairingFilePath = aircardURL.path
-            return aircardURL.path
+            customPairingFilePath = canonicalURL.path
+            return canonicalURL.path
         }
         return sourcePath
     }
 
     /// Path where the pairing file is written or read from.
-    /// Checks for canonical aircard_pairing.plist, custom path, or any plist in Documents,
+    /// Checks for canonical natsuk1_pairing.plist, custom path, or any plist in Documents,
     /// automatically adopting and standardizing it.
     static func pairingFilePath() -> String {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let aircardPath = dir.appendingPathComponent("aircard_pairing.plist").path
-        if FileManager.default.fileExists(atPath: aircardPath) {
-            let size = (try? FileManager.default.attributesOfItem(atPath: aircardPath)[.size] as? Int) ?? 0
-            if size > 0 { return aircardPath }
+        let canonical = dir.appendingPathComponent("natsuk1_pairing.plist").path
+        if FileManager.default.fileExists(atPath: canonical) {
+            let size = (try? FileManager.default.attributesOfItem(atPath: canonical)[.size] as? Int) ?? 0
+            if size > 0 { return canonical }
         }
-
-        let airliftPath = dir.appendingPathComponent("airlift_pairing.plist").path
-        if FileManager.default.fileExists(atPath: airliftPath) {
-            let size = (try? FileManager.default.attributesOfItem(atPath: airliftPath)[.size] as? Int) ?? 0
-            if size > 0 {
-                _ = syncCanonicalPairingFile(from: airliftPath)
-                return aircardPath
-            }
-        }
-
         if let custom = customPairingFilePath, FileManager.default.fileExists(atPath: custom) {
             let size = (try? FileManager.default.attributesOfItem(atPath: custom)[.size] as? Int) ?? 0
             if size > 0 {
                 _ = syncCanonicalPairingFile(from: custom)
-                return aircardPath
+                return canonical
             }
         }
-
-        // Scan Documents directory for any .plist file
         if let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
-            let plists = files.filter {
-                $0.hasSuffix(".plist") || $0.hasSuffix(".mobiledevicepairing") || $0.hasSuffix(".mobilepair")
-            }
-            for candidate in plists {
+            for candidate in files {
+                guard candidate.hasSuffix(".plist")
+                   || candidate.hasSuffix(".mobiledevicepairing")
+                   || candidate.hasSuffix(".mobilepair") else { continue }
                 let candidatePath = dir.appendingPathComponent(candidate).path
                 let size = (try? FileManager.default.attributesOfItem(atPath: candidatePath)[.size] as? Int) ?? 0
                 if size > 0 {
                     _ = syncCanonicalPairingFile(from: candidatePath)
-                    return aircardPath
+                    return canonical
                 }
             }
         }
-
-        return aircardPath
+        return canonical
     }
 
     /// Start the host and resolve with the pairing-file path, or throw.

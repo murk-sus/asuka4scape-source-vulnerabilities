@@ -46,7 +46,7 @@
     <key>NSBonjourServices</key>
     <array>
         <string>_remotepairing-pairable-host._tcp</string>
-        <string>_aircardprobe._tcp</string>
+        <string>_natsuk1probe._tcp</string>
     </array>
     <key>NSLocalNetworkUsageDescription</key>
     <string>natsuk1 advertises a local pairing service so this device can pair with itself.</string>

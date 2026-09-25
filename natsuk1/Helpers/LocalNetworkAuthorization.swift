@@ -6,7 +6,7 @@ final class LocalNetworkAuthorization: @unchecked Sendable {
     private var listener: NWListener?
     private var continuation: CheckedContinuation<Bool, Never>?
 
-    private let probeType = "_aircardprobe._tcp"
+    private let probeType = "_natsuk1probe._tcp"
 
     func request(timeout: TimeInterval = 1.5) async -> Bool {
         await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in

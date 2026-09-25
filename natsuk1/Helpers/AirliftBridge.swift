@@ -33,11 +33,55 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
     nonisolated private func appendLog(_ s: String) {
         DispatchQueue.main.async {
             self.loggedLines.append(s)
-            if self.loggedLines.count > 500 {
-                self.loggedLines.removeFirst(self.loggedLines.count - 400)
+            if self.loggedLines.count > 800 {
+                self.loggedLines.removeFirst(self.loggedLines.count - 600)
             }
             self.exploitLog = self.loggedLines
         }
+    }
+
+    func logAccessibleFolders() {
+        let fm = FileManager.default
+        var lines: [String] = []
+        lines.append("[paths] home: \(NSHomeDirectory())")
+        lines.append("[paths] bundle: \(Bundle.main.bundlePath)")
+
+        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].path
+        lines.append("[paths] documents: \(docs)")
+
+        if let lib = fm.urls(for: .libraryDirectory, in: .userDomainMask).first?.path {
+            lines.append("[paths] library: \(lib)")
+        }
+        lines.append("[paths] tmp: \(NSTemporaryDirectory())")
+
+        if let items = try? fm.contentsOfDirectory(atPath: docs) {
+            lines.append("[docs] \(items.count) entries:")
+            for f in items.prefix(80) {
+                lines.append("[docs]   \(f)")
+            }
+        } else {
+            lines.append("[docs] cannot list")
+        }
+
+        let probes = [
+            "/var/mobile",
+            "/var/mobile/Library",
+            "/private/var/mobile",
+            "/private/var/mobile/Library",
+            "/var/containers/Bundle/Application",
+            "/private/var/containers/Bundle/Application",
+            "/var/mobile/Containers/Data/Application",
+            "/private/var/mobile/Containers/Data/Application",
+            "/System/Library/PrivateFrameworks",
+            "/var/jb",
+        ]
+        for p in probes {
+            var isDir: ObjCBool = false
+            let ok = fm.fileExists(atPath: p, isDirectory: &isDir)
+            lines.append("[probe] \(p) exists=\(ok) dir=\(isDir.boolValue)")
+        }
+
+        for l in lines { appendLog(l) }
     }
 
     func clearLog() {
@@ -98,10 +142,42 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
     }
 
     func deletePairing() {
-        try? FileManager.default.removeItem(atPath: pairingFilePath())
+        let fm = FileManager.default
+        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        var removed: [String] = []
+
+        let canonicalURL = docs.appendingPathComponent("natsuk1_pairing.plist")
+        if fm.fileExists(atPath: canonicalURL.path) {
+            try? fm.removeItem(at: canonicalURL)
+            removed.append("natsuk1_pairing.plist")
+        }
+
+        if let custom = PairingController.customPairingFilePath {
+            if fm.fileExists(atPath: custom) {
+                try? fm.removeItem(atPath: custom)
+                removed.append((custom as NSString).lastPathComponent)
+            }
+        }
         PairingController.customPairingFilePath = nil
+
+        if let files = try? fm.contentsOfDirectory(atPath: docs.path) {
+            for f in files {
+                guard f.hasSuffix(".plist")
+                   || f.hasSuffix(".mobilepairing")
+                   || f.hasSuffix(".mobilepair") else { continue }
+                try? fm.removeItem(at: docs.appendingPathComponent(f))
+                removed.append(f)
+            }
+        }
+
+        UserDefaults.standard.removeObject(forKey: "natsuk1PairingHostAltIRK")
+
         state = .idle
         pairingStatus = ""
+        pairPIN = nil
+
+        appendLog("[delete] removed: \(removed.isEmpty ? "none" : removed.joined(separator: ", "))")
+        appendLog("[delete] hasPairing now: \(hasPairing())")
     }
 
     func runExploit() {
@@ -114,6 +190,7 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
         state = .running
         loggedLines.removeAll()
         exploitLog = []
+        appendLog("[exploit] start path=\(pairingPath) target=\(target)")
         let targetDir = target
 
         Task.detached {
@@ -136,9 +213,11 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
             await MainActor.run {
                 if rc == 0 {
                     let msg = jsonStr ?? "Canary write confirmed"
+                    self.appendLog("[exploit] ok: \(msg)")
                     self.state = .done(ok: true, message: msg)
                 } else {
                     let msg = errStr ?? "rc=\(rc)"
+                    self.appendLog("[exploit] fail rc=\(rc): \(msg)")
                     self.state = .done(ok: false, message: msg)
                 }
             }
@@ -146,7 +225,7 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
     }
 
     func respring() {
-        let pairingPath = PairingController.pairingFilePath()
+        let pairingPath = pairingFilePath()
         guard FileManager.default.fileExists(atPath: pairingPath) else {
             appendLog("[respring] no pairing file at \(pairingPath)")
             return

@@ -56,13 +56,6 @@ struct AboutView: View {
             }
 
             Section {
-                linkRow("AirLift by 0xjohnnydev", url: URL(string: "https://github.com/0xjohnnydev/airlift")!)
-                linkRow("AirCard-iOS by Mak5er", url: URL(string: "https://github.com/Mak5er/AirCard-iOS")!)
-            } header: {
-                Text("Credits")
-            }
-
-            Section {
             } header: {
                 Text("Disclaimer")
             } footer: {
