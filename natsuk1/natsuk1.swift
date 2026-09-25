@@ -3,8 +3,11 @@ import UIKit
 import Foundation
 
 final class LockedBuffer: @unchecked Sendable {
+    static let shared = LockedBuffer()
     private let lock = NSLock()
     private var value: String = ""
+
+    private init() {}
 
     func append(_ s: String) {
         lock.lock()
@@ -39,8 +42,7 @@ private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line i
         bytes.append(UInt8(bitPattern: p.pointee))
         p = p.advanced(by: 1)
     }
-    let s = String(decoding: bytes, as: UTF8.self)
-    AppState.shared.append(s)
+    LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))
 }
 
 private func osVersionString() -> String {
@@ -170,8 +172,6 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(lang, forKey: "lang") }
     }
 
-    private let buffer = LockedBuffer()
-
     private init() {
         self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
         startFlusher()
@@ -186,7 +186,7 @@ final class AppState: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard let self else { return }
-                let chunk = self.buffer.drain()
+                let chunk = LockedBuffer.shared.drain()
                 guard !chunk.isEmpty else { continue }
                 var newLog = self.log
                 newLog += chunk
@@ -198,8 +198,8 @@ final class AppState: ObservableObject {
         }
     }
 
-    nonisolated func append(_ s: String) {
-        buffer.append(s)
+    func append(_ s: String) {
+        LockedBuffer.shared.append(s)
     }
 
     func run() {
@@ -221,7 +221,7 @@ final class AppState: ObservableObject {
     }
 
     func clear() {
-        buffer.clear()
+        LockedBuffer.shared.clear()
         log = ""
     }
 }
