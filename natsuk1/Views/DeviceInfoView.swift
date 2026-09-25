@@ -1,4 +1,6 @@
+
 import SwiftUI
+import UIKit
 
 struct DeviceInfoView: View {
     @Environment(\.dismiss) private var dismiss
@@ -19,7 +21,7 @@ struct DeviceInfoView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(Color(UIColor.systemGroupedBackground))
+            .background(Color.black)
             .navigationTitle("Device")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -28,6 +30,7 @@ struct DeviceInfoView: View {
                 }
             }
         }
+        .background(Color.black.ignoresSafeArea())
     }
 
     private func row(_ key: String, _ value: String) -> some View {
@@ -83,14 +86,8 @@ struct DeviceInfoView: View {
     }
 
     private func regionShort() -> String {
-        if #available(iOS 16, *) {
-            let region = Locale.current.region?.identifier ?? ""
-            return region.isEmpty ? "—" : region.uppercased()
-        } else {
-            let parts = Locale.current.identifier.split(separator: "_")
-            if parts.count >= 2 { return String(parts[1]).uppercased() }
-            return "—"
-        }
+        let region = Locale.current.region?.identifier ?? ""
+        return region.isEmpty ? "—" : region.uppercased()
     }
 
     private func uptime() -> String {

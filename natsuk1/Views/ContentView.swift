@@ -1,10 +1,9 @@
+
 import SwiftUI
 import UIKit
 
 struct ContentView: View {
     @EnvironmentObject var state: AppState
-    @AppStorage("verbose")  private var verbose: Bool = true
-    @AppStorage("auto_run") private var auto_run: Bool = false
 
     @State private var show_settings: Bool = false
     @State private var show_device: Bool = false
@@ -76,13 +75,14 @@ struct ContentView: View {
                         .environmentObject(state)
                         .terminalPlatter()
                         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowBackground(Color.clear)
                 } header: {
                     Label(state.t("Logs", "Логи"), systemImage: "apple.terminal")
                 }
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(Color(UIColor.systemGroupedBackground))
+            .background(Color.black)
             .navigationTitle("natsuk1")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -96,15 +96,16 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .sheet(isPresented: $show_settings) {
-                SettingsView()
-                    .environmentObject(state)
-                    .presentationBackground(Color(UIColor.systemGroupedBackground))
-            }
-            .sheet(isPresented: $show_device) {
-                DeviceInfoView()
-                    .presentationBackground(Color(UIColor.systemGroupedBackground))
-            }
+        }
+        .background(Color.black.ignoresSafeArea())
+        .sheet(isPresented: $show_settings) {
+            SettingsView()
+                .environmentObject(state)
+                .presentationBackground(Color.black)
+        }
+        .sheet(isPresented: $show_device) {
+            DeviceInfoView()
+                .presentationBackground(Color.black)
         }
     }
 }
@@ -142,7 +143,7 @@ struct LogView: View {
                     Label("Clear", systemImage: "trash")
                 }
             }
-            .onChange(of: state.log) { _ in
+            .onChange(of: state.log) { _, _ in
                 withAnimation(.linear(duration: 0.05)) {
                     proxy.scrollTo(0, anchor: .bottom)
                 }

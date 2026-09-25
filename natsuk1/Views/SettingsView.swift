@@ -1,3 +1,4 @@
+
 import SwiftUI
 import UIKit
 
@@ -195,6 +196,7 @@ struct SettingsView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
+            .background(Color.black)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
@@ -204,6 +206,6 @@ struct SettingsView: View {
                 }
             }
         }
-        .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+        .background(Color.black.ignoresSafeArea())
     }
 }

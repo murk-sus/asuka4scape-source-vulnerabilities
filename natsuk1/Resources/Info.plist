@@ -13,10 +13,7 @@
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>MinimumOSVersion</key><string>27.0</string>
     <key>UILaunchScreen</key>
-    <dict>
-        <key>UIColorName</key><string></string>
-        <key>UIImageRespectsSafeAreaInsets</key><true/>
-    </dict>
+    <dict/>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key><false/>

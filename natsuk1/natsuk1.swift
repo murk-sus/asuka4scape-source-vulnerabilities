@@ -1,10 +1,14 @@
+
 import SwiftUI
 import UIKit
 import Foundation
 
 private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
     guard let line = line else { return }
-    AppState.shared.append(String(cString: line))
+    let s = String(cString: line)
+    DispatchQueue.main.async {
+        AppState.shared.append(s)
+    }
 }
 
 private func osVersionString() -> String {
@@ -50,7 +54,7 @@ struct RootView: View {
                     .onAppear {
                         nk_set_log(cCallback)
                         if state.log.isEmpty {
-                            state.append("[*] natsuk1 v5.1")
+                            state.append("[*] natsuk1 v6.0")
                             state.append("[*] iOS \(osVersionString()) / arm64e")
                             if let version = OffsetsStore.activeVersion {
                                 state.append("[*] offsets: \(version.device) / iOS \(version.ios) (\(version.build))")
@@ -65,10 +69,10 @@ struct RootView: View {
                             }
                         }
                     }
-                    .onChange(of: keep_alive_audio) { value in
+                    .onChange(of: keep_alive_audio) { _, value in
                         if value { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
                     }
-                    .onChange(of: keep_alive_location) { value in
+                    .onChange(of: keep_alive_location) { _, value in
                         if value { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
                     }
                     .overlay {
@@ -105,7 +109,7 @@ struct NotSupportedView: View {
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+        .background(Color.black.ignoresSafeArea())
     }
 }
 

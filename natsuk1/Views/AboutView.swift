@@ -1,3 +1,4 @@
+
 import SwiftUI
 import UIKit
 
@@ -21,12 +22,6 @@ struct AboutView: View {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
     }
 
-    private var commit: String? {
-        let raw = Bundle.main.infoDictionary?["Natsuk1Commit"] as? String
-        guard let raw, !raw.isEmpty else { return nil }
-        return raw
-    }
-
     var body: some View {
         List {
             Section {
@@ -38,14 +33,6 @@ struct AboutView: View {
                     Text("Version \(version) (\(build))")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-
-                    if let commit {
-                        Text(commit)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(.secondary)
-                            .lineLimit(2)
-                            .truncationMode(.middle)
-                    }
 
                     Text("Research project iOS.")
                         .font(.footnote)
@@ -93,7 +80,7 @@ struct AboutView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(Color(UIColor.systemGroupedBackground))
+        .background(Color.black)
         .navigationTitle("About")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -169,7 +156,7 @@ struct AcknowledgementsView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(Color(UIColor.systemGroupedBackground))
+        .background(Color.black)
         .navigationTitle("Acknowledgements")
         .navigationBarTitleDisplayMode(.inline)
     }
