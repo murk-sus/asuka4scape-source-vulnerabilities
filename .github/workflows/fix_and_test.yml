@@ -18,17 +18,15 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v1
+  CACHE_SALT: v2
 
 jobs:
   fix-and-test:
     runs-on: macos-26
     timeout-minutes: 30
-    outputs:
-      app-bundle: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -48,13 +46,7 @@ jobs:
       - name: Install tools
         run: |
           brew install xcodegen ldid
-          brew link --overwrite xcodegen ldid
-
-      - name: Cache XcodeGen derived cache
-        uses: actions/cache@v5
-        with:
-          path: ~/.xcodegen/cache
-          key: xcodegen-${{ runner.os }}-${{ hashFiles('project.yml') }}-${{ env.CACHE_SALT }}
+          brew link --overwrite xcodegen ldid || true
 
       - name: Generate xcodeproj
         run: xcodegen generate
@@ -63,8 +55,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: |
-            build
-            !build/Build/Products
+            build/Build/Intermediates.noindex
+            build/ModuleCache.noindex
+            build/SDKStatCaches.noindex
           key: dd-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ env.CACHE_SALT }}-${{ hashFiles('natsuk1/**/*.swift', 'natsuk1/**/*.c', 'natsuk1/**/*.h', 'project.yml') }}
           restore-keys: |
             dd-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ env.CACHE_SALT }}-
@@ -89,15 +82,34 @@ jobs:
             build -quiet
 
           APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "No .app produced"
+            exit 1
+          fi
           echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
-          ls -la "$APP_PATH"
+          echo "Built: $APP_PATH"
 
-      - name: Upload app bundle
+      - name: Package app for handoff
+        run: |
+          set -euo pipefail
+          APP_PATH="${{ steps.build.outputs.app_path }}"
+          APP_DIR="$(dirname "$APP_PATH")"
+          APP_NAME="$(basename "$APP_PATH")"
+
+          COPYFILE_DISABLE=1 tar -czf natsuk1-app.tar.gz -C "$APP_DIR" "$APP_NAME"
+
+          echo "tarball size:"
+          ls -lh natsuk1-app.tar.gz
+
+          echo "verify executable bit inside tarball:"
+          tar -tzvf natsuk1-app.tar.gz | grep '/natsuk1$' || true
+
+      - name: Upload app tarball
         id: upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: natsuk1-app
-          path: ${{ steps.build.outputs.app_path }}
+          name: natsuk1-app-tar
+          path: natsuk1-app.tar.gz
           retention-days: 7
           if-no-files-found: error
 
