@@ -32,31 +32,68 @@ jobs:
       - name: Patch sources
         run: |
           cat > /tmp/patch.py <<'PYEOF'
-          import re, os
+          import re, os, sys
 
+          def read(p):
+              return open(p).read() if os.path.exists(p) else None
+
+          def write(p, s):
+              open(p, "w").write(s)
+
+          def strip_comments(source):
+              out = []
+              i = 0
+              n = len(source)
+              in_string = False
+              while i < n:
+                  c = source[i]
+                  if in_string:
+                      out.append(c)
+                      if c == '\\' and i + 1 < n:
+                          out.append(source[i+1]); i += 2; continue
+                      if c == '"':
+                          in_string = False
+                      i += 1
+                      continue
+                  if c == '"':
+                      in_string = True; out.append(c); i += 1; continue
+                  if c == '/' and i + 1 < n and source[i+1] == '/':
+                      while i < n and source[i] != '\n': i += 1
+                      continue
+                  if c == '/' and i + 1 < n and source[i+1] == '*':
+                      i += 2
+                      while i + 1 < n and not (source[i] == '*' and source[i+1] == '/'): i += 1
+                      i += 2; continue
+                  out.append(c); i += 1
+              return ''.join(out)
+
+          # ---- PairingController ----
           p = "natsuk1/Helpers/PairingController.swift"
-          if os.path.exists(p):
-              s = open(p).read()
-
-              s = re.sub(r'\n*final class UnmanagedBox[^\n]*\n(?:\s[^\n]*\n|\}\n)*', '\n', s)
+          s = read(p)
+          if s:
+              s = strip_comments(s)
+              s = re.sub(r'\n*final\s+class\s+UnmanagedBox\b[^\n]*\n(?:\s[^\n]*\n|\}\n)*', '\n', s)
 
               s = re.sub(r'^[ \t]*@MainActor[ \t]*\n', '', s, flags=re.M)
+              s = re.sub(r'^[ \t]*@MainActor[ \t]+(?=final\s+class)', '', s, flags=re.M)
               s = re.sub(r'^[ \t]*@Published[ \t]+', '', s, flags=re.M)
+              s = re.sub(r'\bnonisolated[ \t]+(?!\()', '', s)
 
               s = re.sub(
-                  r'final class PairingController: ObservableObject, @unchecked Sendable \{',
+                  r'final\s+class\s+PairingController\s*:\s*ObservableObject\s*,?\s*@unchecked\s+Sendable\s*\{',
                   'final class PairingController: @unchecked Sendable {', s)
               s = re.sub(
-                  r'final class PairingController: ObservableObject \{',
+                  r'final\s+class\s+PairingController\s*:\s*ObservableObject\s*\{',
                   'final class PairingController: @unchecked Sendable {', s)
 
-              s = s.replace(
-                  '    private static let altIRKKey = "aircardPairingHostAltIRK"',
-                  '    nonisolated private static let altIRKKey = "aircardPairingHostAltIRK"')
-
-              s = s.replace(
-                  '    static var customPairingFilePath: String? = nil',
-                  '    nonisolated(unsafe) static var customPairingFilePath: String? = nil')
+              s = re.sub(
+                  r'^([ \t]*)private\s+static\s+let\s+altIRKKey\b',
+                  r'\1nonisolated private static let altIRKKey',
+                  s, flags=re.M)
+              s = re.sub(
+                  r'^([ \t]*)static\s+var\s+customPairingFilePath\b',
+                  r'\1nonisolated(unsafe) static var customPairingFilePath',
+                  s, flags=re.M)
 
               s = s.replace(
                   "    let id = String(cString: serviceID)\n    let box = UnmanagedBox(ctx)\n",
@@ -71,42 +108,69 @@ jobs:
                   "    DispatchQueue.main.async {\n        let controller = Unmanaged<PairingController>.fromOpaque(box.value).takeUnretainedValue()\n        controller.presentPin(pinString)\n    }",
                   "    DispatchQueue.main.async {\n        controller.presentPin(pinString)\n    }")
 
-              s = re.sub(r'^(private let pairReadyCallback)', r'nonisolated(unsafe) \1', s, flags=re.M)
-              s = re.sub(r'^(private let pairPinCallback)', r'nonisolated(unsafe) \1', s, flags=re.M)
+              s = re.sub(r'^(private\s+let\s+pairReadyCallback)', r'nonisolated(unsafe) \1', s, flags=re.M)
+              s = re.sub(r'^(private\s+let\s+pairPinCallback)', r'nonisolated(unsafe) \1', s, flags=re.M)
 
-              open(p, "w").write(s)
+              write(p, s)
               print("patched PairingController")
 
+          # ---- KeepAlive ----
           p = "natsuk1/Helpers/KeepAlive.swift"
-          if os.path.exists(p):
-              s = open(p).read()
-              s = re.sub(r'\n*final class UnmanagedBox[^\n]*\n(?:\s[^\n]*\n|\}\n)*', '\n', s)
+          s = read(p)
+          if s:
+              s = re.sub(r'\n*final\s+class\s+UnmanagedBox\b[^\n]*\n(?:\s[^\n]*\n|\}\n)*', '\n', s)
               s = re.sub(r'^[ \t]*@MainActor[ \t]*\n', '', s, flags=re.M)
+              s = re.sub(r'^[ \t]*@MainActor[ \t]+(?=final\s+class)', '', s, flags=re.M)
               s = re.sub(r'^[ \t]*@Published[ \t]+', '', s, flags=re.M)
               s = re.sub(
-                  r'final class KeepAlive: NSObject, ObservableObject, @unchecked Sendable \{',
+                  r'final\s+class\s+KeepAlive\s*:\s*NSObject\s*,\s*ObservableObject\s*,?\s*@unchecked\s+Sendable\s*\{',
                   'final class KeepAlive: NSObject, @unchecked Sendable {', s)
               s = re.sub(
-                  r'final class KeepAlive: NSObject, ObservableObject \{',
+                  r'final\s+class\s+KeepAlive\s*:\s*NSObject\s*,\s*ObservableObject\s*\{',
                   'final class KeepAlive: NSObject, @unchecked Sendable {', s)
-              open(p, "w").write(s)
+              write(p, s)
               print("patched KeepAlive")
 
+          # ---- NetworkStatus ----
           p = "natsuk1/Helpers/NetworkStatus.swift"
-          if os.path.exists(p):
-              s = open(p).read()
-              s = s.replace(
-                  "        return String(cString: host)",
-                  "        let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }\n        return String(decoding: bytes, as: UTF8.self)")
-              open(p, "w").write(s)
+          s = read(p)
+          if s:
+              s = re.sub(
+                  r'return\s+String\(cString:\s*host\)',
+                  'let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }\n        return String(decoding: bytes, as: UTF8.self)',
+                  s)
+              write(p, s)
               print("patched NetworkStatus")
+
+          # ---- Verify ----
+          pc = read("natsuk1/Helpers/PairingController.swift") or ""
+          problems = []
+          if "ObservableObject" in pc and "PairingController" in pc:
+              for m in re.finditer(r'final\s+class\s+PairingController[^\n]*', pc):
+                  if "ObservableObject" in m.group(0):
+                      problems.append("PairingController still conforms to ObservableObject: " + m.group(0))
+          if "@MainActor" in pc:
+              problems.append("PairingController still contains @MainActor")
+          if re.search(r'private\s+static\s+let\s+altIRKKey(?!.*nonisolated)', pc):
+              problems.append("altIRKKey is not nonisolated")
+
+          if problems:
+              for x in problems:
+                  print("FAIL: " + x)
+              sys.exit(1)
+
+          print("verify OK")
           PYEOF
           python3 /tmp/patch.py
 
-          echo "===== PairingController lines 25-40 ====="
-          sed -n '25,40p' natsuk1/Helpers/PairingController.swift
-          echo "===== PairingController tail ====="
-          tail -40 natsuk1/Helpers/PairingController.swift
+          echo "===== PairingController lines 20-45 ====="
+          sed -n '20,45p' natsuk1/Helpers/PairingController.swift
+          echo "===== PairingController class decl ====="
+          grep -n "final class PairingController" natsuk1/Helpers/PairingController.swift || true
+          echo "===== KeepAlive class decl ====="
+          grep -n "final class KeepAlive" natsuk1/Helpers/KeepAlive.swift || true
+          echo "===== NetworkStatus fix check ====="
+          grep -n "String(cString: host)" natsuk1/Helpers/NetworkStatus.swift && echo "NOT FIXED" || echo "fixed"
 
       - name: Install tools
         run: |
@@ -152,7 +216,7 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "Fix altIRKKey isolation and NetworkStatus deprecation"
+            --notes "Fix MainActor isolation on callbacks + altIRKKey"
 
       - name: Commit
         run: |
@@ -163,5 +227,7 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "nonisolated altIRKKey, fix String(cString:) deprecation [skip ci]"
-          git push
+          git commit -m "Fix Main нужноActor.
+
+ isolation [skip ci]"
+         4 git push
