@@ -7,60 +7,105 @@ private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line i
     AppState.shared.append(String(cString: line))
 }
 
+private func osVersionString() -> String {
+    let v = ProcessInfo.processInfo.operatingSystemVersion
+    return "\(v.majorVersion).\(v.minorVersion)"
+}
+
+private var isSupportedIOS: Bool {
+    ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
+}
+
 @main
 struct natsuk1App: App {
+    var body: some Scene {
+        WindowGroup {
+            RootView()
+        }
+    }
+}
+
+struct RootView: View {
     @StateObject private var state = AppState.shared
     @StateObject private var offsets = OffsetsStore.shared
     @AppStorage("auto_run") private var auto_run = false
-    @AppStorage("keep_alive") private var keep_alive = false
+    @AppStorage("keep_alive_audio") private var keep_alive_audio = false
+    @AppStorage("keep_alive_location") private var keep_alive_location = false
 
     init() {
         UserDefaults.standard.register(defaults: [
             "auto_run": false,
+            "keep_alive_audio": false,
+            "keep_alive_location": false,
             "lang": "en",
         ])
     }
 
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-                .environmentObject(state)
-                .environmentObject(offsets)
-                .preferredColorScheme(.dark)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .onAppear {
-                    nk_set_log(cCallback)
-                    if state.log.isEmpty {
-                        let v = ProcessInfo.processInfo.operatingSystemVersion
-                        state.append("[*] natsuk1 v5.0")
-                        state.append("[*] iOS \(v.majorVersion).\(v.minorVersion) / arm64e")
-                        if let version = OffsetsStore.activeVersion {
-                            state.append("[*] offsets: \(version.device) / iOS \(version.ios) (\(version.build))")
+    var body: some View {
+        Group {
+            if isSupportedIOS {
+                ContentView()
+                    .environmentObject(state)
+                    .environmentObject(offsets)
+                    .onAppear {
+                        nk_set_log(cCallback)
+                        if state.log.isEmpty {
+                            state.append("[*] natsuk1 v5.1")
+                            state.append("[*] iOS \(osVersionString()) / arm64e")
+                            if let version = OffsetsStore.activeVersion {
+                                state.append("[*] offsets: \(version.device) / iOS \(version.ios) (\(version.build))")
+                            }
+                            state.append("")
                         }
-                        state.append("")
-                    }
-                    if keep_alive { KeepAlive.shared.start() }
-                    if auto_run {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            state.run()
+                        if keep_alive_audio { KeepAlive.shared.startAudio() }
+                        if keep_alive_location { KeepAlive.shared.startLocation() }
+                        if auto_run {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                state.run()
+                            }
                         }
                     }
-                }
-                .onChange(of: keep_alive) { value in
-                    if value {
-                        KeepAlive.shared.start()
-                    } else {
-                        KeepAlive.shared.stop()
+                    .onChange(of: keep_alive_audio) { value in
+                        if value { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
                     }
-                }
-                .overlay {
-                    if state.show_respring {
-                        RespringView()
-                            .brightness(-1.0)
-                            .ignoresSafeArea()
+                    .onChange(of: keep_alive_location) { value in
+                        if value { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
                     }
-                }
+                    .overlay {
+                        if state.show_respring {
+                            RespringView()
+                                .brightness(-1.0)
+                                .ignoresSafeArea()
+                        }
+                    }
+            } else {
+                NotSupportedView(version: osVersionString())
+            }
         }
+        .preferredColorScheme(.dark)
+    }
+}
+
+struct NotSupportedView: View {
+    let version: String
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 56))
+                .foregroundStyle(.orange)
+            Text("Not supported for iOS \(version)")
+                .font(.title3)
+                .fontWeight(.semibold)
+                .multilineTextAlignment(.center)
+            Text("natsuk1 runs on iOS 27 only.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
     }
 }
 

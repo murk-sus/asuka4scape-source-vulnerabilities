@@ -8,7 +8,8 @@ struct SettingsView: View {
 
     @AppStorage("auto_run")   private var auto_run: Bool = false
     @AppStorage("verbose")    private var verbose: Bool = true
-    @AppStorage("keep_alive") private var keep_alive: Bool = false
+    @AppStorage("keep_alive_audio")    private var keep_alive_audio: Bool = false
+    @AppStorage("keep_alive_location") private var keep_alive_location: Bool = false
 
     private var appName: String {
         Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
@@ -130,9 +131,30 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle(isOn: $keep_alive_audio) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Silent Audio")
+                            Text("Plays inaudible audio so iOS keeps the app running.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Toggle(isOn: $keep_alive_location) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Background Location")
+                            Text("Uses low-accuracy location to stay alive when an activity needs it.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } header: {
+                    Label("Background Keep-Alive", systemImage: "waveform.circle")
+                }
+
+                Section {
                     Toggle("Auto Run on Launch", isOn: $auto_run)
                     Toggle("Verbose Output", isOn: $verbose)
-                    Toggle("Keep Alive", isOn: $keep_alive)
                 } header: {
                     Label("Options", systemImage: "gearshape")
                 }
@@ -173,7 +195,6 @@ struct SettingsView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
@@ -183,5 +204,6 @@ struct SettingsView: View {
                 }
             }
         }
+        .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
     }
 }

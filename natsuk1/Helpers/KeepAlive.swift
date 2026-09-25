@@ -1,17 +1,23 @@
 import AVFoundation
+import CoreLocation
 import Foundation
+import Combine
 
-final class KeepAlive {
+final class KeepAlive: NSObject, ObservableObject {
     static let shared = KeepAlive()
+
+    @Published private(set) var audioActive: Bool = false
+    @Published private(set) var locationActive: Bool = false
+
     private var player: AVAudioPlayer?
-    private var active = false
+    private var locationManager: CLLocationManager?
 
-    private init() {}
+    private override init() {
+        super.init()
+    }
 
-    var isActive: Bool { active }
-
-    func start() {
-        guard !active else { return }
+    func startAudio() {
+        guard !audioActive else { return }
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
@@ -28,19 +34,47 @@ final class KeepAlive {
             p.prepareToPlay()
             p.play()
             player = p
-            active = true
+            audioActive = true
         } catch {
-            NSLog("[KeepAlive] start failed: \(error)")
-            active = false
+            NSLog("[KeepAlive] audio failed: \(error)")
+            audioActive = false
         }
     }
 
-    func stop() {
-        guard active else { return }
+    func stopAudio() {
+        guard audioActive else { return }
         player?.stop()
         player = nil
-        try? AVAudioSession.sharedInstance().setActive(false)
-        active = false
+        audioActive = false
+    }
+
+    func startLocation() {
+        guard !locationActive else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let m = CLLocationManager()
+            m.delegate = self
+            m.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+            m.distanceFilter = 3000
+            m.pausesLocationUpdatesAutomatically = false
+            m.allowsBackgroundLocationUpdates = true
+            m.showsBackgroundLocationIndicator = false
+
+            let status = m.authorizationStatus
+            if status == .notDetermined {
+                m.requestAlwaysAuthorization()
+            } else if status == .authorizedAlways || status == .authorizedWhenInUse {
+                m.startUpdatingLocation()
+                self.locationActive = true
+            }
+            self.locationManager = m
+        }
+    }
+
+    func stopLocation() {
+        locationManager?.stopUpdatingLocation()
+        locationManager = nil
+        locationActive = false
     }
 
     private static func silentWavData() -> Data {
@@ -70,5 +104,24 @@ final class KeepAlive {
         str("data"); u32(dataSize)
         d.append(Data(repeating: 0, count: Int(dataSize)))
         return d
+    }
+}
+
+extension KeepAlive: CLLocationManagerDelegate {
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
+        if status == .authorizedAlways || status == .authorizedWhenInUse {
+            manager.startUpdatingLocation()
+            locationActive = true
+        } else if status == .denied || status == .restricted {
+            locationActive = false
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        NSLog("[KeepAlive] location error: \(error)")
     }
 }
