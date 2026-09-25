@@ -1,16 +1,29 @@
-name: Fix Swift 6 actor isolation properly
+name: Fix and test build
 
 on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+      - 'natsuk1.png'
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: fix-and-test
+  cancel-in-progress: true
+
 jobs:
-  fix:
+  fix-and-test:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Write natsuk1.swift
         run: |
@@ -20,8 +33,11 @@ jobs:
           import Foundation
 
           final class LockedBuffer: @unchecked Sendable {
+              static let shared = LockedBuffer()
               private let lock = NSLock()
               private var value: String = ""
+
+              private init() {}
 
               func append(_ s: String) {
                   lock.lock()
@@ -56,8 +72,7 @@ jobs:
                   bytes.append(UInt8(bitPattern: p.pointee))
                   p = p.advanced(by: 1)
               }
-              let s = String(decoding: bytes, as: UTF8.self)
-              AppState.shared.append(s)
+              LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))
           }
 
           private func osVersionString() -> String {
@@ -187,8 +202,6 @@ jobs:
                   didSet { UserDefaults.standard.set(lang, forKey: "lang") }
               }
 
-              private let buffer = LockedBuffer()
-
               private init() {
                   self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
                   startFlusher()
@@ -203,7 +216,7 @@ jobs:
                       while !Task.isCancelled {
                           try? await Task.sleep(for: .milliseconds(300))
                           guard let self else { return }
-                          let chunk = self.buffer.drain()
+                          let chunk = LockedBuffer.shared.drain()
                           guard !chunk.isEmpty else { continue }
                           var newLog = self.log
                           newLog += chunk
@@ -215,8 +228,8 @@ jobs:
                   }
               }
 
-              nonisolated func append(_ s: String) {
-                  buffer.append(s)
+              func append(_ s: String) {
+                  LockedBuffer.shared.append(s)
               }
 
               func run() {
@@ -238,12 +251,11 @@ jobs:
               }
 
               func clear() {
-                  buffer.clear()
+                  LockedBuffer.shared.clear()
                   log = ""
               }
           }
           NKEOF
-          echo "natsuk1.swift OK"
 
       - name: Write KeepAlive
         run: |
@@ -374,7 +386,6 @@ jobs:
               }
           }
           NKEOF
-          echo "KeepAlive OK"
 
       - name: Write OffsetsStore
         run: |
@@ -498,16 +509,47 @@ jobs:
               }
           }
           NKEOF
-          echo "OffsetsStore OK"
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "no changes"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git --no-pager diff --stat
+          fi
+
+      - name: Install xcodegen
+        if: steps.diff.outputs.changed == 'true'
+        run: brew install xcodegen
+
+      - name: Generate xcodeproj
+        if: steps.diff.outputs.changed == 'true'
+        run: xcodegen generate
+
+      - name: Build test
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project natsuk1.xcodeproj \
+            -scheme natsuk1 \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            -parallelizeTargets \
+            -jobs "$(sysctl -n hw.ncpu)" \
+            CODE_SIGNING_ALLOWED=NO \
+            build -quiet
 
       - name: Commit and push
+        if: steps.diff.outputs.changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          if git diff --cached --quiet; then
-            echo "No changes"
-            exit 0
-          fi
-          git commit -m "Swift 6: proper MainActor isolation, LockedBuffer for cross-thread log"
+          git commit -m "Fix Swift 6 isolation, LockedBuffer for cross-thread log"
           git push
