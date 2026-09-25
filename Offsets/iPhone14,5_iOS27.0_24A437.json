@@ -39,16 +39,11 @@
       ]
     },
     {
-      "title": "task",
+      "title": "task / thread",
       "items": [
-        "off_task_bsd_info",
         "off_task_map",
-        "off_task_itk_space"
-      ]
-    },
-    {
-      "title": "thread",
-      "items": [
+        "off_task_bsd_info",
+        "off_task_itk_space",
         "off_thread_task_threads_next"
       ]
     },
@@ -64,14 +59,14 @@
         "off_zone_site_struct_ucred",
         "off_zone_site_struct_ipc_port",
         "off_zone_site_struct_ipc_entry",
-        "off_zone_site_struct_vm_page",
         "off_zone_site_struct_fileproc",
         "off_zone_site_struct_fileglob",
         "off_zone_site_struct_vnode",
         "off_zone_site_struct_mount",
         "off_zone_site_struct_socket",
         "off_zone_site_struct_inpcb",
-        "off_zone_site_struct_pipe"
+        "off_zone_site_struct_pipe",
+        "off_zone_site_struct_vm_page"
       ]
     },
     {
@@ -108,8 +103,8 @@
     "off_fn_kfree_ext": "0xFFFFFFF00A201000",
     "off_proc_p_pid": "0x74",
     "off_proc_ro_p_ucred": "0xB8",
-    "off_task_bsd_info": "0x3A0",
     "off_task_map": "0x28",
+    "off_task_bsd_info": "0x3A0",
     "off_task_itk_space": "0x320",
     "off_thread_task_threads_next": "0x50",
     "off_zone_data_kalloc": "0xFFFFFFF007C62E70",
@@ -121,7 +116,6 @@
     "off_zone_site_struct_ucred": "0xFFFFFFF007C6F140",
     "off_zone_site_struct_ipc_port": "0xFFFFFFF007C79248",
     "off_zone_site_struct_ipc_entry": "0xFFFFFFF007C79298",
-    "off_zone_site_struct_vm_page": "0xFFFFFFF007C64C80",
     "off_zone_site_struct_fileproc": "0xFFFFFFF007C7CD08",
     "off_zone_site_struct_fileglob": "0xFFFFFFF007C7D708",
     "off_zone_site_struct_vnode": "0xFFFFFFF007C660C0",
@@ -129,6 +123,7 @@
     "off_zone_site_struct_socket": "0xFFFFFFF007C70C40",
     "off_zone_site_struct_inpcb": "0xFFFFFFF007C6D180",
     "off_zone_site_struct_pipe": "0xFFFFFFF007C6FE80",
+    "off_zone_site_struct_vm_page": "0xFFFFFFF007C64C80",
     "off_sptm_base": "0xFFFFFFF027004000",
     "off_sptm_ctrr_lock_boot": "0xFFFFFFF027006E62",
     "off_sptm_cpu_lock_system_registers": "0xFFFFFFF0270B39B4",

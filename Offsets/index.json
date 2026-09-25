@@ -1,0 +1,13 @@
+{
+  "versions": [
+    {
+      "file": "iPhone14,5_iOS27.0_24A437.json",
+      "device": "iPhone14,5",
+      "deviceName": "iPhone 13",
+      "chip": "A15 Bionic",
+      "ios": "27.0",
+      "build": "24A437",
+      "verified": false
+    }
+  ]
+}
