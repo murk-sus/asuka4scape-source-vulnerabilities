@@ -2,13 +2,11 @@ import SwiftUI
 import UIKit
 
 struct SettingsView: View {
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var state: AppState
-    @EnvironmentObject var offsets: OffsetsStore
 
-    @AppStorage("auto_run")   private var auto_run: Bool = false
-    @AppStorage("verbose")    private var verbose: Bool = true
-    @AppStorage("keep_alive_audio")    private var keep_alive_audio: Bool = false
+    @AppStorage("auto_run") private var auto_run: Bool = false
+    @AppStorage("verbose") private var verbose: Bool = true
+    @AppStorage("keep_alive_audio") private var keep_alive_audio: Bool = false
     @AppStorage("keep_alive_location") private var keep_alive_location: Bool = false
 
     private var appName: String {
@@ -31,11 +29,6 @@ struct SettingsView: View {
         return UIImage(named: "AppIcon")
     }
 
-    private var activeVersionLabel: String {
-        guard let v = OffsetsStore.activeVersion else { return "unknown" }
-        return "\(v.device) / iOS \(v.ios) (\(v.build))"
-    }
-
     var body: some View {
         NavigationStack {
             List {
@@ -43,19 +36,13 @@ struct SettingsView: View {
                     HStack(spacing: 14) {
                         Group {
                             if let icon = appIcon {
-                                Image(uiImage: icon)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
+                                Image(uiImage: icon).resizable().aspectRatio(contentMode: .fill)
                             } else {
                                 ZStack {
                                     LinearGradient(
-                                        colors: [
-                                            Color(red: 0.65, green: 0.30, blue: 0.90),
-                                            Color(red: 0.30, green: 0.65, blue: 0.95)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
+                                        colors: [Color(red: 0.65, green: 0.30, blue: 0.90),
+                                                 Color(red: 0.30, green: 0.65, blue: 0.95)],
+                                        startPoint: .topLeading, endPoint: .bottomTrailing)
                                     Image(systemName: "bolt.fill")
                                         .font(.system(size: 26, weight: .semibold))
                                         .foregroundStyle(.white)
@@ -66,12 +53,8 @@ struct SettingsView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(appName)
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                            Text("Version \(version)")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
+                            Text(appName).font(.title3).fontWeight(.semibold)
+                            Text("Version \(version)").font(.subheadline).foregroundColor(.secondary)
                         }
                         Spacer(minLength: 8)
                     }
@@ -80,46 +63,10 @@ struct SettingsView: View {
                     NavigationLink {
                         AboutView().environmentObject(state)
                     } label: {
-                        HStack(spacing: 12) {
-                            Text("Credits")
-                            Spacer(minLength: 8)
-                        }
+                        Label("About", systemImage: "info.circle")
                     }
                 } header: {
-                    Label("About", systemImage: "info.circle")
-                }
-
-                Section {
-                    HStack(spacing: 12) {
-                        Image(systemName: "cpu")
-                            .frame(width: 22, alignment: .center)
-                            .foregroundStyle(.secondary)
-                        Text("Offsets")
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 8)
-                        Text(activeVersionLabel)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .padding(.vertical, 2)
-
-                    NavigationLink {
-                        OffsetsView().environmentObject(offsets)
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "list.number")
-                                .frame(width: 22, alignment: .center)
-                            Text("Modify Offsets")
-                            Spacer(minLength: 8)
-                            Text("\(offsets.filledCount())/\(offsets.totalCount())")
-                                .font(.system(size: 13, design: .monospaced))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                } header: {
-                    Label("Exploit", systemImage: "cpu")
+                    Label("App", systemImage: "info.circle")
                 }
 
                 Section {
@@ -127,17 +74,14 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Silent Audio")
                             Text("Plays inaudible audio so iOS keeps the app running.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                                .font(.caption).foregroundColor(.secondary)
                         }
                     }
-
                     Toggle(isOn: $keep_alive_location) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Background Location")
-                            Text("Uses low-accuracy location to stay alive when an activity needs it.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            Text("Uses low-accuracy location to stay alive when needed.")
+                                .font(.caption).foregroundColor(.secondary)
                         }
                     }
                 } header: {
@@ -150,33 +94,12 @@ struct SettingsView: View {
                 } header: {
                     Label("Options", systemImage: "gearshape")
                 }
-
-                Section {
-                    Button {
-                        state.respring()
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "arrow.clockwise")
-                                .frame(width: 22, alignment: .center)
-                            Text("Respring")
-                            Spacer(minLength: 8)
-                        }
-                    }
-                } header: {
-                    Label("Tools", systemImage: "wrench.and.screwdriver")
-                }
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                        .fontWeight(.semibold)
-                }
-            }
+            .navigationBarTitleDisplayMode(.large)
         }
     }
 }

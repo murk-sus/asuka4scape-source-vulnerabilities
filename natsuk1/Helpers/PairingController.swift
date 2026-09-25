@@ -51,49 +51,76 @@ final class PairingController: ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// Ensures the given pairing file is mirrored to canonical natsuk1_pairing.plist.
+    /// Ensures the given pairing file is mirrored to canonical natsuk1_pairing.plist and natsuk1_pairing.plist.
     @discardableResult
     static func syncCanonicalPairingFile(from sourcePath: String) -> String {
-        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let fm = FileManager.default
+        let dir = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let canonicalURL = dir.appendingPathComponent("natsuk1_pairing.plist")
 
         if let data = try? Data(contentsOf: URL(fileURLWithPath: sourcePath)), !data.isEmpty {
             if sourcePath != canonicalURL.path {
                 try? data.write(to: canonicalURL, options: .atomic)
+                try? fm.removeItem(atPath: sourcePath)
             }
-            customPairingFilePath = canonicalURL.path
-            return canonicalURL.path
         }
-        return sourcePath
+
+        if let files = try? fm.contentsOfDirectory(atPath: dir.path) {
+            for f in files {
+                guard f.hasSuffix(".plist")
+                   || f.hasSuffix(".mobilepairing")
+                   || f.hasSuffix(".mobilepair") else { continue }
+                let path = dir.appendingPathComponent(f).path
+                if path == canonicalURL.path { continue }
+                try? fm.removeItem(atPath: path)
+            }
+        }
+
+        customPairingFilePath = canonicalURL.path
+        return canonicalURL.path
     }
 
     /// Path where the pairing file is written or read from.
     /// Checks for canonical natsuk1_pairing.plist, custom path, or any plist in Documents,
     /// automatically adopting and standardizing it.
     static func pairingFilePath() -> String {
-        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let fm = FileManager.default
+        let dir = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let canonical = dir.appendingPathComponent("natsuk1_pairing.plist").path
-        if FileManager.default.fileExists(atPath: canonical) {
-            let size = (try? FileManager.default.attributesOfItem(atPath: canonical)[.size] as? Int) ?? 0
-            if size > 0 { return canonical }
-        }
-        if let custom = customPairingFilePath, FileManager.default.fileExists(atPath: custom) {
-            let size = (try? FileManager.default.attributesOfItem(atPath: custom)[.size] as? Int) ?? 0
+
+        if fm.fileExists(atPath: canonical) {
+            let size = (try? fm.attributesOfItem(atPath: canonical)[.size] as? Int) ?? 0
             if size > 0 {
-                _ = syncCanonicalPairingFile(from: custom)
+                if let files = try? fm.contentsOfDirectory(atPath: dir.path) {
+                    for f in files {
+                        guard f.hasSuffix(".plist")
+                           || f.hasSuffix(".mobilepairing")
+                           || f.hasSuffix(".mobilepair") else { continue }
+                        let path = dir.appendingPathComponent(f).path
+                        if path == canonical { continue }
+                        try? fm.removeItem(atPath: path)
+                    }
+                }
                 return canonical
             }
         }
-        if let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
+
+        if let custom = customPairingFilePath, fm.fileExists(atPath: custom) {
+            let size = (try? fm.attributesOfItem(atPath: custom)[.size] as? Int) ?? 0
+            if size > 0 {
+                return syncCanonicalPairingFile(from: custom)
+            }
+        }
+
+        if let files = try? fm.contentsOfDirectory(atPath: dir.path) {
             for candidate in files {
                 guard candidate.hasSuffix(".plist")
                    || candidate.hasSuffix(".mobiledevicepairing")
                    || candidate.hasSuffix(".mobilepair") else { continue }
                 let candidatePath = dir.appendingPathComponent(candidate).path
-                let size = (try? FileManager.default.attributesOfItem(atPath: candidatePath)[.size] as? Int) ?? 0
+                let size = (try? fm.attributesOfItem(atPath: candidatePath)[.size] as? Int) ?? 0
                 if size > 0 {
-                    _ = syncCanonicalPairingFile(from: candidatePath)
-                    return canonical
+                    return syncCanonicalPairingFile(from: candidatePath)
                 }
             }
         }

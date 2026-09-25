@@ -25,14 +25,10 @@ struct AboutView: View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(appName)
-                        .font(.title2)
-                        .fontWeight(.semibold)
-
+                    Text(appName).font(.title2).fontWeight(.semibold)
                     Text("Version \(version) (\(build))")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-
                     Text("Research project iOS.")
                         .font(.footnote)
                         .foregroundColor(.secondary)

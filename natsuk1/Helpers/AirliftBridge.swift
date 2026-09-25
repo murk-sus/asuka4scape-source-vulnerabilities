@@ -45,42 +45,30 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
         var lines: [String] = []
         lines.append("[paths] home: \(NSHomeDirectory())")
         lines.append("[paths] bundle: \(Bundle.main.bundlePath)")
-
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].path
         lines.append("[paths] documents: \(docs)")
-
         if let lib = fm.urls(for: .libraryDirectory, in: .userDomainMask).first?.path {
             lines.append("[paths] library: \(lib)")
         }
         lines.append("[paths] tmp: \(NSTemporaryDirectory())")
-
         if let items = try? fm.contentsOfDirectory(atPath: docs) {
             lines.append("[docs] \(items.count) entries:")
-            for f in items.prefix(80) {
-                lines.append("[docs]   \(f)")
-            }
-        } else {
-            lines.append("[docs] cannot list")
+            for f in items.prefix(80) { lines.append("[docs]   \(f)") }
         }
-
         let probes = [
-            "/var/mobile",
-            "/var/mobile/Library",
-            "/private/var/mobile",
-            "/private/var/mobile/Library",
+            "/var/mobile", "/var/mobile/Library",
+            "/private/var/mobile", "/private/var/mobile/Library",
             "/var/containers/Bundle/Application",
             "/private/var/containers/Bundle/Application",
             "/var/mobile/Containers/Data/Application",
             "/private/var/mobile/Containers/Data/Application",
-            "/System/Library/PrivateFrameworks",
-            "/var/jb",
+            "/System/Library/PrivateFrameworks", "/var/jb",
         ]
         for p in probes {
             var isDir: ObjCBool = false
             let ok = fm.fileExists(atPath: p, isDirectory: &isDir)
             lines.append("[probe] \(p) exists=\(ok) dir=\(isDir.boolValue)")
         }
-
         for l in lines { appendLog(l) }
     }
 
@@ -105,11 +93,9 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
             state = .ready(pairingPath: pairingFilePath())
             return
         }
-
         state = .pairing
         pairingStatus = "Starting host..."
         pairPIN = nil
-
         let ctrl = PairingController.shared
         Task {
             do {
@@ -145,13 +131,11 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
         let fm = FileManager.default
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         var removed: [String] = []
-
         let canonicalURL = docs.appendingPathComponent("natsuk1_pairing.plist")
         if fm.fileExists(atPath: canonicalURL.path) {
             try? fm.removeItem(at: canonicalURL)
             removed.append("natsuk1_pairing.plist")
         }
-
         if let custom = PairingController.customPairingFilePath {
             if fm.fileExists(atPath: custom) {
                 try? fm.removeItem(atPath: custom)
@@ -159,7 +143,6 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
             }
         }
         PairingController.customPairingFilePath = nil
-
         if let files = try? fm.contentsOfDirectory(atPath: docs.path) {
             for f in files {
                 guard f.hasSuffix(".plist")
@@ -169,13 +152,10 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
                 removed.append(f)
             }
         }
-
         UserDefaults.standard.removeObject(forKey: "natsuk1PairingHostAltIRK")
-
         state = .idle
         pairingStatus = ""
         pairPIN = nil
-
         appendLog("[delete] removed: \(removed.isEmpty ? "none" : removed.joined(separator: ", "))")
         appendLog("[delete] hasPairing now: \(hasPairing())")
     }
@@ -186,30 +166,25 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
             state = .done(ok: false, message: "No pairing file")
             return
         }
-
         state = .running
         loggedLines.removeAll()
         exploitLog = []
         appendLog("[exploit] start path=\(pairingPath) target=\(target)")
         let targetDir = target
-
         Task.detached {
             var outJson: UnsafeMutablePointer<CChar>? = nil
             var outError: UnsafeMutablePointer<CChar>? = nil
-
             let rc: Int32 = pairingPath.withCString { pc in
                 targetDir.withCString { tc in
                     al_exploit_run(pc, tc, nil, nil, &outJson, &outError)
                 }
             }
-
             let jsonStr = outJson.flatMap { p -> String? in
                 let s = String(cString: p); al_string_free(p); return s
             }
             let errStr = outError.flatMap { p -> String? in
                 let s = String(cString: p); al_string_free(p); return s
             }
-
             await MainActor.run {
                 if rc == 0 {
                     let msg = jsonStr ?? "Canary write confirmed"
@@ -252,23 +227,19 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
     func findContainer(bundleID: String) async -> String? {
         let pairingPath = pairingFilePath()
         guard FileManager.default.fileExists(atPath: pairingPath) else { return nil }
-
         return await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 var outContainer: UnsafeMutablePointer<CChar>? = nil
                 var outError: UnsafeMutablePointer<CChar>? = nil
-
                 let rc: Int32 = pairingPath.withCString { pc in
                     bundleID.withCString { bc in
                         al_find_app_container(pc, bc, nil, nil, &outContainer, &outError)
                     }
                 }
-
                 let containerStr = outContainer.flatMap { p -> String? in
                     let s = String(cString: p); al_string_free(p); return s
                 }
                 if let p = outError { al_string_free(p) }
-
                 if rc == 0, let c = containerStr {
                     cont.resume(returning: c)
                 } else {

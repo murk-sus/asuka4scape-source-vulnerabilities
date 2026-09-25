@@ -106,15 +106,13 @@ struct AirliftView: View {
                 Button(role: .destructive) {
                     airlift.cancelPairing()
                 } label: {
-                    Text("Cancel Pairing")
-                        .frame(maxWidth: .infinity)
+                    Text("Cancel Pairing").frame(maxWidth: .infinity)
                 }
             } else if airlift.hasPairing() {
                 Button(role: .destructive) {
                     airlift.deletePairing()
                 } label: {
-                    Text("Delete Pairing")
-                        .frame(maxWidth: .infinity)
+                    Text("Delete Pairing").frame(maxWidth: .infinity)
                 }
             } else {
                 Button {
@@ -175,8 +173,7 @@ struct AirliftView: View {
             Button(role: .destructive) {
                 airlift.deletePairing()
             } label: {
-                Text("Delete Pairing")
-                    .frame(maxWidth: .infinity)
+                Text("Delete Pairing").frame(maxWidth: .infinity)
             }
             .disabled(airlift.state == .running)
         }
@@ -196,9 +193,7 @@ struct AirliftLogView: View {
                     .multilineTextAlignment(.leading)
                     .foregroundColor(lines.isEmpty ? .secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-
-                Spacer(minLength: 0)
-                    .id(0)
+                Spacer(minLength: 0).id(0)
             }
             .frame(maxHeight: 260)
             .padding(10)
