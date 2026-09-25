@@ -18,7 +18,7 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v20
+  CACHE_SALT: v21
 
 jobs:
   fix-and-test:
@@ -104,11 +104,33 @@ jobs:
 
           p = "natsuk1/Helpers/PairingController.swift"
           s = strip_comments(open(p).read())
+
           s = re.sub(r'^\s*import\s+AirliftFFI\s*\n', '', s, flags=re.M)
+          s = re.sub(r'^@MainActor\s*\n', '', s, flags=re.M)
+          s = re.sub(r'\bnonisolated\s+', '', s)
+
           s = s.replace('private let hostName = "AirCard-iOS"', 'private let hostName = "natsuk1"')
           s = s.replace('Pair with AirCard-iOS', 'Pair with natsuk1')
           s = s.replace('Settings › AirCard-iOS › Local Network', 'Settings › natsuk1 › Local Network')
-          s = s.replace('private static let altIRKKey', 'nonisolated private static let altIRKKey')
+
+          s = s.replace(
+              "    let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n    let id = String(cString: serviceID)\n",
+              "    let id = String(cString: serviceID)\n"
+          )
+          s = s.replace(
+              "    DispatchQueue.main.async {\n        controller.startAdvertising(serviceID: id, port: Int32(port), txt: txt)\n    }",
+              "    DispatchQueue.main.async {\n        let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n        controller.startAdvertising(serviceID: id, port: Int32(port), txt: txt)\n    }"
+          )
+
+          s = s.replace(
+              "    let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n    let pinString = String(cString: pin)\n",
+              "    let pinString = String(cString: pin)\n"
+          )
+          s = s.replace(
+              "    DispatchQueue.main.async {\n        controller.presentPin(pinString)\n    }",
+              "    DispatchQueue.main.async {\n        let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n        controller.presentPin(pinString)\n    }"
+          )
+
           open(p, "w").write(s)
           print("patched PairingController")
           PYEOF
