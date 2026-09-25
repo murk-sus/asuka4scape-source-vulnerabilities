@@ -59,7 +59,7 @@ jobs:
           p = "natsuk1/Helpers/PairingController.swift"
           s = open(p).read()
 
-          s = s.replace("import AirliftFFI\n", "")
+          s = s.replace("import AirliftFFI\n", "@preconcurrency import AirliftFFI\n")
           s = clean(s)
 
           s = s.replace(
@@ -127,6 +127,26 @@ jobs:
       - name: Apply patch
         run: python3 /tmp/patch.py
 
+      - name: Patch project.yml default isolation
+        run: |
+          set -euo pipefail
+          if [ -f project.yml ]; then
+            python3 - <<'PY'
+          import re
+          p = "project.yml"
+          s = open(p).read()
+          if "SWIFT_DEFAULT_ACTOR_ISOLATION" not in s:
+              s = s.replace(
+                  "    settings:",
+                  "    settings:\n      SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated\n      SWIFT_STRICT_CONCURRENCY: minimal\n",
+                  1)
+          open(p, "w").write(s)
+          print(open(p).read())
+          PY
+          else
+            echo "no project.yml"
+          fi
+
       - name: Verify
         run: |
           set -euo pipefail
@@ -143,6 +163,7 @@ jobs:
           if grep -q "nonisolated(unsafe) nonisolated(unsafe)" KeepAlive.swift; then fail "duplicate nonisolated in KeepAlive"; fi
           grep -q "final class RawPtrBox" PairingController.swift || fail "RawPtrBox not declared"
           grep -q "fromOpaque(box.ptr).release()" PairingController.swift || fail "release not patched"
+          grep -q "@preconcurrency import AirliftFFI" PairingController.swift || fail "preconcurrency import missing"
 
           echo "verify OK"
 
@@ -165,6 +186,8 @@ jobs:
             -parallelizeTargets \
             -jobs "$(sysctl -n hw.ncpu)" \
             CODE_SIGNING_ALLOWED=NO \
+            SWIFT_DEFAULT_ACTOR_ISOLATION=nonisolated \
+            SWIFT_STRICT_CONCURRENCY=minimal \
             -UseModernBuildSystem=YES \
             build -quiet
 
@@ -208,16 +231,16 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "Swift 6.2 isolation final fix"
+            --notes "Disable MainActor default isolation"
 
       - name: Commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add natsuk1/ .github/
+          git add natsuk1/ .github/ project.yml
           if git diff --cached --quiet; then
             echo "no changes"
             exit 0
           fi
-          git commit -m "Strip all @MainActor, no redundant nonisolated(unsafe) [skip ci]"
+          git commit -m "Disable MainActor default isolation [skip ci]"
           git push
