@@ -29,100 +29,67 @@ jobs:
         with:
           xcode-version: "26.5"
 
-      - name: Write patch script
+      - name: Show before
         run: |
-          cat > /tmp/patch.py <<'ENDSCRIPT'
-          import re, os, sys
-
-          HELPERS = "natsuk1/Helpers"
-
-          def read(p):
-              if not os.path.exists(p):
-                  return None
-              return open(p).read()
-
-          def write(p, s):
-              open(p, "w").write(s)
-
-          def clean_swift(s):
-              s = re.sub(r"^\s*@MainActor\s*\n", "", s, flags=re.M)
-              s = re.sub(r"^\s*@MainActor\s+(?=final\s+class)", "", s, flags=re.M)
-              s = re.sub(r"^\s*@Published\s+", "", s, flags=re.M)
-              s = re.sub(r"\bnonisolated\s+(?!\()", "", s)
-              s = re.sub(r"final\s+class\s+PairingController\s*:\s*ObservableObject[^{]*\{",
-                         "final class PairingController: @unchecked Sendable {", s)
-              s = re.sub(r"final\s+class\s+KeepAlive\s*:\s*NSObject\s*,\s*ObservableObject[^{]*\{",
-                         "final class KeepAlive: NSObject, @unchecked Sendable {", s)
-              s = re.sub(r"\nfinal\s+class\s+UnmanagedBox\b[^\n]*\n(?:[^\n]*\n|\}\n)*", "\n", s)
-              return s
-
-          pc = os.path.join(HELPERS, "PairingController.swift")
-          s = read(pc)
-          if s:
-              s = clean_swift(s)
-              s = re.sub(r"^(\s*)private\s+static\s+let\s+altIRKKey\b",
-                         r"\1nonisolated private static let altIRKKey", s, flags=re.M)
-              s = re.sub(r"^(\s*)static\s+var\s+customPairingFilePath\b",
-                         r"\1nonisolated(unsafe) static var customPairingFilePath", s, flags=re.M)
-              s = re.sub(r"^(\s*)private\s+let\s+pairReadyCallback\b",
-                         r"\1nonisolated(unsafe) private let pairReadyCallback", s, flags=re.M)
-              s = re.sub(r"^(\s*)private\s+let\s+pairPinCallback\b",
-                         r"\1nonisolated(unsafe) private let pairPinCallback", s, flags=re.M)
-              write(pc, s)
-              print("patched PairingController")
-
-          ka = os.path.join(HELPERS, "KeepAlive.swift")
-          s = read(ka)
-          if s:
-              s = clean_swift(s)
-              write(ka, s)
-              print("patched KeepAlive")
-
-          ns = os.path.join(HELPERS, "NetworkStatus.swift")
-          s = read(ns)
-          if s:
-              s = s.replace(
-                  "return String(cString: host)",
-                  "let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }\n        return String(decoding: bytes, as: UTF8.self)")
-              write(ns, s)
-              print("patched NetworkStatus")
-
-          pc2 = read(pc) or ""
-          problems = []
-          for m in re.finditer(r"final\s+class\s+PairingController[^\n]*", pc2):
-              if "ObservableObject" in m.group(0):
-                  problems.append("PairingController still ObservableObject: " + m.group(0))
-          if "@MainActor" in pc2:
-              problems.append("PairingController still has @MainActor")
-          if "ObservableObject" in (read(ka) or ""):
-              for m in re.finditer(r"final\s+class\s+KeepAlive[^\n]*", read(ka) or ""):
-                  if "ObservableObject" in m.group(0):
-                      problems.append("KeepAlive still ObservableObject: " + m.group(0))
-          if problems:
-              for x in problems:
-                  print("FAIL: " + x)
-              sys.exit(1)
-          print("verify OK")
-          ENDSCRIPT
-
-      - name: Run patch
-        run: python3 /tmp/patch.py
-
-      - name: Verify patch
-        run: |
-          echo "===== PairingController head ====="
-          sed -n '1,45p' natsuk1/Helpers/PairingController.swift
-          echo "===== class decls ====="
-          grep -n "final class" natsuk1/Helpers/PairingController.swift || true
-          grep -n "final class" natsuk1/Helpers/KeepAlive.swift || true
-          echo "===== altIRKKey line ====="
+          echo "===== PairingController line with altIRKKey ====="
           grep -n "altIRKKey" natsuk1/Helpers/PairingController.swift || true
-          echo "===== NetworkStatus cString check ====="
-          if grep -q "String(cString: host)" natsuk1/Helpers/NetworkStatus.swift; then
-            echo "NOT FIXED"
-            exit 1
-          fi
-          echo "OK"
+          echo "===== PairingController class decl ====="
+          grep -n "class PairingController" natsuk1/Helpers/PairingController.swift || true
+          echo "===== KeepAlive class decl ====="
+          grep -n "class KeepAlive" natsuk1/Helpers/KeepAlive.swift || true
+          echo "===== NetworkStatus cString ====="
+          grep -n "String(cString: host)" natsuk1/Helpers/NetworkStatus.swift || true
+
+      - name: Patch PairingController
+        run: |
+          set -euo pipefail
+          cd natsuk1/Helpers
+
+          perl -i -pe 's/^(\s*)private static let altIRKKey/$1nonisolated private static let altIRKKey/' PairingController.swift
+          perl -i -pe 's/^(\s*)static var customPairingFilePath/$1nonisolated(unsafe) static var customPairingFilePath/' PairingController.swift
+          perl -i -pe 's/^(\s*)private let pairReadyCallback/$1nonisolated(unsafe) private let pairReadyCallback/' PairingController.swift
+          perl -i -pe 's/^(\s*)private let pairPinCallback/$1nonisolated(unsafe) private let pairPinCallback/' PairingController.swift
+          perl -i -pe 's/final class PairingController: ObservableObject, @unchecked Sendable/final class PairingController: @unchecked Sendable/' PairingController.swift
+          perl -i -pe 's/final class PairingController: ObservableObject/final class PairingController: @unchecked Sendable/' PairingController.swift
+          perl -i -ne 'print unless m{^\s*\@MainActor\s*$}' PairingController.swift
+          perl -i -pe 's/^@Published\s+//' PairingController.swift
+
+      - name: Patch KeepAlive
+        run: |
+          set -euo pipefail
+          cd natsuk1/Helpers
+
+          perl -i -pe 's/final class KeepAlive: NSObject, ObservableObject, @unchecked Sendable/final class KeepAlive: NSObject, @unchecked Sendable/' KeepAlive.swift
+          perl -i -pe 's/final class KeepAlive: NSObject, ObservableObject/final class KeepAlive: NSObject, @unchecked Sendable/' KeepAlive.swift
+          perl -i -ne 'print unless m{^\s*\@MainActor\s*$}' KeepAlive.swift
+          perl -i -pe 's/^@Published\s+//' KeepAlive.swift
+
+      - name: Patch NetworkStatus
+        run: |
+          set -euo pipefail
+          perl -i -pe 's/return String\(cString: host\)/let bytes = host.prefix { \$0 != 0 }.map { UInt8(bitPattern: \$0) }\n        return String(decoding: bytes, as: UTF8.self)/' natsuk1/Helpers/NetworkStatus.swift
+
+      - name: Show after
+        run: |
+          echo "===== PairingController line with altIRKKey ====="
+          grep -n "altIRKKey" natsuk1/Helpers/PairingController.swift || true
+          echo "===== PairingController class decl ====="
+          grep -n "class PairingController" natsuk1/Helpers/PairingController.swift || true
+          echo "===== KeepAlive class decl ====="
+          grep -n "class KeepAlive" natsuk1/Helpers/KeepAlive.swift || true
+          echo "===== NetworkStatus cString ====="
+          grep -n "String(cString: host)" natsuk1/Helpers/NetworkStatus.swift && echo "NOT FIXED" || echo "fixed"
+
+      - name: Verify
+        run: |
+          set -euo pipefail
+          grep -q "nonisolated private static let altIRKKey" natsuk1/Helpers/PairingController.swift || { echo "FAIL: altIRKKey not patched"; exit 1; }
+          grep -q "nonisolated(unsafe) private let pairReadyCallback" natsuk1/Helpers/PairingController.swift || { echo "FAIL: pairReadyCallback not patched"; exit 1; }
+          grep -q "nonisolated(unsafe) private let pairPinCallback" natsuk1/Helpers/PairingController.swift || { echo "FAIL: pairPinCallback not patched"; exit 1; }
+          if grep -q "final class PairingController.*ObservableObject" natsuk1/Helpers/PairingController.swift; then echo "FAIL: PairingController still ObservableObject"; exit 1; fi
+          if grep -q "final class KeepAlive.*ObservableObject" natsuk1/Helpers/KeepAlive.swift; then echo "FAIL: KeepAlive still ObservableObject"; exit 1; fi
+          if grep -q "String(cString: host)" natsuk1/Helpers/NetworkStatus.swift; then echo "FAIL: NetworkStatus still String(cString:)"; exit 1; fi
+          echo "verify OK"
 
       - name: Install tools
         run: brew install xcodegen ldid || true
@@ -178,5 +145,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "Fix MainActor isolation [skip ci]"
+          git commit -m "Fix MainActor isolation via perl [skip ci]"
           git push
