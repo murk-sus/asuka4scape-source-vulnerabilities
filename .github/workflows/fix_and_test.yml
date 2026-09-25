@@ -56,7 +56,6 @@ jobs:
               s = re.sub(r"@Published\s+", "", s)
               return s
 
-          # --- PairingController ---
           p = "natsuk1/Helpers/PairingController.swift"
           s = open(p).read()
 
@@ -102,7 +101,6 @@ jobs:
           open(p, "w").write(s)
           print("patched PairingController")
 
-          # --- NetworkStatus ---
           p = "natsuk1/Helpers/NetworkStatus.swift"
           s = open(p).read()
           s = re.sub(
@@ -112,7 +110,6 @@ jobs:
           open(p, "w").write(s)
           print("patched NetworkStatus")
 
-          # --- KeepAlive ---
           p = "natsuk1/Helpers/KeepAlive.swift"
           if os.path.exists(p):
               s = open(p).read()
@@ -136,22 +133,6 @@ jobs:
           cd natsuk1/Helpers
 
           fail() { echo "FAIL: $1"; exit 1; }
-
-          echo "===== @MainActor occurrences ====="
-          grep -n "@MainActor" PairingController.swift KeepAlive.swift || echo "none"
-
-          echo "===== altIRKKey ====="
-          grep -n "altIRKKey" PairingController.swift || true
-          echo "===== callbacks ====="
-          grep -n "pairReadyCallback\|pairPinCallback" PairingController.swift || true
-          echo "===== class decl ====="
-          grep -n "class PairingController" PairingController.swift || true
-          echo "===== KeepAlive shared ====="
-          grep -n "static let shared" KeepAlive.swift || true
-          echo "===== cString ====="
-          grep -n "String(cString: host)" NetworkStatus.swift || true
-          echo "===== RawPtrBox ====="
-          grep -n "RawPtrBox" PairingController.swift || true
 
           if grep -q "@MainActor" PairingController.swift; then fail "PairingController still has @MainActor"; fi
           if grep -q "@MainActor" KeepAlive.swift; then fail "KeepAlive still has @MainActor"; fi
@@ -186,6 +167,25 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             -UseModernBuildSystem=YES \
             build -quiet
+
+      - name: Package app tarball
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "no .app"
+            exit 1
+          fi
+          tar -czf natsuk1-app.tar.gz -C "$(dirname "$APP_PATH")" "$(basename "$APP_PATH")"
+          ls -lh natsuk1-app.tar.gz
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: natsuk1-app-tar
+          path: natsuk1-app.tar.gz
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Package and release
         env:
