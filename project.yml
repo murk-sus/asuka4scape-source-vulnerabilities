@@ -73,7 +73,7 @@ settings:
       DEPLOYMENT_POSTPROCESSING: YES
       STRIP_INSTALLED_PRODUCT: YES
       STRIP_STYLE: all
-        STRIPFLAGS: "-S -x"
+      STRIPFLAGS: "-S -x"
       COPY_PHASE_STRIP: YES
       LLVM_LTO: YES
       LLVM_LTO_MODE: thin
