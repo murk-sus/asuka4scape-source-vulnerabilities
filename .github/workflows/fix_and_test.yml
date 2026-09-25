@@ -97,13 +97,27 @@ jobs:
                   s)
               return s
 
-          def walk_all_swift(fn):
-              for root, dirs, files in os.walk("natsuk1"):
-                  for f in files:
-                      if not f.endswith(".swift"):
+          def add_sendable(s):
+              out = []
+              for line in s.split("\n"):
+                  stripped = line.strip()
+                  if ("ObservableObject" in stripped or "NSObject" in stripped) and (
+                      stripped.startswith("final class ")
+                      or stripped.startswith("nonisolated final class ")
+                      or stripped.startswith("class ")
+                      or stripped.startswith("nonisolated class ")):
+                      if stripped.endswith(" {"):
+                          new_line = line
+                          if "nonisolated " not in new_line:
+                              new_line = new_line.replace("final class ", "nonisolated final class ", 1)
+                              if "nonisolated final class " not in new_line:
+                                  new_line = new_line.replace("class ", "nonisolated class ", 1)
+                          if "@unchecked Sendable" not in new_line:
+                              new_line = new_line[:-2].rstrip().rstrip(",") + ", @unchecked Sendable {"
+                          out.append(new_line)
                           continue
-                      fp = os.path.join(root, f)
-                      fn(fp)
+                  out.append(line)
+              return "\n".join(out)
 
           # ---------------- PairingController ----------------
           p = "natsuk1/Helpers/PairingController.swift"
@@ -181,11 +195,16 @@ jobs:
               new = new.replace("@preconcurrency import ", "import ")
               new = new.replace("@preconcurrency\n", "")
               new = protect_shared(new)
+              new = add_sendable(new)
               if new != src:
                   open(fp, "w").write(new)
                   print("cleaned " + fp)
 
-          walk_all_swift(handle)
+          for root, dirs, files in os.walk("natsuk1"):
+              for f in files:
+                  if not f.endswith(".swift"):
+                      continue
+                  handle(os.path.join(root, f))
           ENDSCRIPT
 
       - name: Apply patch
@@ -274,6 +293,12 @@ jobs:
             fail "static shared without nonisolated(unsafe)"
           fi
 
+          if grep -rnE "^[[:space:]]*(final )?class [A-Za-z_]+.*ObservableObject[^{]*\{[[:space:]]*$" natsuk1/ ; then
+            echo "===== ObservableObject class without @unchecked Sendable ====="
+            grep -rnE "^[[:space:]]*(final )?class [A-Za-z_]+.*ObservableObject[^{]*\{[[:space:]]*$" natsuk1/ || true
+            fail "ObservableObject class missing @unchecked Sendable"
+          fi
+
           grep -q "SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated" project.yml || fail "project.yml missing SWIFT_DEFAULT_ACTOR_ISOLATION"
           grep -q "SWIFT_APPROACHABLE_CONCURRENCY: NO" project.yml || fail "project.yml missing SWIFT_APPROACHABLE_CONCURRENCY"
           grep -q "disable-dynamic-actor-isolation" project.yml || fail "project.yml missing disable-dynamic-actor-isolation"
@@ -347,7 +372,7 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "Protect static shared singletons from nonisolated default"
+            --notes "Mark ObservableObject classes @unchecked Sendable"
 
       - name: Commit
         run: |
@@ -358,5 +383,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "Protect static shared singletons [skip ci]"
+          git commit -m "Mark ObservableObject classes @unchecked Sendable [skip ci]"
           git push
