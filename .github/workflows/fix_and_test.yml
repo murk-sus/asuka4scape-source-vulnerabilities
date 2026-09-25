@@ -102,7 +102,6 @@ jobs:
                   out.append(line)
               return "\n".join(out)
 
-          # --------- PairingController ---------
           p = "natsuk1/Helpers/PairingController.swift"
           s = open(p).read()
 
@@ -169,6 +168,8 @@ jobs:
           s = s.replace("AirCard-iOS", "natsuk1")
           s = s.replace('"aircardPairingHostAltIRK"', '"natsuk1PairingHostAltIRK"')
           s = s.replace("aircardPairingHostAltIRK", "natsuk1PairingHostAltIRK")
+          s = s.replace("aircard_pairing.plist", "natsuk1_pairing.plist")
+          s = s.replace("airlift_pairing.plist", "natsuk1_pairing.plist")
 
           s = s.replace(
               "static var customPairingFilePath: String? = nil",
@@ -198,7 +199,6 @@ jobs:
           open(p, "w").write(s)
           print("patched PairingController")
 
-          # --------- NetworkStatus ---------
           p = "natsuk1/Helpers/NetworkStatus.swift"
           s = open(p).read()
           s = re.sub(
@@ -209,7 +209,6 @@ jobs:
           open(p, "w").write(s)
           print("patched NetworkStatus")
 
-          # --------- KeepAlive ---------
           p = "natsuk1/Helpers/KeepAlive.swift"
           if os.path.exists(p):
               s = open(p).read()
@@ -219,7 +218,6 @@ jobs:
               open(p, "w").write(s)
               print("patched KeepAlive")
 
-          # --------- aircard -> natsuk1 in LocalNetworkAuthorization ---------
           p = "natsuk1/Helpers/LocalNetworkAuthorization.swift"
           if os.path.exists(p):
               s = open(p).read()
@@ -229,7 +227,6 @@ jobs:
               open(p, "w").write(s)
               print("patched LocalNetworkAuthorization")
 
-          # --------- aircard -> natsuk1 in Info.plist ---------
           p = "natsuk1/Resources/Info.plist"
           if os.path.exists(p):
               s = open(p).read()
@@ -238,7 +235,6 @@ jobs:
               open(p, "w").write(s)
               print("patched Info.plist")
 
-          # --------- global pass on remaining swift ---------
           def handle(fp):
               src = open(fp).read()
               new = re.sub(r"@MainActor\s*", "", src)
@@ -412,17 +408,10 @@ jobs:
                   let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
                   var removed: [String] = []
 
-                  let names: Set<String> = [
-                      "natsuk1_pairing.plist",
-                      "aircard_pairing.plist",
-                      "airlift_pairing.plist",
-                  ]
-                  for name in names {
-                      let url = docs.appendingPathComponent(name)
-                      if fm.fileExists(atPath: url.path) {
-                          try? fm.removeItem(at: url)
-                          removed.append(name)
-                      }
+                  let canonicalURL = docs.appendingPathComponent("natsuk1_pairing.plist")
+                  if fm.fileExists(atPath: canonicalURL.path) {
+                      try? fm.removeItem(at: canonicalURL)
+                      removed.append("natsuk1_pairing.plist")
                   }
 
                   if let custom = PairingController.customPairingFilePath {
@@ -444,7 +433,6 @@ jobs:
                   }
 
                   UserDefaults.standard.removeObject(forKey: "natsuk1PairingHostAltIRK")
-                  UserDefaults.standard.removeObject(forKey: "aircardPairingHostAltIRK")
 
                   state = .idle
                   pairingStatus = ""
@@ -1191,6 +1179,11 @@ jobs:
             grep -rni "aircard" natsuk1/ || true
             fail "aircard must be replaced with natsuk1"
           fi
+          if grep -rqi "airlift_pairing" natsuk1/ ; then
+            echo "===== airlift_pairing still present ====="
+            grep -rni "airlift_pairing" natsuk1/ || true
+            fail "airlift_pairing must be replaced with natsuk1_pairing"
+          fi
 
           if grep -rq "@MainActor" natsuk1/ ; then
             grep -rn "@MainActor" natsuk1/ || true
@@ -1313,7 +1306,7 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "aircard→natsuk1 rename + all fixes"
+            --notes "Full aircard→natsuk1 cleanup"
 
       - name: Commit
         run: |
@@ -1324,5 +1317,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "Rename aircard→natsuk1 + fix Run Exploit, logs, Delete Pairing, About credits, respring [skip ci]"
+          git commit -m "Complete aircard→natsuk1 rename [skip ci]"
           git push
