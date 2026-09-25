@@ -92,7 +92,7 @@ targets:
       - path: natsuk1/Exploit
       - path: natsuk1/Resources/Assets.xcassets
         buildPhase: resources
-      - path: Offsets
+      - path: natsuk1/Offsets
         type: folder
         buildPhase: resources
     dependencies:
