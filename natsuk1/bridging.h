@@ -3,5 +3,7 @@
 
 #include <stdint.h>
 #include "Exploit/nk_api.h"
+#import "Exploit/GrappaHelper.h"
+#include "airlift.h"
 
 #endif

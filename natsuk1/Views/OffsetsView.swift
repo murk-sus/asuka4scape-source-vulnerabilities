@@ -62,12 +62,10 @@ struct OffsetsView: View {
         )) { target in
             EditOffsetView(name: target.name)
                 .environmentObject(store)
-                .presentationBackground(Color(UIColor.systemGroupedBackground))
         }
         .sheet(isPresented: $showExport) {
             ExportOffsetsView()
                 .environmentObject(store)
-                .presentationBackground(Color(UIColor.systemGroupedBackground))
         }
         .alert("Reset All Offsets?", isPresented: $showResetAll) {
             Button("Cancel", role: .cancel) {}
@@ -226,7 +224,6 @@ struct ExportOffsetsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
-            .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("Export")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

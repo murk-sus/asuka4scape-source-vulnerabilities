@@ -13,7 +13,7 @@ final class KeepAlive: NSObject, ObservableObject {
     private var player: AVAudioPlayer?
     private var locationManager: CLLocationManager?
 
-    private override init() {
+    override init() {
         super.init()
     }
 
@@ -47,6 +47,11 @@ final class KeepAlive: NSObject, ObservableObject {
         player?.stop()
         player = nil
         audioActive = false
+    }
+
+    func stopAll() {
+        stopAudio()
+        stopLocation()
     }
 
     func startLocation() {

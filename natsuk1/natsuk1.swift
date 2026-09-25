@@ -70,6 +70,7 @@ struct natsuk1App: App {
 struct RootView: View {
     @StateObject private var state = AppState.shared
     @StateObject private var offsets = OffsetsStore.shared
+    @StateObject private var airlift = AirliftBridge.shared
     @AppStorage("auto_run") private var auto_run = false
     @AppStorage("keep_alive_audio") private var keep_alive_audio = false
     @AppStorage("keep_alive_location") private var keep_alive_location = false
@@ -89,6 +90,7 @@ struct RootView: View {
                 ContentView()
                     .environmentObject(state)
                     .environmentObject(offsets)
+                    .environmentObject(airlift)
                     .onAppear {
                         nk_set_log(cCallback)
                         if state.log.isEmpty {

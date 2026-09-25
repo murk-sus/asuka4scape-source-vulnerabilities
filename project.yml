@@ -108,7 +108,8 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: natsuk1/bridging.h
         SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h
         OTHER_CFLAGS: -fno-autolink -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
-        OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz
+        OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz $(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a -lc++ -ObjC
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers $(SRCROOT)/natsuk1/Exploit"
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

@@ -3,14 +3,32 @@ import UIKit
 
 struct ContentView: View {
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var airlift: AirliftBridge
 
     @State private var show_settings: Bool = false
     @State private var show_device: Bool = false
-    @State private var copied: Bool = false
 
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    NavigationLink {
+                        AirliftView().environmentObject(airlift)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "airplane")
+                                .frame(width: 22, alignment: .center)
+                            Text(state.t("Airlift", "Airlift"))
+                            Spacer(minLength: 8)
+                            Text(airlift.hasPairing() ? "Ready" : "Setup")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } header: {
+                    Label(state.t("Sandbox Escape", "Побег из песочницы"), systemImage: "bolt.shield")
+                }
+
                 Section {
                     Button {
                         state.run()
@@ -18,7 +36,7 @@ struct ContentView: View {
                         HStack(spacing: 12) {
                             Image(systemName: "bolt.fill")
                                 .frame(width: 22, alignment: .center)
-                            Text(state.t("Run Exploit", "Запустить эксплойт"))
+                            Text(state.t("Run Offsets", "Показать оффсеты"))
                             Spacer(minLength: 8)
                             if state.running {
                                 ProgressView().scaleEffect(0.8)
@@ -27,7 +45,7 @@ struct ContentView: View {
                     }
                     .disabled(state.running)
                 } header: {
-                    Label(state.t("Actions", "Действия"), systemImage: "play.circle")
+                    Label(state.t("Kernel Offsets", "Оффсеты ядра"), systemImage: "cpu")
                 }
 
                 Section {
@@ -72,18 +90,6 @@ struct ContentView: View {
 
                 Section {
                     Button {
-                        UIPasteboard.general.string = state.log
-                        copied = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            copied = false
-                        }
-                    } label: {
-                        Text(copied
-                             ? state.t("Copied!", "Скопировано!")
-                             : state.t("Copy All", "Копировать всё"))
-                    }
-
-                    Button(role: .destructive) {
                         state.clear()
                     } label: {
                         Text(state.t("Clear", "Очистить"))
@@ -126,18 +132,15 @@ struct LogView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                ScrollView(.vertical, showsIndicators: false) {
-                    Text(state.log.isEmpty ? "Awaiting execution." : state.log)
-                        .font(.system(size: 9, design: .monospaced))
-                        .multilineTextAlignment(.leading)
-                        .foregroundColor(state.log.isEmpty ? .secondary : .primary)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            ScrollView(showsIndicators: false) {
+                Text(state.log.isEmpty ? "Awaiting execution." : state.log)
+                    .font(.system(size: 10, design: .monospaced))
+                    .multilineTextAlignment(.leading)
+                    .foregroundColor(state.log.isEmpty ? .secondary : .primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Spacer(minLength: 0)
-                        .id(0)
-                }
+                Spacer(minLength: 0)
+                    .id(0)
             }
             .onChange(of: state.log) { _, _ in
                 withAnimation(.linear(duration: 0.05)) {
