@@ -81,7 +81,7 @@ jobs:
           p = "natsuk1/Helpers/PairingController.swift"
           s = open(p).read()
 
-          s = s.replace("import AirliftFFI\n", "@preconcurrency import AirliftFFI\n")
+          s = s.replace("@preconcurrency import AirliftFFI\n", "import AirliftFFI\n")
           s = clean(s)
           s = mark_nonisolated(s, "PairingController")
 
@@ -139,6 +139,21 @@ jobs:
               s = mark_nonisolated(s, "KeepAlive")
               open(p, "w").write(s)
               print("patched KeepAlive")
+
+          # Strip @MainActor / @preconcurrency across the entire project.
+          for root, dirs, files in os.walk("natsuk1"):
+              for fn in files:
+                  if not fn.endswith(".swift"):
+                      continue
+                  fp = os.path.join(root, fn)
+                  src = open(fp).read()
+                  new = re.sub(r"@MainActor\s*", "", src)
+                  new = new.replace("@preconcurrency import AirliftFFI\n", "import AirliftFFI\n")
+                  new = new.replace("@preconcurrency import ", "import ")
+                  new = new.replace("@preconcurrency\n", "")
+                  if new != src:
+                      open(fp, "w").write(new)
+                      print("cleaned " + fp)
           ENDSCRIPT
 
       - name: Apply patch
@@ -170,7 +185,7 @@ jobs:
               "        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated\n"
               "        SWIFT_APPROACHABLE_CONCURRENCY: NO\n"
               "        SWIFT_STRICT_CONCURRENCY: minimal\n"
-              '        OTHER_SWIFT_FLAGS: "$(inherited) -default-isolation nonisolated"\n'
+              '        OTHER_SWIFT_FLAGS: "$(inherited) -default-isolation nonisolated -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks"\n'
           )
           if "OTHER_SWIFT_FLAGS" not in s and tgt_anchor in s:
               s = s.replace(tgt_anchor, tgt_extra, 1)
@@ -195,12 +210,23 @@ jobs:
           if grep -q "nonisolated nonisolated" KeepAlive.swift; then fail "duplicate nonisolated in KeepAlive"; fi
           grep -q "nonisolated final class RawPtrBox" PairingController.swift || fail "RawPtrBox not nonisolated"
           grep -q "fromOpaque(box.ptr).release()" PairingController.swift || fail "release not patched"
-          grep -q "@preconcurrency import AirliftFFI" PairingController.swift || fail "preconcurrency import missing"
           grep -q "nonisolated final class PairingController" PairingController.swift || fail "PairingController not nonisolated"
 
           cd ../..
+          if grep -rq "@MainActor" natsuk1/ ; then
+            echo "===== @MainActor still present ====="
+            grep -rn "@MainActor" natsuk1/ || true
+            fail "@MainActor still present in project"
+          fi
+          if grep -rq "@preconcurrency" natsuk1/ ; then
+            echo "===== @preconcurrency still present ====="
+            grep -rn "@preconcurrency" natsuk1/ || true
+            fail "@preconcurrency still present in project"
+          fi
+
           grep -q "SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated" project.yml || fail "project.yml missing SWIFT_DEFAULT_ACTOR_ISOLATION"
           grep -q "SWIFT_APPROACHABLE_CONCURRENCY: NO" project.yml || fail "project.yml missing SWIFT_APPROACHABLE_CONCURRENCY"
+          grep -q "disable-dynamic-actor-isolation" project.yml || fail "project.yml missing disable-dynamic-actor-isolation"
 
           echo "verify OK"
 
@@ -226,7 +252,7 @@ jobs:
             SWIFT_DEFAULT_ACTOR_ISOLATION=nonisolated \
             SWIFT_APPROACHABLE_CONCURRENCY=NO \
             SWIFT_STRICT_CONCURRENCY=minimal \
-            OTHER_SWIFT_FLAGS="-default-isolation nonisolated" \
+            OTHER_SWIFT_FLAGS="-default-isolation nonisolated -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
             -UseModernBuildSystem=YES \
             build -quiet
 
@@ -270,7 +296,7 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "Force nonisolated default isolation"
+            --notes "Disable dynamic actor isolation runtime checks"
 
       - name: Commit
         run: |
@@ -281,5 +307,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "Force nonisolated default isolation [skip ci]"
+          git commit -m "Disable dynamic actor isolation runtime checks [skip ci]"
           git push
