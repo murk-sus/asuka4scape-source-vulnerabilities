@@ -3,8 +3,7 @@ import CoreLocation
 import Foundation
 import Combine
 
-@MainActor
-final class KeepAlive: NSObject, ObservableObject {
+final class KeepAlive: NSObject, ObservableObject, @unchecked Sendable {
     static let shared = KeepAlive()
 
     @Published private(set) var audioActive: Bool = false
@@ -80,7 +79,7 @@ final class KeepAlive: NSObject, ObservableObject {
         locationActive = false
     }
 
-    nonisolated private static func silentWavData() -> Data {
+    private static func silentWavData() -> Data {
         let sampleRate: UInt32 = 8000
         let channels: UInt16 = 1
         let bitsPerSample: UInt16 = 16
@@ -110,7 +109,7 @@ final class KeepAlive: NSObject, ObservableObject {
     }
 }
 
-extension KeepAlive: @preconcurrency CLLocationManagerDelegate {
+extension KeepAlive: CLLocationManagerDelegate {
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
         if status == .authorizedAlways || status == .authorizedWhenInUse {

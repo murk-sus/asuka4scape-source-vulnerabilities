@@ -90,6 +90,13 @@ struct ContentView: View {
 
                 Section {
                     Button {
+                        UIPasteboard.general.string = state.log
+                    } label: {
+                        Text(state.t("Copy All", "Копировать всё"))
+                    }
+                    .disabled(state.log.isEmpty)
+
+                    Button(role: .destructive) {
                         state.clear()
                     } label: {
                         Text(state.t("Clear", "Очистить"))

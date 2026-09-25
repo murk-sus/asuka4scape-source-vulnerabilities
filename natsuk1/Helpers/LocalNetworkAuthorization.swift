@@ -1,8 +1,7 @@
 import Foundation
 import Network
 
-@MainActor
-final class LocalNetworkAuthorization {
+final class LocalNetworkAuthorization: @unchecked Sendable {
     private var browser: NWBrowser?
     private var listener: NWListener?
     private var continuation: CheckedContinuation<Bool, Never>?
@@ -21,7 +20,7 @@ final class LocalNetworkAuthorization {
             listener?.newConnectionHandler = { $0.cancel() }
             listener?.stateUpdateHandler = { [weak self] state in
                 if case .failed = state {
-                    MainActor.assumeIsolated { self?.finish(true) }
+                    DispatchQueue.main.async { self?.finish(true) }
                 }
             }
             self.listener = listener
@@ -29,12 +28,12 @@ final class LocalNetworkAuthorization {
             let browser = NWBrowser(for: .bonjour(type: probeType, domain: nil), using: params)
             browser.stateUpdateHandler = { [weak self] state in
                 if case .failed = state {
-                    MainActor.assumeIsolated { self?.finish(true) }
+                    DispatchQueue.main.async { self?.finish(true) }
                 }
             }
             browser.browseResultsChangedHandler = { [weak self] results, _ in
                 if !results.isEmpty {
-                    MainActor.assumeIsolated { self?.finish(true) }
+                    DispatchQueue.main.async { self?.finish(true) }
                 }
             }
             self.browser = browser
@@ -43,7 +42,7 @@ final class LocalNetworkAuthorization {
             browser.start(queue: .main)
 
             DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
-                MainActor.assumeIsolated { self?.finish(true) }
+                self?.finish(true)
             }
         }
     }
