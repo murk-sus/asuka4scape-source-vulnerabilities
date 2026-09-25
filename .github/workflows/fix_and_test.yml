@@ -18,7 +18,7 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v15
+  CACHE_SALT: v16
 
 jobs:
   fix-and-test:
@@ -49,11 +49,12 @@ jobs:
           cp /tmp/aircard/ios-app/GrappaHelper.m natsuk1/Exploit/
           cp /tmp/aircard/ios-app/NetworkStatus.swift natsuk1/Helpers/
           cp /tmp/aircard/ios-app/PairingController.swift natsuk1/Helpers/
+          cp /tmp/aircard/ios-app/Utilities.swift natsuk1/Helpers/
 
           test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a
           test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers/airlift.h
 
-      - name: Strip comments and imports from AirCard sources
+      - name: Strip comments and fix AirCard sources
         run: |
           python3 <<'PYEOF'
           import os, re
@@ -109,6 +110,7 @@ jobs:
           for p in [
               "natsuk1/Helpers/NetworkStatus.swift",
               "natsuk1/Helpers/PairingController.swift",
+              "natsuk1/Helpers/Utilities.swift",
               "natsuk1/Exploit/GrappaHelper.h",
               "natsuk1/Exploit/GrappaHelper.m",
           ]:
@@ -117,6 +119,7 @@ jobs:
                       src = f.read()
                   s = strip_comments(src)
                   s = re.sub(r'^\s*import\s+AirliftFFI\s*\n', '', s, flags=re.M)
+                  s = re.sub(r'^\s*@_silgen_name\("ALGetGrappaToken"\)\s*\n', '', s, flags=re.M)
                   with open(p, "w") as f:
                       f.write(s)
                   print(f"cleaned {p}")
@@ -127,7 +130,16 @@ jobs:
               s = s.replace('private let hostName = "AirCard-iOS"', 'private let hostName = "natsuk1"')
               s = s.replace('Pair with AirCard-iOS', 'Pair with natsuk1')
               s = s.replace('Settings › AirCard-iOS › Local Network', 'Settings › natsuk1 › Local Network')
+              s = s.replace('private static let altIRKKey', 'nonisolated private static let altIRKKey')
               open(p, "w").write(s)
+              print("patched PairingController")
+
+          p = "natsuk1/Helpers/KeepAlive.swift"
+          if os.path.exists(p):
+              s = open(p).read()
+              s = s.replace("private override init()", "override init()")
+              open(p, "w").write(s)
+              print("patched KeepAlive")
           PYEOF
 
       - name: Clean target directories
@@ -139,7 +151,6 @@ jobs:
           rm -f natsuk1/Views/DeviceInfoView.swift
           rm -f natsuk1/Views/AirliftView.swift
           rm -f natsuk1/Helpers/AirliftBridge.swift
-          rm -f natsuk1/Helpers/KeepAlive.swift
           rm -f natsuk1/Helpers/OffsetsStore.swift
           rm -f natsuk1/Helpers/DeviceName.swift
           rm -f natsuk1/Helpers/Respring.swift
@@ -1524,7 +1535,7 @@ jobs:
               private var player: AVAudioPlayer?
               private var locationManager: CLLocationManager?
 
-              private override init() {
+              override init() {
                   super.init()
               }
 
@@ -2105,6 +2116,7 @@ jobs:
                   "    <key>NSBonjourServices</key>\n"
                   "    <array>\n"
                   "        <string>_remotepairing-pairable-host._tcp</string>\n"
+                  "        <string>_aircardprobe._tcp</string>\n"
                   "    </array>\n"
                   "    <key>NSLocalNetworkUsageDescription</key>\n"
                   "    <string>natsuk1 advertises a local pairing service so this device can pair with itself.</string>\n"
@@ -2116,11 +2128,13 @@ jobs:
                   "    <key>UIBackgroundModes</key>\n"
                   "    <array>\n"
                   "        <string>audio</string>\n"
+                  "        <string>location</string>\n"
                   "    </array>\n"
               )
               s = s.replace("</dict>\n</plist>", insert + "</dict>\n</plist>")
 
           open(p, "w").write(s)
+          print("info.plist patched")
           PYEOF
 
       - name: Patch project.yml
@@ -2156,15 +2170,22 @@ jobs:
           if lib not in s:
               s = re.sub(
                   r'^(\s*OTHER_LDFLAGS:\s*)(.*)$',
-                  r'\1\2 ' + lib + ' -lc++',
+                  r'\1\2 ' + lib + ' -lc++ -ObjC',
                   s, flags=re.M,
               )
-          elif "-lc++" not in s:
-              s = re.sub(
-                  r'^(\s*OTHER_LDFLAGS:\s*)(.*)$',
-                  r'\1\2 -lc++',
-                  s, flags=re.M,
-              )
+          else:
+              if "-lc++" not in s:
+                  s = re.sub(
+                      r'^(\s*OTHER_LDFLAGS:\s*)(.*)$',
+                      r'\1\2 -lc++ -ObjC',
+                      s, flags=re.M,
+                  )
+              elif "-ObjC" not in s:
+                  s = re.sub(
+                      r'^(\s*OTHER_LDFLAGS:\s*)(.*)$',
+                      r'\1\2 -ObjC',
+                      s, flags=re.M,
+                  )
 
           open(p, "w").write(s)
           print(s)
@@ -2245,10 +2266,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add natsuk1/ project.yml .gitignore 2>/dev/null || git add natsuk1/ project.yml
+          git add natsuk1/ project.yml
           if git diff --cached --quiet; then
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "Airlift integration + remove import AirliftFFI [skip ci]"
+          git commit -m "Airlift integration with all fixes [skip ci]"
           git push
