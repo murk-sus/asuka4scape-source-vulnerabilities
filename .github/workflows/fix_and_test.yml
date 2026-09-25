@@ -33,92 +33,84 @@ jobs:
       - name: Patch necp.c
         run: |
           set -euo pipefail
-          python3 - <<'PY'
+          mkdir -p /tmp/nk
+          cat > /tmp/nk/sanity.c <<'CEOF'
+          static int sanity_check(void) {
+              log_info("SANITY", "reading verified anchors via kread...");
+              uint64_t kernproc  = kread64(g_kbase + OFF_KERNPROC);
+              uint64_t task_list = kread64(g_kbase + OFF_TASK_LIST);
+              log_info("SANITY", "kernproc  = 0x%llx", (unsigned long long)kernproc);
+              log_info("SANITY", "task_list = 0x%llx", (unsigned long long)task_list);
+              int ok = 0;
+              if (kernproc  >= KPTR_MIN && kernproc  <= KPTR_MAX) ok++;
+              if (task_list >= KPTR_MIN && task_list <= KPTR_MAX) ok++;
+              log_info("SANITY", "%d/2 anchors valid", ok);
+              return ok == 2 ? 0 : -1;
+          }
+          CEOF
+          cat > /tmp/nk/task.c <<'CEOF'
+          static int task_sanity(void) {
+              uint64_t kernproc = kread64(g_kbase + OFF_KERNPROC);
+              if (!kernproc || kernproc < KPTR_MIN || kernproc > KPTR_MAX) {
+                  log_err("TASK", "kernproc invalid: 0x%llx", (unsigned long long)kernproc);
+                  return -1;
+              }
+              uint32_t pid = kread32(kernproc + PROC_PID_OFF);
+              log_info("TASK", "kernproc->p_pid=%u (expect 0)", pid);
+              uint64_t ucred = kread64(kernproc + PROC_RO_P_UCRED_OFF);
+              log_info("TASK", "kernproc->p_ucred@0x%x = 0x%llx",
+                       PROC_RO_P_UCRED_OFF, (unsigned long long)ucred);
+              if (ucred < KPTR_MIN || ucred > KPTR_MAX) {
+                  log_warn("TASK", "ucred invalid, fallback p_ucred@0xB8");
+                  ucred = kread64(kernproc + 0xB8);
+                  log_info("TASK", "fallback p_ucred=0x%llx", (unsigned long long)ucred);
+              }
+              if (ucred >= KPTR_MIN && ucred <= KPTR_MAX) {
+                  uint32_t uid = kread32(ucred + UCRED_UID_OFF);
+                  log_info("TASK", "kernproc ucred uid=%u (expect 0)", uid);
+                  if (pid == 0 && uid == 0) {
+                      log_ok("TASK", "kernproc -> p_ucred -> uid chain works");
+                      return 0;
+                  }
+              }
+              log_warn("TASK", "chain broken");
+              return -1;
+          }
+          CEOF
+          python3 - <<'PYEOF'
           import re, sys
-
           p = "natsuk1/Exploit/necp.c"
           s = open(p).read()
+          if "natsuk1-kread-fix-v2" in s:
+              print("already patched, skipping")
+              sys.exit(0)
           orig = s
-
           s = re.sub(r"#define\s+UCRED_UID_OFF\s+0x[0-9A-Fa-f]+",
-                     "#define UCRED_UID_OFF           0x8",  s)
+                     "#define UCRED_UID_OFF 0x8", s)
           s = re.sub(r"#define\s+UCRED_SVUID_OFF\s+0x[0-9A-Fa-f]+",
-                     "#define UCRED_SVUID_OFF         0xC",  s)
+                     "#define UCRED_SVUID_OFF 0xC", s)
           s = re.sub(r"#define\s+UCRED_GID_OFF\s+0x[0-9A-Fa-f]+",
-                     "#define UCRED_GID_OFF           0x14", s)
+                     "#define UCRED_GID_OFF 0x14", s)
           s = re.sub(r"#define\s+UCRED_SVGID_OFF\s+0x[0-9A-Fa-f]+",
-                     "#define UCRED_SVGID_OFF         0x18", s)
-
+                     "#define UCRED_SVGID_OFF 0x18", s)
           s = re.sub(r"#define\s+PROC_RO_P_UCRED_OFF\s+0x[0-9A-Fa-f]+",
-                     "#define PROC_RO_P_UCRED_OFF     0x98", s)
-
+                     "#define PROC_RO_P_UCRED_OFF 0x98", s)
           s = s.replace("OFF_ALLPROC", "OFF_KERNPROC")
           s = re.sub(r"#define\s+OFF_KERNPROC\s+0xBBB048ULL\s*\n", "", s)
-
-          s = re.sub(
-              r"static const uint64_t known_offs\[\]\s*=\s*\{[^}]*\};",
-              "static const uint64_t known_offs[] = { 0xBBB040, 0x10D53F0 };",
-              s)
-          s = re.sub(r"for \(int i = 0; i < 6; i\+\+\)",
-                     "for (int i = 0; i < 2; i++)", s)
-
-          new_sanity = '''static int sanity_check(void) {
-    log_info("SANITY", "reading verified anchors via kread...");
-    uint64_t kernproc  = kread64(g_kbase + OFF_KERNPROC);
-    uint64_t task_list = kread64(g_kbase + OFF_TASK_LIST);
-    log_info("SANITY", "kernproc  = 0x%llx", (unsigned long long)kernproc);
-    log_info("SANITY", "task_list = 0x%llx", (unsigned long long)task_list);
-    int ok = 0;
-    if (kernproc  >= KPTR_MIN && kernproc  <= KPTR_MAX) ok++;
-    if (task_list >= KPTR_MIN && task_list <= KPTR_MAX) ok++;
-    log_info("SANITY", "%d/2 anchors valid", ok);
-    return ok == 2 ? 0 : -1;
-}'''
-          s = re.sub(r"static int sanity_check\(void\) \{.*?\n\}",
-                     new_sanity, s, count=1, flags=re.DOTALL)
-
-          new_task = '''static int task_sanity(void) {
-    uint64_t kernproc = kread64(g_kbase + OFF_KERNPROC);
-    if (!kernproc || kernproc < KPTR_MIN || kernproc > KPTR_MAX) {
-        log_err("TASK", "kernproc invalid: 0x%llx", (unsigned long long)kernproc);
-        return -1;
-    }
-    uint32_t pid = kread32(kernproc + PROC_PID_OFF);
-    log_info("TASK", "kernproc->p_pid=%u (expect 0)", pid);
-
-    uint64_t ucred = kread64(kernproc + PROC_RO_P_UCRED_OFF);
-    log_info("TASK", "kernproc->p_ucred@0x%x = 0x%llx",
-             PROC_RO_P_UCRED_OFF, (unsigned long long)ucred);
-    if (ucred < KPTR_MIN || ucred > KPTR_MAX) {
-        log_warn("TASK", "ucred invalid, trying fallback p_ucred@0xB8");
-        ucred = kread64(kernproc + 0xB8);
-        log_info("TASK", "fallback p_ucred=0x%llx", (unsigned long long)ucred);
-    }
-    if (ucred >= KPTR_MIN && ucred <= KPTR_MAX) {
-        uint32_t uid = kread32(ucred + UCRED_UID_OFF);
-        log_info("TASK", "kernproc ucred uid=%u (expect 0)", uid);
-        if (pid == 0 && uid == 0) {
-            log_ok("TASK", "kernproc -> p_ucred -> uid chain works");
-            return 0;
-        }
-    }
-    log_warn("TASK", "chain broken");
-    return -1;
-}'''
-          s = re.sub(r"static int task_sanity\(void\) \{.*?\n\}",
-                     new_task, s, count=1, flags=re.DOTALL)
-
-          s = s.replace("=== natsuk1 v1.1 ===", "=== natsuk1 v1.2 (krw-fix) ===")
-
-          if s == orig:
-              print("!! WARNING: necp.c unchanged")
-              sys.exit(1)
-
+          s = re.sub(r"static const uint64_t known_offs\[\][^;]*;",
+                     "static const uint64_t known_offs[] = { 0xBBB040, 0x10D53F0 };", s)
+          s = s.replace("for (int i = 0; i < 6; i++)", "for (int i = 0; i < 2; i++)")
+          sanity = open("/tmp/nk/sanity.c").read().rstrip()
+          task   = open("/tmp/nk/task.c").read().rstrip()
+          s = re.sub(r"static int sanity_check\(void\) \{.*?\n\}", sanity, s, count=1, flags=re.DOTALL)
+          s = re.sub(r"static int task_sanity\(void\) \{.*?\n\}",   task,   s, count=1, flags=re.DOTALL)
+          s = s.replace("=== natsuk1 v1.1 ===", "=== natsuk1 v1.2 (natsuk1-kread-fix-v2) ===")
+          assert s != orig, "no changes applied"
           open(p, "w").write(s)
           print("necp.c patched OK")
-          PY
+          PYEOF
 
-      - name: Write full offsets JSON
+      - name: Write offsets JSON
         run: |
           mkdir -p natsuk1/Offsets
           cat > natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json <<'JSON'
@@ -211,20 +203,20 @@ jobs:
           set -euo pipefail
           F=natsuk1/Exploit/necp.c
           ! grep -q "OFF_ALLPROC" "$F"
-          grep -q "PROC_RO_P_UCRED_OFF     0x98" "$F"
-          grep -q "UCRED_UID_OFF           0x8"   "$F"
+          grep -q "PROC_RO_P_UCRED_OFF 0x98" "$F"
+          grep -q "UCRED_UID_OFF 0x8" "$F"
           grep -q "known_offs\[\] = { 0xBBB040, 0x10D53F0 }" "$F"
           grep -q "verified anchors via kread" "$F"
-          python3 - <<'PY'
+          python3 - <<'PYEOF'
           import json
           f = "natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
-          data = json.load(open(f))
-          items = sum(len(g["items"]) for g in data["groups"])
-          assert items == len(data["defaults"])
-          assert data["defaults"]["off_proc_ro_p_ucred"] == "0x98"
-          assert data["defaults"]["off_g_kernproc"] == "0xFFFFFFF007BBF040"
-          print(f"OK: {items} offsets")
-          PY
+          d = json.load(open(f))
+          items = sum(len(g["items"]) for g in d["groups"])
+          assert items == len(d["defaults"]), "count mismatch"
+          assert d["defaults"]["off_proc_ro_p_ucred"] == "0x98"
+          assert d["defaults"]["off_g_kernproc"] == "0xFFFFFFF007BBF040"
+          print("OK: %d offsets" % items)
+          PYEOF
 
       - name: Install tools
         run: brew install xcodegen ldid || true
@@ -281,7 +273,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add natsuk1/Exploit/necp.c natsuk1/Offsets/ .github/workflows/fix_and_test.yml
+          git add natsuk1/Exploit/necp.c natsuk1/Offsets/
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
           git commit -m "Fix kernel-read for iOS 27.0/24A437 [skip ci]"
           git push
