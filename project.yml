@@ -2,7 +2,7 @@ name: natsuk1
 options:
   bundleIdPrefix: com.natsuk1
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "27.0"
   createIntermediateGroups: true
   groupSortPosition: top
   projectFormat: xcode15_0
@@ -15,7 +15,7 @@ configs:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "27.0"
     CLANG_ENABLE_MODULES: YES
     CLANG_MODULES_AUTOLINK: NO
     CLANG_ENABLE_OBJC_ARC: YES
