@@ -3,6 +3,7 @@ import CoreLocation
 import Foundation
 import Combine
 
+@MainActor
 final class KeepAlive: NSObject, ObservableObject {
     nonisolated(unsafe) static let shared = KeepAlive()
 
@@ -50,25 +51,22 @@ final class KeepAlive: NSObject, ObservableObject {
 
     func startLocation() {
         guard !locationActive else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            let m = CLLocationManager()
-            m.delegate = self
-            m.desiredAccuracy = kCLLocationAccuracyThreeKilometers
-            m.distanceFilter = 3000
-            m.pausesLocationUpdatesAutomatically = false
-            m.allowsBackgroundLocationUpdates = true
-            m.showsBackgroundLocationIndicator = false
+        let m = CLLocationManager()
+        m.delegate = self
+        m.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+        m.distanceFilter = 3000
+        m.pausesLocationUpdatesAutomatically = false
+        m.allowsBackgroundLocationUpdates = true
+        m.showsBackgroundLocationIndicator = false
 
-            let status = m.authorizationStatus
-            if status == .notDetermined {
-                m.requestAlwaysAuthorization()
-            } else if status == .authorizedAlways || status == .authorizedWhenInUse {
-                m.startUpdatingLocation()
-                self.locationActive = true
-            }
-            self.locationManager = m
+        let status = m.authorizationStatus
+        if status == .notDetermined {
+            m.requestAlwaysAuthorization()
+        } else if status == .authorizedAlways || status == .authorizedWhenInUse {
+            m.startUpdatingLocation()
+            locationActive = true
         }
+        locationManager = m
     }
 
     func stopLocation() {
@@ -77,7 +75,7 @@ final class KeepAlive: NSObject, ObservableObject {
         locationActive = false
     }
 
-    private static func silentWavData() -> Data {
+    nonisolated private static func silentWavData() -> Data {
         let sampleRate: UInt32 = 8000
         let channels: UInt16 = 1
         let bitsPerSample: UInt16 = 16
@@ -108,20 +106,22 @@ final class KeepAlive: NSObject, ObservableObject {
 }
 
 extension KeepAlive: CLLocationManagerDelegate {
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
-        if status == .authorizedAlways || status == .authorizedWhenInUse {
-            manager.startUpdatingLocation()
-            locationActive = true
-        } else if status == .denied || status == .restricted {
-            locationActive = false
+        Task { @MainActor in
+            if status == .authorizedAlways || status == .authorizedWhenInUse {
+                manager.startUpdatingLocation()
+                KeepAlive.shared.locationActive = true
+            } else if status == .denied || status == .restricted {
+                KeepAlive.shared.locationActive = false
+            }
         }
     }
 
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
     }
 
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         NSLog("[KeepAlive] location error: \(error)")
     }
 }

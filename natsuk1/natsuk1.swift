@@ -118,6 +118,7 @@ struct NotSupportedView: View {
     }
 }
 
+@MainActor
 final class AppState: ObservableObject {
     nonisolated(unsafe) static let shared = AppState()
 
@@ -156,10 +157,9 @@ final class AppState: ObservableObject {
     }
 
     private func startFlusher() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-                guard let self = self else { return }
+        flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
                 self.lock.lock()
                 let chunk = self.pending
                 self.pending = ""
@@ -175,7 +175,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    func append(_ s: String) {
+    nonisolated func append(_ s: String) {
         lock.lock()
         pending += s
         pending += "\n"
@@ -190,17 +190,13 @@ final class AppState: ObservableObject {
         running = true
         status = .running
 
-        let t = Thread { [weak self] in
+        Task.detached {
             _ = nk_full_exploit()
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.running = false
-                self.status = .ok
+            await MainActor.run {
+                AppState.shared.running = false
+                AppState.shared.status = .ok
             }
         }
-        t.qualityOfService = .userInitiated
-        t.stackSize = 16 * 1024 * 1024
-        t.start()
     }
 
     func respring() {
