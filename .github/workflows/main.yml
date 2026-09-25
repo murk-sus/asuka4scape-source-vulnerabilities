@@ -1,4 +1,4 @@
-name: Fix menu, drop haptics, gray context menu
+name: Fix context menu tint and Settings background
 
 on:
   workflow_dispatch:
@@ -12,178 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Remove haptics
-        run: |
-          rm -f natsuk1/Helpers/Haptics.swift
-
-      - name: Write natsuk1.swift
-        run: |
-          cat > natsuk1/natsuk1.swift <<'NKEOF'
-          import SwiftUI
-          import UIKit
-          import Foundation
-
-          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
-              guard let line = line else { return }
-              AppState.shared.append(String(cString: line))
-          }
-
-          @main
-          struct natsuk1App: App {
-              @StateObject private var state = AppState.shared
-              @StateObject private var offsets = OffsetsStore.shared
-              @AppStorage("auto_run") private var auto_run = false
-              @AppStorage("keep_alive") private var keep_alive = false
-
-              init() {
-                  UserDefaults.standard.register(defaults: [
-                      "auto_run": false,
-                      "lang": "en",
-                  ])
-              }
-
-              var body: some Scene {
-                  WindowGroup {
-                      ContentView()
-                          .environmentObject(state)
-                          .environmentObject(offsets)
-                          .preferredColorScheme(.dark)
-                          .frame(maxWidth: .infinity, maxHeight: .infinity)
-                          .onAppear {
-                              nk_set_log(cCallback)
-                              if state.log.isEmpty {
-                                  let v = ProcessInfo.processInfo.operatingSystemVersion
-                                  state.append("[*] natsuk1 v5.0")
-                                  state.append("[*] iOS \(v.majorVersion).\(v.minorVersion) / arm64e")
-                                  if let version = OffsetsStore.activeVersion {
-                                      state.append("[*] offsets: \(version.device) / iOS \(version.ios) (\(version.build))")
-                                  }
-                                  state.append("")
-                              }
-                              if keep_alive { KeepAlive.shared.start() }
-                              if auto_run {
-                                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                      state.run()
-                                  }
-                              }
-                          }
-                          .onChange(of: keep_alive) { value in
-                              if value {
-                                  KeepAlive.shared.start()
-                              } else {
-                                  KeepAlive.shared.stop()
-                              }
-                          }
-                          .overlay {
-                              if state.show_respring {
-                                  RespringView()
-                                      .brightness(-1.0)
-                                      .ignoresSafeArea()
-                              }
-                          }
-                  }
-              }
-          }
-
-          final class AppState: ObservableObject {
-              static let shared = AppState()
-
-              enum Status {
-                  case idle, running, ok, failed
-                  var color: Color {
-                      switch self {
-                      case .idle:    return .secondary
-                      case .running: return .orange
-                      case .ok:      return .green
-                      case .failed:  return .red
-                      }
-                  }
-              }
-
-              @Published var log: String = ""
-              @Published var status: Status = .idle
-              @Published var running: Bool = false
-              @Published var show_respring: Bool = false
-
-              @Published var lang: String {
-                  didSet { UserDefaults.standard.set(lang, forKey: "lang") }
-              }
-
-              private var flusher: Timer?
-              private var pending: String = ""
-              private let lock = NSLock()
-
-              private init() {
-                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
-                  startFlusher()
-              }
-
-              func t(_ en: String, _ ru: String) -> String {
-                  lang == "ru" ? ru : en
-              }
-
-              private func startFlusher() {
-                  DispatchQueue.main.async { [weak self] in
-                      guard let self = self else { return }
-                      self.flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-                          guard let self = self else { return }
-                          self.lock.lock()
-                          let chunk = self.pending
-                          self.pending = ""
-                          self.lock.unlock()
-                          guard !chunk.isEmpty else { return }
-                          var newLog = self.log
-                          newLog += chunk
-                          if newLog.count > 30000 {
-                              newLog = String(newLog.suffix(20000))
-                          }
-                          self.log = newLog
-                      }
-                  }
-              }
-
-              func append(_ s: String) {
-                  lock.lock()
-                  pending += s
-                  pending += "\n"
-                  if pending.count > 10000 {
-                      pending = String(pending.suffix(6000))
-                  }
-                  lock.unlock()
-              }
-
-              func run() {
-                  if running { return }
-                  running = true
-                  status = .running
-
-                  let t = Thread { [weak self] in
-                      _ = nk_full_exploit()
-                      DispatchQueue.main.async {
-                          guard let self = self else { return }
-                          self.running = false
-                          self.status = .ok
-                      }
-                  }
-                  t.qualityOfService = .userInitiated
-                  t.stackSize = 16 * 1024 * 1024
-                  t.start()
-              }
-
-              func respring() {
-                  show_respring = true
-              }
-
-              func clear() {
-                  lock.lock()
-                  pending = ""
-                  lock.unlock()
-                  log = ""
-              }
-          }
-          NKEOF
-
-      - name: Write ContentView
+      - name: Rewrite ContentView
         run: |
           cat > natsuk1/Views/ContentView.swift <<'NKEOF'
           import SwiftUI
@@ -269,9 +98,10 @@ jobs:
                           }
                       }
                       .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .background(Color(UIColor.systemGroupedBackground))
                       .navigationTitle("natsuk1")
                       .navigationBarTitleDisplayMode(.inline)
-                      .tint(.blue)
                       .toolbar {
                           ToolbarItem(placement: .navigationBarTrailing) {
                               Button {
@@ -284,10 +114,13 @@ jobs:
                           }
                       }
                       .sheet(isPresented: $show_settings) {
-                          SettingsView().environmentObject(state)
+                          SettingsView()
+                              .environmentObject(state)
+                              .presentationBackground(Color(UIColor.systemGroupedBackground))
                       }
                       .sheet(isPresented: $show_device) {
                           DeviceInfoView()
+                              .presentationBackground(Color(UIColor.systemGroupedBackground))
                       }
                   }
               }
@@ -312,6 +145,7 @@ jobs:
                           .frame(maxWidth: .infinity, minHeight: 240, alignment: .topLeading)
                           .contentShape(Rectangle())
                       }
+                      .tint(Color(UIColor.systemGray))
                       .contextMenu {
                           Button {
                               UIPasteboard.general.string = state.log
@@ -346,7 +180,7 @@ jobs:
           }
           NKEOF
 
-      - name: Write SettingsView
+      - name: Rewrite SettingsView
         run: |
           cat > natsuk1/Views/SettingsView.swift <<'NKEOF'
           import SwiftUI
@@ -523,9 +357,10 @@ jobs:
                           }
                       }
                       .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .background(Color(UIColor.systemGroupedBackground))
                       .navigationTitle("Settings")
                       .navigationBarTitleDisplayMode(.large)
-                      .tint(.blue)
                       .toolbar {
                           ToolbarItem(placement: .navigationBarTrailing) {
                               Button("Done") { dismiss() }
@@ -537,7 +372,114 @@ jobs:
           }
           NKEOF
 
-      - name: Write AboutView
+      - name: Rewrite DeviceInfoView
+        run: |
+          cat > natsuk1/Views/DeviceInfoView.swift <<'NKEOF'
+          import SwiftUI
+
+          struct DeviceInfoView: View {
+              @Environment(\.dismiss) private var dismiss
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          row("Model", DeviceName.friendly())
+                          row("Identifier", machineID())
+                          row("Chip", DeviceName.chip())
+                          row("iOS", sysctlString("kern.osproductversion"))
+                          row("Build", sysctlString("kern.osversion"))
+                          row("RAM", ram())
+                          row("Architecture", arch())
+                          row("Locale", localeShort())
+                          row("Region", regionShort())
+                          row("Uptime", uptime())
+                      }
+                      .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .background(Color(UIColor.systemGroupedBackground))
+                      .navigationTitle("Device")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Done") { dismiss() }
+                          }
+                      }
+                  }
+              }
+
+              private func row(_ key: String, _ value: String) -> some View {
+                  HStack {
+                      Text(key)
+                      Spacer()
+                      Text(value)
+                          .font(.system(.body, design: .monospaced))
+                          .foregroundColor(.secondary)
+                          .lineLimit(1)
+                          .truncationMode(.middle)
+                  }
+              }
+
+              private func machineID() -> String {
+                  var sysinfo = utsname()
+                  uname(&sysinfo)
+                  return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
+                      guard let v = el.value as? Int8, v != 0 else { return id }
+                      return id + String(UnicodeScalar(UInt8(v)))
+                  }
+              }
+
+              private func sysctlString(_ name: String) -> String {
+                  var size = 0
+                  sysctlbyname(name, nil, &size, nil, 0)
+                  var buf = [CChar](repeating: 0, count: size)
+                  sysctlbyname(name, &buf, &size, nil, 0)
+                  return String(cString: buf)
+              }
+
+              private func ram() -> String {
+                  var size: UInt64 = 0
+                  var len = MemoryLayout<UInt64>.size
+                  if sysctlbyname("hw.memsize", &size, &len, nil, 0) != 0 { return "unknown" }
+                  return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .memory)
+              }
+
+              private func arch() -> String {
+                  #if arch(arm64)
+                  return "arm64"
+                  #else
+                  return "unknown"
+                  #endif
+              }
+
+              private func localeShort() -> String {
+                  Locale.current.identifier
+                      .split(separator: "_")
+                      .first
+                      .map(String.init)?
+                      .uppercased() ?? "—"
+              }
+
+              private func regionShort() -> String {
+                  if #available(iOS 16, *) {
+                      let region = Locale.current.region?.identifier ?? ""
+                      return region.isEmpty ? "—" : region.uppercased()
+                  } else {
+                      let parts = Locale.current.identifier.split(separator: "_")
+                      if parts.count >= 2 { return String(parts[1]).uppercased() }
+                      return "—"
+                  }
+              }
+
+              private func uptime() -> String {
+                  let t = ProcessInfo.processInfo.systemUptime
+                  let h = Int(t) / 3600
+                  let m = (Int(t) % 3600) / 60
+                  return "\(h)h \(m)m"
+              }
+          }
+          NKEOF
+
+      - name: Rewrite AboutView
         run: |
           cat > natsuk1/Views/AboutView.swift <<'NKEOF'
           import SwiftUI
@@ -634,9 +576,10 @@ jobs:
                       }
                   }
                   .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .background(Color(UIColor.systemGroupedBackground))
                   .navigationTitle("About")
                   .navigationBarTitleDisplayMode(.inline)
-                  .tint(.blue)
               }
 
               private func linkRow(_ title: String, url: URL) -> some View {
@@ -709,9 +652,264 @@ jobs:
                       }
                   }
                   .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .background(Color(UIColor.systemGroupedBackground))
                   .navigationTitle("Acknowledgements")
                   .navigationBarTitleDisplayMode(.inline)
-                  .tint(.blue)
+              }
+          }
+          NKEOF
+
+      - name: Rewrite OffsetsView
+        run: |
+          cat > natsuk1/Views/OffsetsView.swift <<'NKEOF'
+          import SwiftUI
+          import UIKit
+
+          struct OffsetsView: View {
+              @EnvironmentObject var store: OffsetsStore
+              @State private var query = ""
+              @State private var editing: String? = nil
+              @State private var showResetAll = false
+              @State private var showExport = false
+
+              var body: some View {
+                  List {
+                      Section {
+                          HStack {
+                              Text("Filled")
+                              Spacer()
+                              Text("\(store.filledCount()) / \(store.totalCount())")
+                                  .font(.system(.body, design: .monospaced))
+                                  .foregroundColor(.secondary)
+                          }
+                      }
+
+                      ForEach(filteredGroups, id: \.title) { group in
+                          Section {
+                              ForEach(group.items, id: \.self) { name in
+                                  Button {
+                                      editing = name
+                                  } label: {
+                                      OffsetRow(name: name, value: store.value(for: name))
+                                  }
+                                  .buttonStyle(.plain)
+                              }
+                          } header: {
+                              Text(group.title)
+                          }
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .background(Color(UIColor.systemGroupedBackground))
+                  .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+                  .navigationTitle("Modify Offsets")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .toolbar {
+                      ToolbarItem(placement: .navigationBarTrailing) {
+                          Menu {
+                              Button { showExport = true } label: {
+                                  Label("Export JSON", systemImage: "square.and.arrow.up")
+                              }
+                              Button(role: .destructive) { showResetAll = true } label: {
+                                  Label("Reset All", systemImage: "arrow.uturn.backward")
+                              }
+                          } label: {
+                              Image(systemName: "ellipsis.circle")
+                                  .foregroundStyle(Color(UIColor.tertiaryLabel))
+                          }
+                      }
+                  }
+                  .sheet(item: Binding(
+                      get: { editing.map { EditTarget(name: $0) } },
+                      set: { editing = $0?.name }
+                  )) { target in
+                      EditOffsetView(name: target.name)
+                          .environmentObject(store)
+                          .presentationBackground(Color(UIColor.systemGroupedBackground))
+                  }
+                  .sheet(isPresented: $showExport) {
+                      ExportOffsetsView()
+                          .environmentObject(store)
+                          .presentationBackground(Color(UIColor.systemGroupedBackground))
+                  }
+                  .alert("Reset All Offsets?", isPresented: $showResetAll) {
+                      Button("Cancel", role: .cancel) {}
+                      Button("Reset", role: .destructive) { store.reset() }
+                  } message: {
+                      Text("All offsets will be set to built-in defaults.")
+                  }
+              }
+
+              private var filteredGroups: [OffsetsStore.Group] {
+                  if query.isEmpty { return OffsetsStore.groups }
+                  let q = query.lowercased()
+                  return OffsetsStore.groups.compactMap { g in
+                      let items = g.items.filter { $0.lowercased().contains(q) }
+                      if items.isEmpty { return nil }
+                      return OffsetsStore.Group(title: g.title, items: items)
+                  }
+              }
+          }
+
+          struct EditTarget: Identifiable {
+              let name: String
+              var id: String { name }
+          }
+
+          struct OffsetRow: View {
+              let name: String
+              let value: String
+
+              private var valueColor: Color {
+                  value == "0x0" ? Color.secondary : Color.green
+              }
+
+              var body: some View {
+                  HStack(alignment: .firstTextBaseline, spacing: 8) {
+                      Text(name)
+                          .foregroundStyle(Color.primary)
+                          .font(.system(size: 13, design: .monospaced))
+                          .lineLimit(2)
+                          .multilineTextAlignment(.leading)
+                      Spacer(minLength: 8)
+                      Text(value)
+                          .font(.system(size: 13, design: .monospaced))
+                          .foregroundColor(valueColor)
+                  }
+                  .padding(.vertical, 4)
+                  .contentShape(Rectangle())
+              }
+          }
+
+          struct EditOffsetView: View {
+              @EnvironmentObject var store: OffsetsStore
+              @Environment(\.dismiss) private var dismiss
+              let name: String
+
+              @State private var text: String = ""
+              @State private var showError = false
+              @State private var errorMsg = ""
+
+              var body: some View {
+                  NavigationStack {
+                      Form {
+                          Section {
+                              Text(name)
+                                  .font(.system(size: 12, design: .monospaced))
+                                  .foregroundStyle(.secondary)
+                          } header: {
+                              Text("Offset")
+                          }
+
+                          Section {
+                              TextField("Value", text: $text)
+                                  .font(.system(size: 14, design: .monospaced))
+                                  .autocorrectionDisabled()
+                                  .textInputAutocapitalization(.never)
+                                  .keyboardType(.asciiCapable)
+                          } header: {
+                              Text("Value")
+                          } footer: {
+                              Text("Hex (0x...) or decimal. Default: \(OffsetsStore.defaults[name] ?? "0x0")")
+                          }
+
+                          Section {
+                              Button {
+                                  store.resetOne(name)
+                                  dismiss()
+                              } label: {
+                                  HStack {
+                                      Image(systemName: "arrow.uturn.backward")
+                                      Text("Restore Default")
+                                  }
+                              }
+                          }
+                      }
+                      .navigationTitle("Edit")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarLeading) {
+                              Button("Cancel") { dismiss() }
+                          }
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Save") { save() }.fontWeight(.semibold)
+                          }
+                      }
+                      .alert("Invalid Value", isPresented: $showError) {
+                          Button("OK", role: .cancel) {}
+                      } message: {
+                          Text(errorMsg)
+                      }
+                      .onAppear { text = store.value(for: name) }
+                  }
+              }
+
+              private func save() {
+                  let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                  if trimmed.isEmpty {
+                      errorMsg = "Value cannot be empty."; showError = true; return
+                  }
+                  if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+                      let hexPart = String(trimmed.dropFirst(2))
+                      if UInt64(hexPart, radix: 16) == nil {
+                          errorMsg = "Invalid hex value."; showError = true; return
+                      }
+                  } else if UInt64(trimmed) == nil {
+                      errorMsg = "Invalid numeric value."; showError = true; return
+                  }
+                  store.update(name, value: trimmed)
+                  dismiss()
+              }
+          }
+
+          struct ExportOffsetsView: View {
+              @EnvironmentObject var store: OffsetsStore
+              @Environment(\.dismiss) private var dismiss
+              @State private var copied = false
+
+              private var json: String {
+                  let sorted = store.values.sorted { $0.key < $1.key }
+                  let dict = Dictionary(uniqueKeysWithValues: sorted)
+                  if let data = try? JSONSerialization.data(
+                      withJSONObject: dict,
+                      options: [.prettyPrinted, .sortedKeys]
+                  ), let str = String(data: data, encoding: .utf8) {
+                      return str
+                  }
+                  return "{}"
+              }
+
+              var body: some View {
+                  NavigationStack {
+                      ScrollView {
+                          Text(json)
+                              .font(.system(size: 11, design: .monospaced))
+                              .padding()
+                              .frame(maxWidth: .infinity, alignment: .leading)
+                              .textSelection(.enabled)
+                      }
+                      .background(Color(UIColor.systemGroupedBackground))
+                      .navigationTitle("Export")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarLeading) {
+                              Button("Done") { dismiss() }
+                          }
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button {
+                                  UIPasteboard.general.string = json
+                                  copied = true
+                                  DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                      copied = false
+                                  }
+                              } label: {
+                                  Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                              }
+                          }
+                      }
+                  }
               }
           }
           NKEOF
@@ -725,5 +923,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "Remove haptics, fix log context menu, gray menu icons"
+          git commit -m "Gray context menu icons, unified grouped background across views"
           git push
