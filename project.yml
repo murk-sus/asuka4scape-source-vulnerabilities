@@ -15,6 +15,9 @@ configs:
 settings:
   base:
     SWIFT_VERSION: "6.0"
+    SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+    SWIFT_APPROACHABLE_CONCURRENCY: NO
+    SWIFT_STRICT_CONCURRENCY: minimal
     IPHONEOS_DEPLOYMENT_TARGET: "26.0"
     CLANG_ENABLE_MODULES: YES
     CLANG_MODULES_AUTOLINK: NO
@@ -100,9 +103,6 @@ targets:
       - sdk: AVFoundation.framework
       - sdk: CoreLocation.framework
     settings:
-      SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
-      SWIFT_STRICT_CONCURRENCY: minimal
-
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit
         PRODUCT_NAME: natsuk1
@@ -110,6 +110,10 @@ targets:
         CODE_SIGN_ENTITLEMENTS: natsuk1/Resources/natsuk1.entitlements
         SWIFT_OBJC_BRIDGING_HEADER: natsuk1/bridging.h
         SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+        SWIFT_APPROACHABLE_CONCURRENCY: NO
+        SWIFT_STRICT_CONCURRENCY: minimal
+        OTHER_SWIFT_FLAGS: "$(inherited) -default-isolation nonisolated"
         OTHER_CFLAGS: -fno-autolink -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
         OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz $(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a -lc++ -ObjC
         HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers $(SRCROOT)/natsuk1/Exploit"
