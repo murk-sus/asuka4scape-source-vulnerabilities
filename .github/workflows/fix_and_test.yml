@@ -18,7 +18,7 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v17
+  CACHE_SALT: v18
 
 jobs:
   fix-and-test:
@@ -30,32 +30,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Select Xcode ${{ env.XCODE_VERSION }}
+      - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
-      - name: Fetch AirliftFFI from AirCard-iOS
+      - name: Fetch AirliftFFI
         run: |
           set -euo pipefail
           rm -rf /tmp/aircard
           git clone --depth 1 https://github.com/Mak5er/AirCard-iOS.git /tmp/aircard
-
-          mkdir -p natsuk1/External
+          mkdir -p natsuk1/External natsuk1/Exploit natsuk1/Helpers natsuk1/Views
           rm -rf natsuk1/External/AirliftFFI.xcframework
           cp -R /tmp/aircard/AirliftFFI.xcframework natsuk1/External/
-
           cp /tmp/aircard/ios-app/GrappaHelper.h natsuk1/Exploit/
           cp /tmp/aircard/ios-app/GrappaHelper.m natsuk1/Exploit/
           cp /tmp/aircard/ios-app/NetworkStatus.swift natsuk1/Helpers/
-          cp /tmp/aircard/ios-app/PairingController.swift natsuk1/ pythonHelpers/
-
-          test3 -f natsuk1 <</External/AirliftFFI.xcframework/ios-arm64/lib'airlift_ffi.a
+          cp /tmp/aircard/ios-app/PairingController.swift natsuk1/Helpers/
+          test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a
           test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers/airlift.h
 
-      - name: Strip comments and fix AirCard sources
+      - name: Write cleanup.py
         run: |
-         PYEOF'
+          cat > /tmp/cleanup.py <<'PYEOF'
           import os, re
 
           def strip_comments(source):
@@ -119,7 +116,7 @@ jobs:
                   s = re.sub(r'^\s*import\s+AirliftFFI\s*\n', '', s, flags=re.M)
                   with open(p, "w") as f:
                       f.write(s)
-                  print(f"cleaned {p}")
+                  print("cleaned " + p)
 
           p = "natsuk1/Helpers/PairingController.swift"
           if os.path.exists(p):
@@ -131,6 +128,7 @@ jobs:
               open(p, "w").write(s)
               print("patched PairingController")
           PYEOF
+          python3 /tmp/cleanup.py
 
       - name: Clean target directories
         run: |
@@ -153,7 +151,7 @@ jobs:
           rm -f natsuk1/Exploit/nk_api.c
           rm -f natsuk1/Exploit/nk_offsets.h
 
-      - name: Write bridging and C sources
+      - name: Write bridging and C files
         run: |
           cat > natsuk1/bridging.h <<'EOF'
           #ifndef NATSUK1_BRIDGING_H
@@ -2168,7 +2166,7 @@ jobs:
 
       - name: Patch Info.plist
         run: |
-          python3 <<'PYEOF'
+          cat > /tmp/plist.py <<'PYEOF'
           import re
           p = "natsuk1/Resources/Info.plist"
           s = open(p).read()
@@ -2198,10 +2196,11 @@ jobs:
           open(p, "w").write(s)
           print("info.plist patched")
           PYEOF
+          python3 /tmp/plist.py
 
       - name: Patch project.yml
         run: |
-          python3 <<'PYEOF'
+          cat > /tmp/proj.py <<'PYEOF'
           import re
           p = "project.yml"
           s = open(p).read()
@@ -2252,6 +2251,7 @@ jobs:
           open(p, "w").write(s)
           print(s)
           PYEOF
+          python3 /tmp/proj.py
 
       - name: Cache Homebrew
         uses: actions/cache@v5
@@ -2333,5 +2333,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "Fix KeepAlive conflict: split LocalNetworkAuthorization into own file [skip ci]"
+          git commit -m "Airlift integration [skip ci]"
           git push
