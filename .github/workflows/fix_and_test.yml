@@ -18,7 +18,7 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v16
+  CACHE_SALT: v17
 
 jobs:
   fix-and-test:
@@ -48,15 +48,14 @@ jobs:
           cp /tmp/aircard/ios-app/GrappaHelper.h natsuk1/Exploit/
           cp /tmp/aircard/ios-app/GrappaHelper.m natsuk1/Exploit/
           cp /tmp/aircard/ios-app/NetworkStatus.swift natsuk1/Helpers/
-          cp /tmp/aircard/ios-app/PairingController.swift natsuk1/Helpers/
-          cp /tmp/aircard/ios-app/Utilities.swift natsuk1/Helpers/
+          cp /tmp/aircard/ios-app/PairingController.swift natsuk1/ pythonHelpers/
 
-          test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a
+          test3 -f natsuk1 <</External/AirliftFFI.xcframework/ios-arm64/lib'airlift_ffi.a
           test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers/airlift.h
 
       - name: Strip comments and fix AirCard sources
         run: |
-          python3 <<'PYEOF'
+         PYEOF'
           import os, re
 
           def strip_comments(source):
@@ -110,7 +109,6 @@ jobs:
           for p in [
               "natsuk1/Helpers/NetworkStatus.swift",
               "natsuk1/Helpers/PairingController.swift",
-              "natsuk1/Helpers/Utilities.swift",
               "natsuk1/Exploit/GrappaHelper.h",
               "natsuk1/Exploit/GrappaHelper.m",
           ]:
@@ -119,7 +117,6 @@ jobs:
                       src = f.read()
                   s = strip_comments(src)
                   s = re.sub(r'^\s*import\s+AirliftFFI\s*\n', '', s, flags=re.M)
-                  s = re.sub(r'^\s*@_silgen_name\("ALGetGrappaToken"\)\s*\n', '', s, flags=re.M)
                   with open(p, "w") as f:
                       f.write(s)
                   print(f"cleaned {p}")
@@ -133,13 +130,6 @@ jobs:
               s = s.replace('private static let altIRKKey', 'nonisolated private static let altIRKKey')
               open(p, "w").write(s)
               print("patched PairingController")
-
-          p = "natsuk1/Helpers/KeepAlive.swift"
-          if os.path.exists(p):
-              s = open(p).read()
-              s = s.replace("private override init()", "override init()")
-              open(p, "w").write(s)
-              print("patched KeepAlive")
           PYEOF
 
       - name: Clean target directories
@@ -151,9 +141,12 @@ jobs:
           rm -f natsuk1/Views/DeviceInfoView.swift
           rm -f natsuk1/Views/AirliftView.swift
           rm -f natsuk1/Helpers/AirliftBridge.swift
+          rm -f natsuk1/Helpers/KeepAlive.swift
           rm -f natsuk1/Helpers/OffsetsStore.swift
           rm -f natsuk1/Helpers/DeviceName.swift
           rm -f natsuk1/Helpers/Respring.swift
+          rm -f natsuk1/Helpers/Utilities.swift
+          rm -f natsuk1/Helpers/LocalNetworkAuthorization.swift
           rm -f natsuk1/natsuk1.swift
           rm -f natsuk1/bridging.h
           rm -f natsuk1/Exploit/nk_api.h
@@ -467,6 +460,69 @@ jobs:
                           }
                       }
                   }
+              }
+          }
+          EOF
+
+      - name: Write LocalNetworkAuthorization.swift
+        run: |
+          cat > natsuk1/Helpers/LocalNetworkAuthorization.swift <<'EOF'
+          import Foundation
+          import Network
+
+          @MainActor
+          final class LocalNetworkAuthorization {
+              private var browser: NWBrowser?
+              private var listener: NWListener?
+              private var continuation: CheckedContinuation<Bool, Never>?
+
+              private let probeType = "_aircardprobe._tcp"
+
+              func request(timeout: TimeInterval = 1.5) async -> Bool {
+                  await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+                      self.continuation = cont
+
+                      let params = NWParameters.tcp
+                      params.includePeerToPeer = true
+
+                      let listener = try? NWListener(using: params)
+                      listener?.service = NWListener.Service(name: "natsuk1Probe", type: probeType)
+                      listener?.newConnectionHandler = { $0.cancel() }
+                      listener?.stateUpdateHandler = { [weak self] state in
+                          if case .failed = state {
+                              MainActor.assumeIsolated { self?.finish(true) }
+                          }
+                      }
+                      self.listener = listener
+
+                      let browser = NWBrowser(for: .bonjour(type: probeType, domain: nil), using: params)
+                      browser.stateUpdateHandler = { [weak self] state in
+                          if case .failed = state {
+                              MainActor.assumeIsolated { self?.finish(true) }
+                          }
+                      }
+                      browser.browseResultsChangedHandler = { [weak self] results, _ in
+                          if !results.isEmpty {
+                              MainActor.assumeIsolated { self?.finish(true) }
+                          }
+                      }
+                      self.browser = browser
+
+                      listener?.start(queue: .main)
+                      browser.start(queue: .main)
+
+                      DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
+                          MainActor.assumeIsolated { self?.finish(true) }
+                      }
+                  }
+              }
+
+              private func finish(_ authorized: Bool) {
+                  guard let cont = continuation else { return }
+                  continuation = nil
+                  cont.resume(returning: authorized)
+                  browser?.cancel(); browser = nil
+                  listener?.cancel(); listener = nil
               }
           }
           EOF
@@ -1517,7 +1573,7 @@ jobs:
           }
           EOF
 
-      - name: Write Helpers
+      - name: Write KeepAlive.swift
         run: |
           cat > natsuk1/Helpers/KeepAlive.swift <<'EOF'
           import AVFoundation
@@ -1647,6 +1703,8 @@ jobs:
           }
           EOF
 
+      - name: Write OffsetsStore.swift
+        run: |
           cat > natsuk1/Helpers/OffsetsStore.swift <<'EOF'
           import Foundation
           import Combine
@@ -1768,6 +1826,8 @@ jobs:
           }
           EOF
 
+      - name: Write DeviceName.swift
+        run: |
           cat > natsuk1/Helpers/DeviceName.swift <<'EOF'
           import Foundation
           import UIKit
@@ -1847,6 +1907,8 @@ jobs:
           }
           EOF
 
+      - name: Write Respring.swift and natsuk1.swift
+        run: |
           cat > natsuk1/Helpers/Respring.swift <<'EOF'
           import UIKit
           import Foundation
@@ -2271,5 +2333,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "Airlift integration with all fixes [skip ci]"
+          git commit -m "Fix KeepAlive conflict: split LocalNetworkAuthorization into own file [skip ci]"
           git push
