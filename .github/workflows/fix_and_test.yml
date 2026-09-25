@@ -102,13 +102,74 @@ jobs:
                   out.append(line)
               return "\n".join(out)
 
-          # --- PairingController ---
+          # --------- PairingController ---------
           p = "natsuk1/Helpers/PairingController.swift"
           s = open(p).read()
+
           s = s.replace("@preconcurrency import AirliftFFI\n", "import AirliftFFI\n")
           s = clean(s)
-          s = mark_sendable(s, "PairingController")
-          s = protect_shared(s)
+
+          s = re.sub(
+              r"static func syncCanonicalPairingFile\(from sourcePath: String\) -> String \{.*?\n    \}",
+              '''static func syncCanonicalPairingFile(from sourcePath: String) -> String {
+                  let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                  let canonicalURL = dir.appendingPathComponent("natsuk1_pairing.plist")
+
+                  if let data = try? Data(contentsOf: URL(fileURLWithPath: sourcePath)), !data.isEmpty {
+                      if sourcePath != canonicalURL.path {
+                          try? data.write(to: canonicalURL, options: .atomic)
+                      }
+                      customPairingFilePath = canonicalURL.path
+                      return canonicalURL.path
+                  }
+                  return sourcePath
+              }''',
+              s, count=1, flags=re.S)
+
+          s = re.sub(
+              r"static func pairingFilePath\(\) -> String \{.*?\n    \}",
+              '''static func pairingFilePath() -> String {
+                  let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                  let canonical = dir.appendingPathComponent("natsuk1_pairing.plist").path
+                  if FileManager.default.fileExists(atPath: canonical) {
+                      let size = (try? FileManager.default.attributesOfItem(atPath: canonical)[.size] as? Int) ?? 0
+                      if size > 0 { return canonical }
+                  }
+                  if let custom = customPairingFilePath, FileManager.default.fileExists(atPath: custom) {
+                      let size = (try? FileManager.default.attributesOfItem(atPath: custom)[.size] as? Int) ?? 0
+                      if size > 0 {
+                          _ = syncCanonicalPairingFile(from: custom)
+                          return canonical
+                      }
+                  }
+                  if let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
+                      for candidate in files {
+                          guard candidate.hasSuffix(".plist")
+                             || candidate.hasSuffix(".mobiledevicepairing")
+                             || candidate.hasSuffix(".mobilepair") else { continue }
+                          let candidatePath = dir.appendingPathComponent(candidate).path
+                          let size = (try? FileManager.default.attributesOfItem(atPath: candidatePath)[.size] as? Int) ?? 0
+                          if size > 0 {
+                              _ = syncCanonicalPairingFile(from: candidatePath)
+                              return canonical
+                          }
+                      }
+                  }
+                  return canonical
+              }''',
+              s, count=1, flags=re.S)
+
+          s = s.replace(
+              "/// Ensures the given pairing file is mirrored to canonical aircard_pairing.plist and airlift_pairing.plist.",
+              "/// Ensures the given pairing file is mirrored to canonical natsuk1_pairing.plist.")
+          s = s.replace(
+              "/// Checks for canonical aircard_pairing.plist, custom path, or any plist in Documents,",
+              "/// Checks for canonical natsuk1_pairing.plist, custom path, or any plist in Documents,")
+
+          s = s.replace("AirCard-iOS", "natsuk1")
+          s = s.replace('"aircardPairingHostAltIRK"', '"natsuk1PairingHostAltIRK"')
+          s = s.replace("aircardPairingHostAltIRK", "natsuk1PairingHostAltIRK")
+
           s = s.replace(
               "static var customPairingFilePath: String? = nil",
               "nonisolated(unsafe) static var customPairingFilePath: String? = nil")
@@ -118,10 +179,10 @@ jobs:
           s = s.replace(
               "private let pairPinCallback: ALPairPinCb",
               "nonisolated(unsafe) private let pairPinCallback: ALPairPinCb")
-          s = s.replace("AirCard-iOS", "natsuk1")
           s = s.replace(
               "Unmanaged<PairingController>.fromOpaque(ctx).release()",
               "Unmanaged<PairingController>.fromOpaque(box.ptr).release()")
+
           if "final class RawPtrBox" not in s:
               s = s + (
                   "\n"
@@ -129,13 +190,15 @@ jobs:
                   "    let ptr: UnsafeMutableRawPointer\n"
                   "    init(_ ptr: UnsafeMutableRawPointer) { self.ptr = ptr }\n"
                   "}\n")
+
           s = s.replace(
               "            DispatchQueue.main.async {\n                Unmanaged<PairingController>.fromOpaque(box.ptr).release()",
               "            let box = RawPtrBox(ctx)\n            DispatchQueue.main.async {\n                Unmanaged<PairingController>.fromOpaque(box.ptr).release()")
+
           open(p, "w").write(s)
           print("patched PairingController")
 
-          # --- NetworkStatus ---
+          # --------- NetworkStatus ---------
           p = "natsuk1/Helpers/NetworkStatus.swift"
           s = open(p).read()
           s = re.sub(
@@ -146,7 +209,7 @@ jobs:
           open(p, "w").write(s)
           print("patched NetworkStatus")
 
-          # --- KeepAlive ---
+          # --------- KeepAlive ---------
           p = "natsuk1/Helpers/KeepAlive.swift"
           if os.path.exists(p):
               s = open(p).read()
@@ -156,7 +219,26 @@ jobs:
               open(p, "w").write(s)
               print("patched KeepAlive")
 
-          # --- global pass ---
+          # --------- aircard -> natsuk1 in LocalNetworkAuthorization ---------
+          p = "natsuk1/Helpers/LocalNetworkAuthorization.swift"
+          if os.path.exists(p):
+              s = open(p).read()
+              s = s.replace("_aircardprobe._tcp", "_natsuk1probe._tcp")
+              s = s.replace("AirCard-iOS", "natsuk1")
+              s = s.replace("aircard", "natsuk1")
+              open(p, "w").write(s)
+              print("patched LocalNetworkAuthorization")
+
+          # --------- aircard -> natsuk1 in Info.plist ---------
+          p = "natsuk1/Resources/Info.plist"
+          if os.path.exists(p):
+              s = open(p).read()
+              s = s.replace("_aircardprobe._tcp", "_natsuk1probe._tcp")
+              s = s.replace("aircard", "natsuk1")
+              open(p, "w").write(s)
+              print("patched Info.plist")
+
+          # --------- global pass on remaining swift ---------
           def handle(fp):
               src = open(fp).read()
               new = re.sub(r"@MainActor\s*", "", src)
@@ -179,31 +261,250 @@ jobs:
       - name: Apply patch
         run: python3 /tmp/patch.py
 
-      - name: Rewrite AirliftBridge paths
+      - name: Rewrite AirliftBridge.swift
         run: |
-          python3 - <<'PY'
-          import re
-          p = "natsuk1/Helpers/AirliftBridge.swift"
-          s = open(p).read()
+          cat > natsuk1/Helpers/AirliftBridge.swift <<'SWIFT'
+          import Foundation
+          import Combine
 
-          # 1. use canonical pairing path from PairingController
-          s = re.sub(
-              r"func pairingFilePath\(\) -> String \{.*?\n    \}",
-              '''func pairingFilePath() -> String {
+          final class AirliftBridge: ObservableObject, @unchecked Sendable {
+              nonisolated(unsafe) static let shared = AirliftBridge()
+
+              enum State: Equatable {
+                  case idle
+                  case pairing
+                  case ready(pairingPath: String)
+                  case running
+                  case done(ok: Bool, message: String)
+              }
+
+              @Published private(set) var state: State = .idle
+              @Published private(set) var pairPIN: String? = nil
+              @Published private(set) var pairingStatus: String = ""
+              @Published private(set) var exploitLog: [String] = []
+              @Published var target: String = "/var/mobile/Library/SpringBoard"
+
+              private var loggedLines: [String] = []
+
+              private init() {
+                  al_log_init({ _, msg in
+                      guard let msg = msg else { return }
+                      let line = String(cString: msg)
+                      DispatchQueue.main.async {
+                          AirliftBridge.shared.appendLog(line)
+                      }
+                  }, nil)
+              }
+
+              nonisolated private func appendLog(_ s: String) {
+                  DispatchQueue.main.async {
+                      self.loggedLines.append(s)
+                      if self.loggedLines.count > 800 {
+                          self.loggedLines.removeFirst(self.loggedLines.count - 600)
+                      }
+                      self.exploitLog = self.loggedLines
+                  }
+              }
+
+              func logAccessibleFolders() {
+                  let fm = FileManager.default
+                  var lines: [String] = []
+                  lines.append("[paths] home: \(NSHomeDirectory())")
+                  lines.append("[paths] bundle: \(Bundle.main.bundlePath)")
+
+                  let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].path
+                  lines.append("[paths] documents: \(docs)")
+
+                  if let lib = fm.urls(for: .libraryDirectory, in: .userDomainMask).first?.path {
+                      lines.append("[paths] library: \(lib)")
+                  }
+                  lines.append("[paths] tmp: \(NSTemporaryDirectory())")
+
+                  if let items = try? fm.contentsOfDirectory(atPath: docs) {
+                      lines.append("[docs] \(items.count) entries:")
+                      for f in items.prefix(80) {
+                          lines.append("[docs]   \(f)")
+                      }
+                  } else {
+                      lines.append("[docs] cannot list")
+                  }
+
+                  let probes = [
+                      "/var/mobile",
+                      "/var/mobile/Library",
+                      "/private/var/mobile",
+                      "/private/var/mobile/Library",
+                      "/var/containers/Bundle/Application",
+                      "/private/var/containers/Bundle/Application",
+                      "/var/mobile/Containers/Data/Application",
+                      "/private/var/mobile/Containers/Data/Application",
+                      "/System/Library/PrivateFrameworks",
+                      "/var/jb",
+                  ]
+                  for p in probes {
+                      var isDir: ObjCBool = false
+                      let ok = fm.fileExists(atPath: p, isDirectory: &isDir)
+                      lines.append("[probe] \(p) exists=\(ok) dir=\(isDir.boolValue)")
+                  }
+
+                  for l in lines { appendLog(l) }
+              }
+
+              func clearLog() {
+                  loggedLines.removeAll()
+                  exploitLog = []
+              }
+
+              func pairingFilePath() -> String {
                   return PairingController.pairingFilePath()
-              }''',
-              s, count=1, flags=re.S)
+              }
 
-          # 2. working respring with logging
-          s = re.sub(
-              r"func respring\(\) \{.*?\n    \}",
-              '''func respring() {
-                  let pairingPath = PairingController.pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: pairingPath) else {
-                      appendLog("[respring] no pairing file at \\(pairingPath)")
+              func hasPairing() -> Bool {
+                  let p = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: p) else { return false }
+                  let size = (try? FileManager.default.attributesOfItem(atPath: p)[.size] as? Int) ?? 0
+                  return size > 0
+              }
+
+              func runPairing() {
+                  guard !hasPairing() else {
+                      state = .ready(pairingPath: pairingFilePath())
                       return
                   }
-                  appendLog("[respring] invoking with \\(pairingPath)")
+
+                  state = .pairing
+                  pairingStatus = "Starting host..."
+                  pairPIN = nil
+
+                  let ctrl = PairingController.shared
+                  Task {
+                      do {
+                          let path = try await ctrl.startAndWait()
+                          self.state = .ready(pairingPath: path)
+                          self.pairingStatus = "Paired"
+                          self.pairPIN = nil
+                      } catch is CancellationError {
+                          self.state = .idle
+                          self.pairingStatus = "Cancelled"
+                      } catch {
+                          self.state = .idle
+                          self.pairingStatus = "Failed: \(error.localizedDescription)"
+                      }
+                  }
+                  Task {
+                      while case .pairing = self.state {
+                          try? await Task.sleep(nanoseconds: 200_000_000)
+                          self.pairingStatus = ctrl.pairingStatus
+                          self.pairPIN = ctrl.pairingPIN
+                      }
+                  }
+              }
+
+              func cancelPairing() {
+                  PairingController.shared.softCancel()
+                  state = .idle
+                  pairingStatus = ""
+                  pairPIN = nil
+              }
+
+              func deletePairing() {
+                  let fm = FileManager.default
+                  let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                  var removed: [String] = []
+
+                  let names: Set<String> = [
+                      "natsuk1_pairing.plist",
+                      "aircard_pairing.plist",
+                      "airlift_pairing.plist",
+                  ]
+                  for name in names {
+                      let url = docs.appendingPathComponent(name)
+                      if fm.fileExists(atPath: url.path) {
+                          try? fm.removeItem(at: url)
+                          removed.append(name)
+                      }
+                  }
+
+                  if let custom = PairingController.customPairingFilePath {
+                      if fm.fileExists(atPath: custom) {
+                          try? fm.removeItem(atPath: custom)
+                          removed.append((custom as NSString).lastPathComponent)
+                      }
+                  }
+                  PairingController.customPairingFilePath = nil
+
+                  if let files = try? fm.contentsOfDirectory(atPath: docs.path) {
+                      for f in files {
+                          guard f.hasSuffix(".plist")
+                             || f.hasSuffix(".mobilepairing")
+                             || f.hasSuffix(".mobilepair") else { continue }
+                          try? fm.removeItem(at: docs.appendingPathComponent(f))
+                          removed.append(f)
+                      }
+                  }
+
+                  UserDefaults.standard.removeObject(forKey: "natsuk1PairingHostAltIRK")
+                  UserDefaults.standard.removeObject(forKey: "aircardPairingHostAltIRK")
+
+                  state = .idle
+                  pairingStatus = ""
+                  pairPIN = nil
+
+                  appendLog("[delete] removed: \(removed.isEmpty ? "none" : removed.joined(separator: ", "))")
+                  appendLog("[delete] hasPairing now: \(hasPairing())")
+              }
+
+              func runExploit() {
+                  let pairingPath = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairingPath) else {
+                      state = .done(ok: false, message: "No pairing file")
+                      return
+                  }
+
+                  state = .running
+                  loggedLines.removeAll()
+                  exploitLog = []
+                  appendLog("[exploit] start path=\(pairingPath) target=\(target)")
+                  let targetDir = target
+
+                  Task.detached {
+                      var outJson: UnsafeMutablePointer<CChar>? = nil
+                      var outError: UnsafeMutablePointer<CChar>? = nil
+
+                      let rc: Int32 = pairingPath.withCString { pc in
+                          targetDir.withCString { tc in
+                              al_exploit_run(pc, tc, nil, nil, &outJson, &outError)
+                          }
+                      }
+
+                      let jsonStr = outJson.flatMap { p -> String? in
+                          let s = String(cString: p); al_string_free(p); return s
+                      }
+                      let errStr = outError.flatMap { p -> String? in
+                          let s = String(cString: p); al_string_free(p); return s
+                      }
+
+                      await MainActor.run {
+                          if rc == 0 {
+                              let msg = jsonStr ?? "Canary write confirmed"
+                              self.appendLog("[exploit] ok: \(msg)")
+                              self.state = .done(ok: true, message: msg)
+                          } else {
+                              let msg = errStr ?? "rc=\(rc)"
+                              self.appendLog("[exploit] fail rc=\(rc): \(msg)")
+                              self.state = .done(ok: false, message: msg)
+                          }
+                      }
+                  }
+              }
+
+              func respring() {
+                  let pairingPath = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairingPath) else {
+                      appendLog("[respring] no pairing file at \(pairingPath)")
+                      return
+                  }
+                  appendLog("[respring] invoking with \(pairingPath)")
                   Task.detached { [weak self] in
                       var outError: UnsafeMutablePointer<CChar>? = nil
                       let rc: Int32 = pairingPath.withCString { pc in
@@ -216,16 +517,43 @@ jobs:
                           if rc == 0 {
                               self?.appendLog("[respring] ok")
                           } else {
-                              self?.appendLog("[respring] rc=\\(rc) \\(errStr ?? "")")
+                              self?.appendLog("[respring] rc=\(rc) \(errStr ?? "")")
                           }
                       }
                   }
-              }''',
-              s, count=1, flags=re.S)
+              }
 
-          open(p, "w").write(s)
-          print("rewrote AirliftBridge paths + respring")
-          PY
+              func findContainer(bundleID: String) async -> String? {
+                  let pairingPath = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairingPath) else { return nil }
+
+                  return await withCheckedContinuation { cont in
+                      DispatchQueue.global(qos: .userInitiated).async {
+                          var outContainer: UnsafeMutablePointer<CChar>? = nil
+                          var outError: UnsafeMutablePointer<CChar>? = nil
+
+                          let rc: Int32 = pairingPath.withCString { pc in
+                              bundleID.withCString { bc in
+                                  al_find_app_container(pc, bc, nil, nil, &outContainer, &outError)
+                              }
+                          }
+
+                          let containerStr = outContainer.flatMap { p -> String? in
+                              let s = String(cString: p); al_string_free(p); return s
+                          }
+                          if let p = outError { al_string_free(p) }
+
+                          if rc == 0, let c = containerStr {
+                              cont.resume(returning: c)
+                          } else {
+                              cont.resume(returning: nil)
+                          }
+                      }
+                  }
+              }
+          }
+          SWIFT
+          echo "wrote AirliftBridge.swift"
 
       - name: Rewrite ContentView.swift
         run: |
@@ -403,6 +731,7 @@ jobs:
 
           struct AirliftView: View {
               @EnvironmentObject var airlift: AirliftBridge
+              @State private var didLogPaths = false
 
               private var localDevVPNUp: Bool {
                   NetworkStatus.interfaces().contains {
@@ -431,13 +760,11 @@ jobs:
                           exploitSection
                       }
 
-                      if !airlift.exploitLog.isEmpty {
-                          Section {
-                              AirliftLogView(lines: airlift.exploitLog, onClear: { airlift.clearLog() })
-                                  .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                          } header: {
-                              Label("Log", systemImage: "apple.terminal")
-                          }
+                      Section {
+                          AirliftLogView(lines: airlift.exploitLog, onClear: { airlift.clearLog() })
+                              .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                      } header: {
+                          Label("Log", systemImage: "apple.terminal")
                       }
                   }
                   .listStyle(.insetGrouped)
@@ -445,6 +772,12 @@ jobs:
                   .background(Color(UIColor.systemGroupedBackground))
                   .navigationTitle("Airlift")
                   .navigationBarTitleDisplayMode(.inline)
+                  .onAppear {
+                      if !didLogPaths {
+                          didLogPaths = true
+                          airlift.logAccessibleFolders()
+                      }
+                  }
               }
 
               @ViewBuilder
@@ -550,7 +883,7 @@ jobs:
                       } label: {
                           HStack {
                               Image(systemName: "bolt.fill")
-                              Text("Run Airlift")
+                              Text("Run Exploit")
                               Spacer()
                           }
                       }
@@ -621,6 +954,105 @@ jobs:
           }
           SWIFT
           echo "wrote AirliftView.swift"
+
+      - name: Rewrite AboutView.swift
+        run: |
+          cat > natsuk1/Views/AboutView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct AboutView: View {
+              @Environment(\.openURL) private var openURL
+              @EnvironmentObject var state: AppState
+
+              private let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")!
+
+              private var appName: String {
+                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+                      ?? "natsuk1"
+              }
+
+              private var version: String {
+                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+              }
+
+              private var build: String {
+                  Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+              }
+
+              var body: some View {
+                  List {
+                      Section {
+                          VStack(alignment: .leading, spacing: 6) {
+                              Text(appName)
+                                  .font(.title2)
+                                  .fontWeight(.semibold)
+
+                              Text("Version \(version) (\(build))")
+                                  .font(.subheadline)
+                                  .foregroundColor(.secondary)
+
+                              Text("Research project iOS.")
+                                  .font(.footnote)
+                                  .foregroundColor(.secondary)
+                                  .fixedSize(horizontal: false, vertical: true)
+                                  .padding(.top, 2)
+                          }
+                          .padding(.vertical, 6)
+                      }
+
+                      Section {
+                          linkRow("Source Repository", url: repoURL)
+                          linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
+                      } header: {
+                          Text("Open Source")
+                      }
+
+                      Section {
+                          linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
+                      } header: {
+                          Text("Community")
+                      }
+
+                      Section {
+                      } header: {
+                          Text("Disclaimer")
+                      } footer: {
+                          Text("Independent research project. Not affiliated with Apple Inc. Provided as-is.")
+                              .font(.footnote)
+                              .foregroundColor(.secondary)
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .background(Color(UIColor.systemGroupedBackground))
+                  .navigationTitle("About")
+                  .navigationBarTitleDisplayMode(.inline)
+              }
+
+              private func linkRow(_ title: String, url: URL) -> some View {
+                  Button {
+                      openURL(url)
+                  } label: {
+                      HStack(alignment: .top, spacing: 8) {
+                          Text(title)
+                              .foregroundStyle(.tint)
+                              .font(.body)
+                              .fontWeight(.medium)
+                          Spacer(minLength: 8)
+                          Image(systemName: "link")
+                              .font(.system(size: 14, weight: .semibold))
+                              .foregroundStyle(.tint)
+                      }
+                      .padding(.vertical, 2)
+                      .contentShape(Rectangle())
+                  }
+                  .buttonStyle(.plain)
+              }
+          }
+          SWIFT
+          echo "wrote AboutView.swift"
 
       - name: Rewrite project.yml
         run: |
@@ -751,20 +1183,15 @@ jobs:
       - name: Verify
         run: |
           set -euo pipefail
-          cd natsuk1/Helpers
 
           fail() { echo "FAIL: $1"; exit 1; }
 
-          if grep -q "@MainActor" PairingController.swift; then fail "PairingController still has @MainActor"; fi
-          if grep -q "@MainActor" KeepAlive.swift; then fail "KeepAlive still has @MainActor"; fi
-          if grep -q "String(cString: host)" NetworkStatus.swift; then fail "NetworkStatus still String(cString:)"; fi
-          grep -q "final class RawPtrBox" PairingController.swift || fail "RawPtrBox not declared"
-          grep -q "fromOpaque(box.ptr).release()" PairingController.swift || fail "release not patched"
+          if grep -rqi "aircard" natsuk1/ ; then
+            echo "===== aircard still present ====="
+            grep -rni "aircard" natsuk1/ || true
+            fail "aircard must be replaced with natsuk1"
+          fi
 
-          grep -q "PairingController.pairingFilePath()" AirliftBridge.swift || fail "AirliftBridge not using canonical pairing path"
-          grep -q "al_device_respring" AirliftBridge.swift || fail "respring not wired"
-
-          cd ../..
           if grep -rq "@MainActor" natsuk1/ ; then
             grep -rn "@MainActor" natsuk1/ || true
             fail "@MainActor still present"
@@ -778,24 +1205,45 @@ jobs:
             fail "static shared without nonisolated(unsafe)"
           fi
 
+          grep -q 'natsuk1_pairing.plist' natsuk1/Helpers/PairingController.swift || fail "PairingController missing natsuk1_pairing.plist"
+          grep -q 'natsuk1PairingHostAltIRK' natsuk1/Helpers/PairingController.swift || fail "PairingController missing natsuk1 altIRK key"
+          grep -q 'PairingController.pairingFilePath()' natsuk1/Helpers/AirliftBridge.swift || fail "AirliftBridge not using canonical pairing path"
+          grep -q '"natsuk1_pairing.plist"' natsuk1/Helpers/AirliftBridge.swift || fail "deletePairing missing natsuk1 file"
+          grep -q "func logAccessibleFolders" natsuk1/Helpers/AirliftBridge.swift || fail "logAccessibleFolders missing"
+          grep -q "al_device_respring" natsuk1/Helpers/AirliftBridge.swift || fail "respring not wired"
+
+          grep -q '_natsuk1probe._tcp' natsuk1/Helpers/LocalNetworkAuthorization.swift || fail "LocalNetworkAuthorization missing natsuk1 probe"
+          grep -q '_natsuk1probe._tcp' natsuk1/Resources/Info.plist || fail "Info.plist missing natsuk1 probe"
+
           grep -q '"Run Exploit"' natsuk1/Views/ContentView.swift || fail "ContentView missing Run Exploit"
           grep -q 'Label(state.t("Exploit"' natsuk1/Views/ContentView.swift || fail "ContentView missing Exploit section"
-          if grep -q "airplane" natsuk1/Views/ContentView.swift; then
-            fail "ContentView still has airplane icon"
-          fi
-          if grep -q '"Setup"' natsuk1/Views/ContentView.swift; then
-            fail "ContentView still shows Setup"
-          fi
+
           grep -q "localDevVPNUp" natsuk1/Views/AirliftView.swift || fail "AirliftView missing localDevVPNUp"
           grep -q "LocalDevVPN is not active" natsuk1/Views/AirliftView.swift || fail "AirliftView missing LocalDevVPN warning"
+          grep -q '"Run Exploit"' natsuk1/Views/AirliftView.swift || fail "AirliftView missing Run Exploit"
+          grep -q "logAccessibleFolders" natsuk1/Views/AirliftView.swift || fail "AirliftView missing logAccessibleFolders"
+          if grep -q "!airlift.exploitLog.isEmpty" natsuk1/Views/AirliftView.swift; then
+            fail "AirliftView hides Log section when empty"
+          fi
+          grep -q "AirliftLogView" natsuk1/Views/AirliftView.swift || fail "AirliftView missing AirliftLogView"
 
+          if grep -q "Credits" natsuk1/Views/AboutView.swift; then
+            fail "AboutView still has Credits"
+          fi
+          if grep -q "0xjohnnydev" natsuk1/Views/AboutView.swift; then
+            fail "AboutView still has Airlift credit"
+          fi
+          if grep -qi "AirCard" natsuk1/Views/AboutView.swift; then
+            fail "AboutView still has AirCard credit"
+          fi
+
+          grep -q 'SWIFT_VERSION: "5.0"' project.yml || fail "project.yml not in Swift 5 mode"
           if grep -q "SWIFT_DEFAULT_ACTOR_ISOLATION" project.yml ; then
             fail "project.yml still has SWIFT_DEFAULT_ACTOR_ISOLATION"
           fi
           if grep -q "default-isolation" project.yml ; then
             fail "project.yml still has default-isolation flag"
           fi
-          grep -q 'SWIFT_VERSION: "5.0"' project.yml || fail "project.yml not in Swift 5 mode"
           grep -q "disable-dynamic-actor-isolation" project.yml || fail "missing disable-dynamic-actor-isolation"
 
           echo "verify OK"
@@ -865,7 +1313,7 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "Minimal UI, LocalDevVPN check, working respring"
+            --notes "aircard→natsuk1 rename + all fixes"
 
       - name: Commit
         run: |
@@ -876,5 +1324,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "Minimal UI + LocalDevVPN check + working respring [skip ci]"
+          git commit -m "Rename aircard→natsuk1 + fix Run Exploit, logs, Delete Pairing, About credits, respring [skip ci]"
           git push
