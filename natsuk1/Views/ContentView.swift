@@ -6,6 +6,7 @@ struct ContentView: View {
 
     @State private var show_settings: Bool = false
     @State private var show_device: Bool = false
+    @State private var copied: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -77,6 +78,29 @@ struct ContentView: View {
                 } header: {
                     Label(state.t("Logs", "Логи"), systemImage: "apple.terminal")
                 }
+
+                Section {
+                    Button {
+                        UIPasteboard.general.string = state.log
+                        copied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            copied = false
+                        }
+                    } label: {
+                        Text(copied
+                             ? state.t("Copied!", "Скопировано!")
+                             : state.t("Copy All", "Копировать всё"))
+                    }
+
+                    Button(role: .destructive) {
+                        state.clear()
+                    } label: {
+                        Text(state.t("Clear", "Очистить"))
+                    }
+                    .disabled(state.log.isEmpty)
+                } header: {
+                    Label(state.t("Log Actions", "Действия с логом"), systemImage: "doc.on.doc")
+                }
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
@@ -126,19 +150,6 @@ struct LogView: View {
             .onChange(of: state.log) { _, _ in
                 withAnimation(.linear(duration: 0.05)) {
                     proxy.scrollTo(0, anchor: .bottom)
-                }
-            }
-            .contextMenu {
-                Button {
-                    UIPasteboard.general.string = state.log
-                } label: {
-                    Label("Copy Output", systemImage: "doc.on.doc")
-                }
-
-                Button(role: .destructive) {
-                    state.clear()
-                } label: {
-                    Label("Clear", systemImage: "trash")
                 }
             }
         }
