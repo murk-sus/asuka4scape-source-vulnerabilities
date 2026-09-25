@@ -80,12 +80,10 @@ struct SettingsView: View {
                     NavigationLink {
                         AboutView().environmentObject(state)
                     } label: {
-                        HStack(spacing: 10) {
+                        HStack(spacing: 12) {
                             Image(systemName: "info.circle")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 20)
+                                .frame(width: 22, alignment: .center)
                             Text("Credits")
-                                .foregroundStyle(.primary)
                             Spacer(minLength: 8)
                         }
                     }
@@ -94,10 +92,10 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 12) {
                         Image(systemName: "cpu")
+                            .frame(width: 22, alignment: .center)
                             .foregroundStyle(.secondary)
-                            .frame(width: 20)
                         Text("Offsets")
                             .foregroundStyle(.secondary)
                         Spacer(minLength: 8)
@@ -112,12 +110,10 @@ struct SettingsView: View {
                     NavigationLink {
                         OffsetsView().environmentObject(offsets)
                     } label: {
-                        HStack(spacing: 10) {
+                        HStack(spacing: 12) {
                             Image(systemName: "list.number")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 20)
+                                .frame(width: 22, alignment: .center)
                             Text("Modify Offsets")
-                                .foregroundStyle(.primary)
                             Spacer(minLength: 8)
                             Text("\(offsets.filledCount())/\(offsets.totalCount())")
                                 .font(.system(size: 13, design: .monospaced))
@@ -161,12 +157,10 @@ struct SettingsView: View {
                     Button {
                         state.respring()
                     } label: {
-                        HStack(spacing: 10) {
+                        HStack(spacing: 12) {
                             Image(systemName: "arrow.clockwise")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 20)
+                                .frame(width: 22, alignment: .center)
                             Text("Respring")
-                                .foregroundStyle(.primary)
                             Spacer(minLength: 8)
                         }
                     }
@@ -177,8 +171,11 @@ struct SettingsView: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(Color(UIColor.systemGroupedBackground))
+            .scrollEdgeEffectHidden(true, for: .top)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(Color(UIColor.systemGroupedBackground), for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }

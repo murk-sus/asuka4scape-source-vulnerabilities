@@ -45,14 +45,13 @@ private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line i
     LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))
 }
 
-
-private func appVersionString() -> String {
-    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-}
-
 private func osVersionString() -> String {
     let v = ProcessInfo.processInfo.operatingSystemVersion
     return "\(v.majorVersion).\(v.minorVersion)"
+}
+
+private func appVersionString() -> String {
+    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
 }
 
 private var isSupportedIOS: Bool {
@@ -148,7 +147,7 @@ struct NotSupportedView: View {
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black.ignoresSafeArea())
+        .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
     }
 }
 

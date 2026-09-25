@@ -15,12 +15,10 @@ struct ContentView: View {
                     Button {
                         state.run()
                     } label: {
-                        HStack(spacing: 10) {
+                        HStack(spacing: 12) {
                             Image(systemName: "bolt.fill")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 20)
+                                .frame(width: 22, alignment: .center)
                             Text(state.t("Run Exploit", "Запустить эксплойт"))
-                                .foregroundStyle(.primary)
                             Spacer(minLength: 8)
                             if state.running {
                                 ProgressView().scaleEffect(0.8)
@@ -47,7 +45,6 @@ struct ContentView: View {
                     } label: {
                         HStack(spacing: 8) {
                             Text(state.t("Device", "Устройство"))
-                                .foregroundColor(.primary)
                             Spacer(minLength: 8)
                             Text(DeviceName.full())
                                 .font(.system(size: 13, design: .monospaced))
@@ -101,6 +98,8 @@ struct ContentView: View {
             .scrollEdgeEffectHidden(true, for: .top)
             .navigationTitle("natsuk1")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(Color(UIColor.systemGroupedBackground), for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
