@@ -24,8 +24,8 @@ final class PairingController: @unchecked Sendable {
 
     /// Persisted altIRK keeps the host identity stable across pairings so a
     /// device that has already paired recognises this host.
-    nonisolated(unsafe) private static let altIRKKey = "aircardPairingHostAltIRK"
-    nonisolated(unsafe) private static var storedAltIRK: String {
+    private static let altIRKKey = "aircardPairingHostAltIRK"
+    private static var storedAltIRK: String {
         get { UserDefaults.standard.string(forKey: altIRKKey) ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: altIRKKey) }
     }
@@ -169,7 +169,7 @@ final class PairingController: @unchecked Sendable {
         let model = hostModel
         let outPath = Self.pairingFilePath()
         let altIRK = Self.storedAltIRK
-        nonisolated(unsafe) let ctx = UnsafeMutableRawPointer(
+        let ctx = UnsafeMutableRawPointer(
             Unmanaged.passRetained(self).toOpaque()
         )
 
@@ -205,8 +205,9 @@ final class PairingController: @unchecked Sendable {
             }
             al_pairing_result_free(&result)
 
+            let box = RawPtrBox(ctx)
             DispatchQueue.main.async {
-                Unmanaged<PairingController>.fromOpaque(ctx).release()
+                Unmanaged<PairingController>.fromOpaque(box.ptr).release()
                 self.finish(outcome)
             }
         }
@@ -304,3 +305,8 @@ private func cStr(_ ptr: UnsafeMutablePointer<CChar>?) -> String {
     return String(cString: ptr)
 }
 
+
+final class RawPtrBox: @unchecked Sendable {
+    let ptr: UnsafeMutableRawPointer
+    init(_ ptr: UnsafeMutableRawPointer) { self.ptr = ptr }
+}
