@@ -1,5 +1,5 @@
 import Foundation
-final class PairingController: ObservableObject, @unchecked Sendable {
+final class PairingController: @unchecked Sendable {
 
     static let shared = PairingController()
 
@@ -11,9 +11,9 @@ final class PairingController: ObservableObject, @unchecked Sendable {
     private let localNetwork = LocalNetworkAuthorization()
     private let keepAlive = KeepAlive()
 
-    @Published private(set) var running = false
-    @Published var pairingStatus: String = "idle"
-    @Published var pairingPIN: String? = nil
+private(set) var running = false
+var pairingStatus: String = "idle"
+var pairingPIN: String? = nil
 
     nonisolated(unsafe) static var customPairingFilePath: String? = nil
 
@@ -251,10 +251,10 @@ final class PairingController: ObservableObject, @unchecked Sendable {
     }
 }
 
-private let pairReadyCallback: ALPairReadyCb = { ctx, serviceID, port, keys, vals, count in
+nonisolated(unsafe) private let pairReadyCallback: ALPairReadyCb = { ctx, serviceID, port, keys, vals, count in
     guard let ctx = ctx, let serviceID = serviceID else { return }
+    let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()
     let id = String(cString: serviceID)
-    let box = UnmanagedBox(ctx)
 
     var txt: [String: Data] = [:]
     if let keys = keys, let vals = vals {
@@ -264,17 +264,15 @@ private let pairReadyCallback: ALPairReadyCb = { ctx, serviceID, port, keys, val
         }
     }
     DispatchQueue.main.async {
-        let controller = Unmanaged<PairingController>.fromOpaque(box.value).takeUnretainedValue()
         controller.startAdvertising(serviceID: id, port: Int32(port), txt: txt)
     }
 }
 
-private let pairPinCallback: ALPairPinCb = { pin, ctx in
+nonisolated(unsafe) private let pairPinCallback: ALPairPinCb = { pin, ctx in
     guard let ctx = ctx, let pin = pin else { return }
+    let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()
     let pinString = String(cString: pin)
-    let box = UnmanagedBox(ctx)
     DispatchQueue.main.async {
-        let controller = Unmanaged<PairingController>.fromOpaque(box.value).takeUnretainedValue()
         controller.presentPin(pinString)
     }
 }
@@ -282,9 +280,4 @@ private let pairPinCallback: ALPairPinCb = { pin, ctx in
 private func cStr(_ ptr: UnsafeMutablePointer<CChar>?) -> String {
     guard let ptr = ptr else { return "" }
     return String(cString: ptr)
-}
-
-final class UnmanagedBox: @unchecked Sendable {
-    let value: UnsafeMutableRawPointer
-    init(_ value: UnsafeMutableRawPointer) { self.value = value }
 }
