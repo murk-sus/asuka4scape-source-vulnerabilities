@@ -18,7 +18,7 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v23
+  CACHE_SALT: v24
 
 jobs:
   fix-and-test:
@@ -114,22 +114,34 @@ jobs:
           s = s.replace('private let hostName = "AirCard-iOS"', 'private let hostName = "natsuk1"')
           s = s.replace('Pair with AirCard-iOS', 'Pair with natsuk1')
           s = s.replace('Settings › AirCard-iOS › Local Network', 'Settings › natsuk1 › Local Network')
+
+          box_class = (
+              "\n"
+              "final class UnmanagedBox: @unchecked Sendable {\n"
+              "    let value: UnsafeMutableRawPointer\n"
+              "    init(_ value: UnsafeMutableRawPointer) { self.value = value }\n"
+              "}\n"
+          )
+          s = s + box_class
+
           s = s.replace(
               "    let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n    let id = String(cString: serviceID)\n",
-              "    let id = String(cString: serviceID)\n"
+              "    let id = String(cString: serviceID)\n    let box = UnmanagedBox(ctx)\n"
           )
           s = s.replace(
               "    DispatchQueue.main.async {\n        controller.startAdvertising(serviceID: id, port: Int32(port), txt: txt)\n    }",
-              "    DispatchQueue.main.async {\n        let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n        controller.startAdvertising(serviceID: id, port: Int32(port), txt: txt)\n    }"
+              "    DispatchQueue.main.async {\n        let controller = Unmanaged<PairingController>.fromOpaque(box.value).takeUnretainedValue()\n        controller.startAdvertising(serviceID: id, port: Int32(port), txt: txt)\n    }"
           )
+
           s = s.replace(
               "    let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n    let pinString = String(cString: pin)\n",
-              "    let pinString = String(cString: pin)\n"
+              "    let pinString = String(cString: pin)\n    let box = UnmanagedBox(ctx)\n"
           )
           s = s.replace(
               "    DispatchQueue.main.async {\n        controller.presentPin(pinString)\n    }",
-              "    DispatchQueue.main.async {\n        let controller = Unmanaged<PairingController>.fromOpaque(ctx).takeUnretainedValue()\n        controller.presentPin(pinString)\n    }"
+              "    DispatchQueue.main.async {\n        let controller = Unmanaged<PairingController>.fromOpaque(box.value).takeUnretainedValue()\n        controller.presentPin(pinString)\n    }"
           )
+
           open(p, "w").write(s)
           print("patched PairingController")
           PYEOF
@@ -641,7 +653,7 @@ jobs:
               }
           }
 
-          extension KeepAlive: @preconcurrency CLLocationManagerDelegate {
+          extension KeepAlive: CLLocationManagerDelegate {
               func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
                   let status = manager.authorizationStatus
                   if status == .authorizedAlways || status == .authorizedWhenInUse {
