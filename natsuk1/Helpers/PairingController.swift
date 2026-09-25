@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import AirliftFFI
 
 /// Drives the RPPairing host: requests Local Network, keeps the app alive while
 /// the user approves the PIN in Settings, advertises the service over Bonjour,

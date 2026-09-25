@@ -100,6 +100,9 @@ targets:
       - sdk: AVFoundation.framework
       - sdk: CoreLocation.framework
     settings:
+      SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+      SWIFT_STRICT_CONCURRENCY: minimal
+
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit
         PRODUCT_NAME: natsuk1
