@@ -18,7 +18,7 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v7
+  CACHE_SALT: v8
 
 jobs:
   fix-and-test:
@@ -35,6 +35,31 @@ jobs:
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
+      - name: Write nk_api.h
+        run: |
+          cat > natsuk1/Exploit/nk_api.h <<'CEOF'
+          #ifndef NK_API_H
+          #define NK_API_H
+
+          #include <stdint.h>
+          #include <stddef.h>
+
+          void nk_set_log(void (*fn)(const char *));
+          void nk_logx(const char *tag, const char *fmt, ...);
+          void nk_log(const char *fmt, ...);
+          void nk_rule(void);
+
+          int nk_run(void);
+          int nk_full_exploit(void);
+
+          #define NK_INFO(tag, ...) nk_logx(tag, __VA_ARGS__)
+          #define NK_WARN(tag, ...) nk_logx(tag, __VA_ARGS__)
+          #define NK_ERR(tag, ...)  nk_logx(tag, __VA_ARGS__)
+          #define NK_DEBUG(tag, ...) nk_logx(tag, __VA_ARGS__)
+
+          #endif
+          CEOF
+
       - name: Write nk_api.c
         run: |
           cat > natsuk1/Exploit/nk_api.c <<'CEOF'
@@ -46,7 +71,6 @@ jobs:
 
           static void (*g_fn)(const char *) = NULL;
           static double g_t0 = 0.0;
-          static nk_log_level_t g_lvl = NK_LOG_INFO;
 
           static double nk_now_ms(void) {
               struct timespec ts;
@@ -59,310 +83,218 @@ jobs:
               if (g_t0 == 0.0) g_t0 = nk_now_ms();
           }
 
-          void nk_set_log_level(nk_log_level_t lvl) { g_lvl = lvl; }
-          nk_log_level_t nk_get_log_level(void) { return g_lvl; }
-
-          static const char *lvl_str(nk_log_level_t l) {
-              switch (l) {
-                  case NK_LOG_TRACE: return "TRC";
-                  case NK_LOG_DEBUG: return "DBG";
-                  case NK_LOG_INFO:  return "INF";
-                  case NK_LOG_WARN:  return "WRN";
-                  case NK_LOG_ERROR: return "ERR";
-              }
-              return "???";
-          }
-
-          void nk_logx(nk_log_level_t lvl, const char *tag, const char *fmt, ...) {
-              if (lvl < g_lvl || !g_fn) return;
-              char body[512];
+          void nk_logx(const char *tag, const char *fmt, ...) {
+              if (!g_fn) return;
+              char body[448];
               va_list ap; va_start(ap, fmt);
               vsnprintf(body, sizeof(body), fmt, ap);
               va_end(ap);
-              char out[640];
+              char out[512];
               double t = nk_now_ms() - g_t0;
-              snprintf(out, sizeof(out), "[%6.1f][%s][%-6s] %s", t, lvl_str(lvl), tag, body);
+              snprintf(out, sizeof(out), "[%.1f][%s] %s", t, tag, body);
               g_fn(out);
           }
 
           void nk_log(const char *fmt, ...) {
               if (!g_fn) return;
-              char body[512];
+              char body[448];
               va_list ap; va_start(ap, fmt);
               vsnprintf(body, sizeof(body), fmt, ap);
               va_end(ap);
-              char out[640];
+              char out[512];
               double t = nk_now_ms() - g_t0;
-              snprintf(out, sizeof(out), "[%6.1f][INF][MAIN  ] %s", t, body);
+              snprintf(out, sizeof(out), "[%.1f][MAIN] %s", t, body);
               g_fn(out);
           }
 
           void nk_rule(void) { nk_log("----"); }
 
           int nk_run(void) {
-              NK_INFO("BASE", "kernel          %016llX", (unsigned long long)NK_KERNEL_BASE);
-              NK_INFO("BASE", "sysent          %016llX (%d)",
+              NK_INFO("BASE", "kernel %016llX", (unsigned long long)NK_KERNEL_BASE);
+              NK_INFO("BASE", "sysent %016llX (%d)",
                       (unsigned long long)NK_SYSENT_BASE, NK_SYSENT_COUNT);
               NK_INFO("BASE", "mach_trap_table %016llX", (unsigned long long)NK_MACH_TRAP_TABLE);
               nk_rule();
 
-              NK_INFO("PRIM", "copyin   %016llX", (unsigned long long)NK_FN_COPYIN);
-              NK_INFO("PRIM", "copyout  %016llX", (unsigned long long)NK_FN_COPYOUT);
-              NK_INFO("PRIM", "kalloc   %016llX", (unsigned long long)NK_FN_KALLOC_EXT);
-              NK_INFO("PRIM", "kfree    %016llX", (unsigned long long)NK_FN_KFREE_EXT);
+              NK_INFO("PRIM", "copyin %016llX", (unsigned long long)NK_FN_COPYIN);
+              NK_INFO("PRIM", "copyout %016llX", (unsigned long long)NK_FN_COPYOUT);
+              NK_INFO("PRIM", "kalloc %016llX", (unsigned long long)NK_FN_KALLOC_EXT);
+              NK_INFO("PRIM", "kfree %016llX", (unsigned long long)NK_FN_KFREE_EXT);
               nk_rule();
 
-              NK_INFO("STRUCT", "proc_pid    %X", NK_OFF_PROC_PID);
-              NK_INFO("STRUCT", "proc_ucred  %X", NK_OFF_PROC_UCRED);
-              NK_INFO("STRUCT", "task_thread %X", NK_OFF_TASK_THREAD);
+              NK_INFO("STRC", "proc_pid %X", NK_OFF_PROC_PID);
+              NK_INFO("STRC", "proc_ucred %X", NK_OFF_PROC_UCRED);
+              NK_INFO("STRC", "task_thread %X", NK_OFF_TASK_THREAD);
               nk_rule();
 
-              NK_WARN("STATE", "No kernel R/W primitive.");
-              NK_WARN("STATE", "Reference data only.");
+              NK_WARN("STAT", "No kernel R/W primitive.");
+              NK_WARN("STAT", "Reference data only.");
               nk_rule();
 
               return 0;
           }
 
           int nk_full_exploit(void) { return nk_run(); }
-
-          uint64_t nk_get_kernel_base(void)     { return NK_KERNEL_BASE; }
-          uint64_t nk_get_sysent_base(void)     { return NK_SYSENT_BASE; }
-          uint64_t nk_get_mach_trap_table(void) { return NK_MACH_TRAP_TABLE; }
           CEOF
 
-      - name: Write natsuk1.swift
+      - name: Write nk_offsets.h
         run: |
-          cat > natsuk1/natsuk1.swift <<'SWIFTEOF'
-          import SwiftUI
+          cat > natsuk1/Exploit/nk_offsets.h <<'CEOF'
+          #ifndef NK_OFFSETS_H
+          #define NK_OFFSETS_H
+
+          #define NK_KERNEL_BASE            0xFFFFFFF007004000ULL
+          #define NK_SYSENT_BASE            0xFFFFFFF007C192A0ULL
+          #define NK_SYSENT_COUNT           558
+          #define NK_MACH_TRAP_TABLE        0xFFFFFFF007BE8018ULL
+
+          #define NK_FN_COPYIN              0xFFFFFFF00A7B9570ULL
+          #define NK_FN_COPYOUT             0xFFFFFFF00A2C6C28ULL
+          #define NK_FN_KALLOC_EXT          0xFFFFFFF00A200DCCULL
+          #define NK_FN_KFREE_EXT           0xFFFFFFF00A201000ULL
+
+          #define NK_OFF_PROC_PID           0x74
+          #define NK_OFF_PROC_UCRED         0xB8
+          #define NK_OFF_TASK_THREAD        0x50
+
+          #endif
+          CEOF
+
+      - name: Write Respring
+        run: |
+          cat > natsuk1/Helpers/Respring.swift <<'SWIFTEOF'
           import UIKit
           import Foundation
+          import WebKit
+          import SwiftUI
 
-          final class LockedBuffer: @unchecked Sendable {
-              static let shared = LockedBuffer()
-              private let lock = NSLock()
-              private var value: String = ""
+          struct RespringView: UIViewRepresentable {
+              private static let html = """
+              <!DOCTYPE html>
+              <html>
+                  <body>
+                      <iframe id="frame" srcdoc="" sandbox="allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-presentation allow-scripts"></iframe>
+                      <script>
+                          const frame = document.getElementById('frame');
+                          const funfun = `
+                              <html>
+                              <body>
+                                  <script>
+                                      const container = document.createElement('div');
+                                      container.style.cssText = 'perspective: 1px; perspective-origin: 9999999% 9999999%;';
+                                      document.body.appendChild(container);
 
-              private init() {}
-
-              func append(_ s: String) {
-                  lock.lock()
-                  value += s
-                  value += "\n"
-                  if value.count > 10000 {
-                      value = String(value.suffix(6000))
-                  }
-                  lock.unlock()
-              }
-
-              func drain() -> String {
-                  lock.lock()
-                  let v = value
-                  value = ""
-                  lock.unlock()
-                  return v
-              }
-
-              func clear() {
-                  lock.lock()
-                  value = ""
-                  lock.unlock()
-              }
-          }
-
-          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
-              guard let line = line else { return }
-              var bytes: [UInt8] = []
-              var p = line
-              while p.pointee != 0 {
-                  bytes.append(UInt8(bitPattern: p.pointee))
-                  p = p.advanced(by: 1)
-              }
-              LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))
-          }
-
-          private func osVersionString() -> String {
-              let v = ProcessInfo.processInfo.operatingSystemVersion
-              return "\(v.majorVersion).\(v.minorVersion)"
-          }
-
-          private func appVersionString() -> String {
-              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-          }
-
-          private var isSupportedIOS: Bool {
-              ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
-          }
-
-          @main
-          struct natsuk1App: App {
-              var body: some Scene {
-                  WindowGroup {
-                      RootView()
-                  }
-              }
-          }
-
-          struct RootView: View {
-              @StateObject private var state = AppState.shared
-              @StateObject private var offsets = OffsetsStore.shared
-              @AppStorage("auto_run") private var auto_run = false
-              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
-              @AppStorage("keep_alive_location") private var keep_alive_location = false
-
-              init() {
-                  UserDefaults.standard.register(defaults: [
-                      "auto_run": false,
-                      "keep_alive_audio": false,
-                      "keep_alive_location": false,
-                      "lang": "en",
-                  ])
-              }
-
-              var body: some View {
-                  Group {
-                      if isSupportedIOS {
-                          ContentView()
-                              .environmentObject(state)
-                              .environmentObject(offsets)
-                              .onAppear {
-                                  nk_set_log(cCallback)
-                                  if state.log.isEmpty {
-                                      state.append("[*] natsuk1 v\(appVersionString())")
-                                      state.append("[*] iOS \(osVersionString()) / arm64e")
-                                      if let version = OffsetsStore.activeVersion {
-                                          state.append("[*] offsets: \(version.device) / iOS \(version.ios) (\(version.build))")
+                                      for (let i = 0; i < 500; i++) {
+                                          let d = document.createElement('div');
+                                          d.style.cssText = 'position: absolute; width: 100vw; height: 100vh; backdrop-filter: blur(100px); -webkit-backdrop-filter: blur(100px); transform: translate3d(100000px, 100000px, ' + i + 'px) rotateY(90deg);';
+                                          container.appendChild(d);
                                       }
-                                      state.append("")
-                                  }
-                                  if keep_alive_audio { KeepAlive.shared.startAudio() }
-                                  if keep_alive_location { KeepAlive.shared.startLocation() }
-                                  if auto_run {
-                                      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                          state.run()
-                                      }
-                                  }
-                              }
-                              .onChange(of: keep_alive_audio) { _, value in
-                                  if value { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
-                              }
-                              .onChange(of: keep_alive_location) { _, value in
-                                  if value { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
-                              }
-                              .overlay {
-                                  if state.show_respring {
-                                      RespringView()
-                                          .brightness(-1.0)
-                                          .ignoresSafeArea()
-                                  }
-                              }
-                      } else {
-                          NotSupportedView(version: osVersionString())
-                      }
-                  }
-                  .preferredColorScheme(.dark)
+
+                                      setInterval(() => {
+                                          navigator.share({ title: 'R', text: 'R'.repeat(100000) }).catch(() => {});
+                                          let x = new Uint8Array(1024 * 1024 * 10);
+                                          crypto.getRandomValues(x);
+                                      }, 0);
+                                  <\\/script>
+                              </body>
+                              </html>
+                          `;
+
+                          frame.srcdoc = funfun;
+                      </script>
+                  </body>
+              </html>
+              """
+
+              func makeUIView(context: Context) -> WKWebView {
+                  let config = WKWebViewConfiguration()
+                  config.defaultWebpagePreferences.allowsContentJavaScript = true
+                  return WKWebView(frame: .zero, configuration: config)
+              }
+
+              func updateUIView(_ webView: WKWebView, context: Context) {
+                  webView.loadHTMLString(Self.html, baseURL: nil)
               }
           }
+          SWIFTEOF
 
-          struct NotSupportedView: View {
-              let version: String
+      - name: Write DeviceName
+        run: |
+          cat > natsuk1/Helpers/DeviceName.swift <<'SWIFTEOF'
+          import Foundation
+          import UIKit
 
-              var body: some View {
-                  VStack(spacing: 20) {
-                      Image(systemName: "exclamationmark.triangle.fill")
-                          .font(.system(size: 56))
-                          .foregroundStyle(.orange)
-                      Text("Not supported for iOS \(version)")
-                          .font(.title3)
-                          .fontWeight(.semibold)
-                          .multilineTextAlignment(.center)
-                      Text("natsuk1 runs on iOS 27 only.")
-                          .font(.subheadline)
-                          .foregroundColor(.secondary)
-                          .multilineTextAlignment(.center)
+          enum DeviceName {
+
+              private struct Device {
+                  let id: String
+                  let name: String
+                  let chip: String
+              }
+
+              private static let devices: [Device] = [
+                  Device(id: "iPhone11,2", name: "iPhone XS",           chip: "A12 Bionic"),
+                  Device(id: "iPhone11,4", name: "iPhone XS Max",       chip: "A12 Bionic"),
+                  Device(id: "iPhone11,6", name: "iPhone XS Max",       chip: "A12 Bionic"),
+                  Device(id: "iPhone11,8", name: "iPhone XR",           chip: "A12 Bionic"),
+                  Device(id: "iPhone12,1", name: "iPhone 11",           chip: "A13 Bionic"),
+                  Device(id: "iPhone12,3", name: "iPhone 11 Pro",       chip: "A13 Bionic"),
+                  Device(id: "iPhone12,5", name: "iPhone 11 Pro Max",   chip: "A13 Bionic"),
+                  Device(id: "iPhone12,8", name: "iPhone SE (2nd gen)", chip: "A13 Bionic"),
+                  Device(id: "iPhone13,1", name: "iPhone 12 mini",      chip: "A14 Bionic"),
+                  Device(id: "iPhone13,2", name: "iPhone 12",           chip: "A14 Bionic"),
+                  Device(id: "iPhone13,3", name: "iPhone 12 Pro",       chip: "A14 Bionic"),
+                  Device(id: "iPhone13,4", name: "iPhone 12 Pro Max",   chip: "A14 Bionic"),
+                  Device(id: "iPhone14,2", name: "iPhone 13 Pro",       chip: "A15 Bionic"),
+                  Device(id: "iPhone14,3", name: "iPhone 13 Pro Max",   chip: "A15 Bionic"),
+                  Device(id: "iPhone14,4", name: "iPhone 13 mini",      chip: "A15 Bionic"),
+                  Device(id: "iPhone14,5", name: "iPhone 13",           chip: "A15 Bionic"),
+                  Device(id: "iPhone14,6", name: "iPhone SE (3rd gen)", chip: "A15 Bionic"),
+                  Device(id: "iPhone14,7", name: "iPhone 14",           chip: "A15 Bionic"),
+                  Device(id: "iPhone14,8", name: "iPhone 14 Plus",      chip: "A15 Bionic"),
+                  Device(id: "iPhone15,2", name: "iPhone 14 Pro",       chip: "A16 Bionic"),
+                  Device(id: "iPhone15,3", name: "iPhone 14 Pro Max",   chip: "A16 Bionic"),
+                  Device(id: "iPhone15,4", name: "iPhone 15",           chip: "A16 Bionic"),
+                  Device(id: "iPhone15,5", name: "iPhone 15 Plus",      chip: "A16 Bionic"),
+                  Device(id: "iPhone16,1", name: "iPhone 15 Pro",       chip: "A17 Pro"),
+                  Device(id: "iPhone16,2", name: "iPhone 15 Pro Max",   chip: "A17 Pro"),
+                  Device(id: "iPhone17,1", name: "iPhone 16 Pro",       chip: "A18 Pro"),
+                  Device(id: "iPhone17,2", name: "iPhone 16 Pro Max",   chip: "A18 Pro"),
+                  Device(id: "iPhone17,3", name: "iPhone 16",           chip: "A18"),
+                  Device(id: "iPhone17,4", name: "iPhone 16 Plus",      chip: "A18"),
+                  Device(id: "iPhone17,5", name: "iPhone 16e",          chip: "A18"),
+                  Device(id: "iPhone18,1", name: "iPhone 17 Pro",       chip: "A19 Pro"),
+                  Device(id: "iPhone18,2", name: "iPhone 17 Pro Max",   chip: "A19 Pro"),
+                  Device(id: "iPhone18,3", name: "iPhone 17",           chip: "A19"),
+                  Device(id: "iPhone18,4", name: "iPhone Air",          chip: "A19 Pro"),
+                  Device(id: "iPhone18,5", name: "iPhone 17e",          chip: "A19"),
+              ]
+
+              private static let byID: [String: Device] = Dictionary(
+                  uniqueKeysWithValues: devices.map { ($0.id, $0) }
+              )
+
+              static func friendly() -> String {
+                  let id = machineID()
+                  return byID[id]?.name ?? id
+              }
+
+              static func chip() -> String {
+                  byID[machineID()]?.chip ?? "unknown"
+              }
+
+              static func full() -> String {
+                  let v = ProcessInfo.processInfo.operatingSystemVersion
+                  return "\(friendly()) · iOS \(v.majorVersion).\(v.minorVersion)"
+              }
+
+              static func machineID() -> String {
+                  var info = utsname()
+                  uname(&info)
+                  return Mirror(reflecting: info.machine).children.reduce("") { id, el in
+                      guard let v = el.value as? Int8, v != 0 else { return id }
+                      return id + String(UnicodeScalar(UInt8(v)))
                   }
-                  .padding(40)
-                  .frame(maxWidth: .infinity, maxHeight: .infinity)
-                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
-              }
-          }
-
-          @MainActor
-          final class AppState: ObservableObject {
-              static let shared = AppState()
-
-              enum Status {
-                  case idle, running, ok, failed
-                  var color: Color {
-                      switch self {
-                      case .idle:    return .secondary
-                      case .running: return .orange
-                      case .ok:      return .green
-                      case .failed:  return .red
-                      }
-                  }
-              }
-
-              @Published var log: String = ""
-              @Published var status: Status = .idle
-              @Published var running: Bool = false
-              @Published var show_respring: Bool = false
-
-              @Published var lang: String {
-                  didSet { UserDefaults.standard.set(lang, forKey: "lang") }
-              }
-
-              private init() {
-                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
-                  startFlusher()
-              }
-
-              func t(_ en: String, _ ru: String) -> String {
-                  lang == "ru" ? ru : en
-              }
-
-              private func startFlusher() {
-                  Task { @MainActor [weak self] in
-                      while !Task.isCancelled {
-                          try? await Task.sleep(for: .milliseconds(300))
-                          guard let self else { return }
-                          let chunk = LockedBuffer.shared.drain()
-                          guard !chunk.isEmpty else { continue }
-                          var newLog = self.log
-                          newLog += chunk
-                          if newLog.count > 30000 {
-                              newLog = String(newLog.suffix(20000))
-                          }
-                          self.log = newLog
-                      }
-                  }
-              }
-
-              func append(_ s: String) {
-                  LockedBuffer.shared.append(s)
-              }
-
-              func run() {
-                  if running { return }
-                  running = true
-                  status = .running
-
-                  Task.detached {
-                      _ = nk_full_exploit()
-                      await MainActor.run {
-                          AppState.shared.running = false
-                          AppState.shared.status = .ok
-                      }
-                  }
-              }
-
-              func respring() {
-                  show_respring = true
-              }
-
-              func clear() {
-                  LockedBuffer.shared.clear()
-                  log = ""
               }
           }
           SWIFTEOF
@@ -417,6 +349,7 @@ jobs:
                               } label: {
                                   HStack(spacing: 8) {
                                       Text(state.t("Device", "Устройство"))
+                                          .foregroundColor(.primary)
                                       Spacer(minLength: 8)
                                       Text(DeviceName.full())
                                           .font(.system(size: 13, design: .monospaced))
@@ -467,11 +400,8 @@ jobs:
                       .listStyle(.insetGrouped)
                       .scrollContentBackground(.hidden)
                       .background(Color(UIColor.systemGroupedBackground))
-                      .scrollEdgeEffectHidden(true, for: .top)
                       .navigationTitle("natsuk1")
                       .navigationBarTitleDisplayMode(.inline)
-                      .toolbarBackground(.visible, for: .navigationBar)
-                      .toolbarBackground(Color(UIColor.systemGroupedBackground), for: .navigationBar)
                       .toolbar {
                           ToolbarItem(placement: .navigationBarTrailing) {
                               Button {
@@ -502,7 +432,7 @@ jobs:
                   ScrollViewReader { proxy in
                       ScrollView(showsIndicators: false) {
                           Text(state.log.isEmpty ? "Awaiting execution." : state.log)
-                              .font(.system(size: 10, design: .monospaced))
+                              .font(.system(size: 9, design: .monospaced))
                               .multilineTextAlignment(.leading)
                               .foregroundColor(state.log.isEmpty ? .secondary : .primary)
                               .frame(maxWidth: .infinity, alignment: .leading)
@@ -707,11 +637,8 @@ jobs:
                       .listStyle(.insetGrouped)
                       .scrollContentBackground(.hidden)
                       .background(Color(UIColor.systemGroupedBackground))
-                      .scrollEdgeEffectHidden(true, for: .top)
                       .navigationTitle("Settings")
-                      .navigationBarTitleDisplayMode(.large)
-                      .toolbarBackground(.visible, for: .navigationBar)
-                      .toolbarBackground(Color(UIColor.systemGroupedBackground), for: .navigationBar)
+                      .navigationBarTitleDisplayMode(.inline)
                       .toolbar {
                           ToolbarItem(placement: .navigationBarTrailing) {
                               Button("Done") { dismiss() }
@@ -803,5 +730,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "UI polish: tinted icons, solid nav bar, cleaner logs [skip ci]"
+          git commit -m "Cleanup: remove dead code, fix Device color, inline settings title, blur nav [skip ci]"
           git push
