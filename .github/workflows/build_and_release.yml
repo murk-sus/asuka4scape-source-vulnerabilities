@@ -122,7 +122,7 @@ jobs:
           p = "natsuk1/Helpers/PairingController.swift"
           s = open(p).read()
 
-          s = s.replace("import AirliftFFI\n", "@preconcurrency import AirliftFFI\n")
+          s = s.replace("@preconcurrency import AirliftFFI\n", "import AirliftFFI\n")
           s = clean(s)
           s = mark_nonisolated(s, "PairingController")
 
@@ -180,6 +180,20 @@ jobs:
               s = mark_nonisolated(s, "KeepAlive")
               open(p, "w").write(s)
               print("patched KeepAlive")
+
+          for root, dirs, files in os.walk("natsuk1"):
+              for fn in files:
+                  if not fn.endswith(".swift"):
+                      continue
+                  fp = os.path.join(root, fn)
+                  src = open(fp).read()
+                  new = re.sub(r"@MainActor\s*", "", src)
+                  new = new.replace("@preconcurrency import AirliftFFI\n", "import AirliftFFI\n")
+                  new = new.replace("@preconcurrency import ", "import ")
+                  new = new.replace("@preconcurrency\n", "")
+                  if new != src:
+                      open(fp, "w").write(new)
+                      print("cleaned " + fp)
           ENDSCRIPT
 
           python3 /tmp/patch.py
@@ -202,7 +216,7 @@ jobs:
               "        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated\n"
               "        SWIFT_APPROACHABLE_CONCURRENCY: NO\n"
               "        SWIFT_STRICT_CONCURRENCY: minimal\n"
-              '        OTHER_SWIFT_FLAGS: "$(inherited) -default-isolation nonisolated"\n'
+              '        OTHER_SWIFT_FLAGS: "$(inherited) -default-isolation nonisolated -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks"\n'
           )
           if "OTHER_SWIFT_FLAGS" not in s and tgt_anchor in s:
               s = s.replace(tgt_anchor, tgt_extra, 1)
@@ -236,7 +250,7 @@ jobs:
             SWIFT_DEFAULT_ACTOR_ISOLATION=nonisolated \
             SWIFT_APPROACHABLE_CONCURRENCY=NO \
             SWIFT_STRICT_CONCURRENCY=minimal \
-            OTHER_SWIFT_FLAGS="-default-isolation nonisolated" \
+            OTHER_SWIFT_FLAGS="-default-isolation nonisolated -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
             -UseModernBuildSystem=YES \
             build -quiet
 
