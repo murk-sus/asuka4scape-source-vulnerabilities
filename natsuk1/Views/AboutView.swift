@@ -99,7 +99,6 @@ struct AboutView: View {
 
     private func linkRow(_ title: String, url: URL) -> some View {
         Button {
-            Haptics.tap()
             openURL(url)
         } label: {
             HStack(alignment: .top, spacing: 8) {
@@ -143,7 +142,6 @@ struct AcknowledgementsView: View {
             Section {
                 ForEach(entries, id: \.name) { entry in
                     Button {
-                        Haptics.tap()
                         openURL(entry.url)
                     } label: {
                         HStack(alignment: .top, spacing: 8) {

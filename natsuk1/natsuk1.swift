@@ -135,7 +135,6 @@ final class AppState: ObservableObject {
         if running { return }
         running = true
         status = .running
-        Haptics.tap()
 
         let t = Thread { [weak self] in
             _ = nk_full_exploit()
@@ -143,7 +142,6 @@ final class AppState: ObservableObject {
                 guard let self = self else { return }
                 self.running = false
                 self.status = .ok
-                Haptics.success()
             }
         }
         t.qualityOfService = .userInitiated
@@ -152,7 +150,6 @@ final class AppState: ObservableObject {
     }
 
     func respring() {
-        Haptics.tap()
         show_respring = true
     }
 

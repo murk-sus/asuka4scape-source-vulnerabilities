@@ -49,7 +49,6 @@ struct ContentView: View {
                     }
 
                     Button {
-                        Haptics.tap()
                         show_device = true
                     } label: {
                         HStack(spacing: 8) {
@@ -88,7 +87,6 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
-                        Haptics.tap()
                         show_settings = true
                     } label: {
                         Image(systemName: "gear")
@@ -113,34 +111,35 @@ struct LogView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
-                Text(state.log.isEmpty ? "Awaiting execution." : state.log)
-                    .font(.system(size: 10, design: .monospaced))
-                    .multilineTextAlignment(.leading)
-                    .foregroundColor(state.log.isEmpty ? .secondary : .primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(state.log.isEmpty ? "Awaiting execution." : state.log)
+                        .font(.system(size: 10, design: .monospaced))
+                        .multilineTextAlignment(.leading)
+                        .foregroundColor(state.log.isEmpty ? .secondary : .primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                Spacer(minLength: 0)
-                    .id(0)
-            }
-            .onChange(of: state.log) { _ in
-                withAnimation(.linear(duration: 0.05)) {
-                    proxy.scrollTo(0, anchor: .bottom)
+                    Spacer(minLength: 0)
+                        .id(0)
                 }
+                .frame(maxWidth: .infinity, minHeight: 240, alignment: .topLeading)
+                .contentShape(Rectangle())
             }
             .contextMenu {
                 Button {
                     UIPasteboard.general.string = state.log
-                    Haptics.success()
                 } label: {
                     Label("Copy Output", systemImage: "doc.on.doc")
                 }
-                .tint(.blue)
 
                 Button(role: .destructive) {
                     state.clear()
-                    Haptics.warning()
                 } label: {
                     Label("Clear", systemImage: "trash")
+                }
+            }
+            .onChange(of: state.log) { _ in
+                withAnimation(.linear(duration: 0.05)) {
+                    proxy.scrollTo(0, anchor: .bottom)
                 }
             }
         }
