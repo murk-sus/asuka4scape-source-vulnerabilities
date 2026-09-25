@@ -100,7 +100,7 @@ jobs:
           p = "natsuk1/Helpers/PairingController.swift"
           s = open(p).read()
 
-          s = s.replace("import AirliftFFI\n", "")
+          s = s.replace("import AirliftFFI\n", "@preconcurrency import AirliftFFI\n")
           s = clean(s)
 
           s = s.replace(
@@ -167,6 +167,18 @@ jobs:
 
           python3 /tmp/patch.py
 
+          if [ -f project.yml ] && ! grep -q SWIFT_DEFAULT_ACTOR_ISOLATION project.yml; then
+            python3 - <<'PY'
+          p = "project.yml"
+          s = open(p).read()
+          s = s.replace(
+              "    settings:",
+              "    settings:\n      SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated\n      SWIFT_STRICT_CONCURRENCY: minimal\n",
+              1)
+          open(p, "w").write(s)
+          PY
+          fi
+
           if grep -q "@MainActor" natsuk1/Helpers/PairingController.swift; then
             echo "PairingController still has @MainActor"
             exit 1
@@ -191,6 +203,8 @@ jobs:
             -parallelizeTargets \
             -jobs "$(sysctl -n hw.ncpu)" \
             CODE_SIGNING_ALLOWED=NO \
+            SWIFT_DEFAULT_ACTOR_ISOLATION=nonisolated \
+            SWIFT_STRICT_CONCURRENCY=minimal \
             -UseModernBuildSystem=YES \
             build -quiet
 
