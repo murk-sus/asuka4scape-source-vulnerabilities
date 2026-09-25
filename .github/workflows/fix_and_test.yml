@@ -1,0 +1,115 @@
+name: 1 · Fix and Test
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+      - 'natsuk1.png'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  XCODE_VERSION: "26.5"
+  CACHE_SALT: v1
+
+jobs:
+  fix-and-test:
+    runs-on: macos-26
+    timeout-minutes: 30
+    outputs:
+      app-bundle: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode ${{ env.XCODE_VERSION }}
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Cache Homebrew
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: brew-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: |
+            brew-${{ runner.os }}-
+
+      - name: Install tools
+        run: |
+          brew install xcodegen ldid
+          brew link --overwrite xcodegen ldid
+
+      - name: Cache XcodeGen derived cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.xcodegen/cache
+          key: xcodegen-${{ runner.os }}-${{ hashFiles('project.yml') }}-${{ env.CACHE_SALT }}
+
+      - name: Generate xcodeproj
+        run: xcodegen generate
+
+      - name: Cache DerivedData
+        uses: actions/cache@v5
+        with:
+          path: |
+            build
+            !build/Build/Products
+          key: dd-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ env.CACHE_SALT }}-${{ hashFiles('natsuk1/**/*.swift', 'natsuk1/**/*.c', 'natsuk1/**/*.h', 'project.yml') }}
+          restore-keys: |
+            dd-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ env.CACHE_SALT }}-
+            dd-${{ runner.os }}-${{ env.XCODE_VERSION }}-
+
+      - name: Build
+        id: build
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project natsuk1.xcodeproj \
+            -scheme natsuk1 \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            -parallelizeTargets \
+            -jobs "$(sysctl -n hw.ncpu)" \
+            CODE_SIGNING_ALLOWED=NO \
+            -UseModernBuildSystem=YES \
+            -showBuildTimingSummary \
+            build -quiet
+
+          APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          ls -la "$APP_PATH"
+
+      - name: Upload app bundle
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: natsuk1-app
+          path: ${{ steps.build.outputs.app_path }}
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Commit fixes if any
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "Auto-fix: build-verified [skip ci]"
+          git push
