@@ -4,8 +4,26 @@ import UIKit
 struct AirliftView: View {
     @EnvironmentObject var airlift: AirliftBridge
 
+    private var localDevVPNUp: Bool {
+        NetworkStatus.interfaces().contains {
+            NetworkStatus.isTunnelInterface($0.name)
+        }
+    }
+
     var body: some View {
         List {
+            if !localDevVPNUp {
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text("LocalDevVPN is not active. Enable it before running Airlift.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
             switch airlift.state {
             case .idle, .pairing:
                 pairingSection
@@ -39,9 +57,6 @@ struct AirliftView: View {
                     Text(airlift.hasPairing() ? "Paired" : "Not paired")
                         .font(.subheadline.bold())
                 }
-                Text("Advertises natsuk1 as a local pairing host. Approve in Settings, Privacy & Security, Developer Mode, Pair with natsuk1.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
             .padding(.vertical, 4)
 
@@ -114,26 +129,6 @@ struct AirliftView: View {
     private var exploitSection: some View {
         Section {
             HStack {
-                Text("Status")
-                Spacer()
-                switch airlift.state {
-                case .ready:
-                    Text("Ready").foregroundColor(.green).font(.subheadline.bold())
-                case .running:
-                    HStack(spacing: 6) {
-                        ProgressView().scaleEffect(0.7)
-                        Text("Running").foregroundColor(.orange)
-                    }
-                case .done(let ok, _):
-                    Text(ok ? "Success" : "Failed")
-                        .foregroundColor(ok ? .green : .red)
-                        .font(.subheadline.bold())
-                default:
-                    EmptyView()
-                }
-            }
-
-            HStack {
                 Text("Target")
                 Spacer()
                 TextField("/var/mobile/Library/SpringBoard", text: Binding(
@@ -159,7 +154,7 @@ struct AirliftView: View {
                     Spacer()
                 }
             }
-            .disabled(airlift.state == .running)
+            .disabled(airlift.state == .running || !localDevVPNUp)
 
             Button {
                 airlift.respring()

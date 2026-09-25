@@ -46,8 +46,7 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
     }
 
     func pairingFilePath() -> String {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return docs.appendingPathComponent("natsuk1_pairing.plist").path
+        return PairingController.pairingFilePath()
     }
 
     func hasPairing() -> Bool {
@@ -147,14 +146,27 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
     }
 
     func respring() {
-        let pairingPath = pairingFilePath()
-        guard FileManager.default.fileExists(atPath: pairingPath) else { return }
-        Task.detached {
+        let pairingPath = PairingController.pairingFilePath()
+        guard FileManager.default.fileExists(atPath: pairingPath) else {
+            appendLog("[respring] no pairing file at \(pairingPath)")
+            return
+        }
+        appendLog("[respring] invoking with \(pairingPath)")
+        Task.detached { [weak self] in
             var outError: UnsafeMutablePointer<CChar>? = nil
-            _ = pairingPath.withCString { pc in
+            let rc: Int32 = pairingPath.withCString { pc in
                 al_device_respring(pc, nil, nil, &outError)
             }
-            if let p = outError { al_string_free(p) }
+            let errStr = outError.flatMap { p -> String? in
+                let s = String(cString: p); al_string_free(p); return s
+            }
+            await MainActor.run {
+                if rc == 0 {
+                    self?.appendLog("[respring] ok")
+                } else {
+                    self?.appendLog("[respring] rc=\(rc) \(errStr ?? "")")
+                }
+            }
         }
     }
 

@@ -15,15 +15,7 @@ struct ContentView: View {
                     NavigationLink {
                         AirliftView().environmentObject(airlift)
                     } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "airplane")
-                                .frame(width: 22, alignment: .center)
-                            Text(state.t("Airlift", "Airlift"))
-                            Spacer(minLength: 8)
-                            Text(airlift.hasPairing() ? "Ready" : "Setup")
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundColor(.secondary)
-                        }
+                        Text(state.t("Airlift", "Airlift"))
                     }
                 } header: {
                     Label(state.t("Sandbox Escape", "Побег из песочницы"), systemImage: "bolt.shield")
@@ -36,7 +28,7 @@ struct ContentView: View {
                         HStack(spacing: 12) {
                             Image(systemName: "bolt.fill")
                                 .frame(width: 22, alignment: .center)
-                            Text(state.t("Run Offsets", "Показать оффсеты"))
+                            Text(state.t("Run Exploit", "Запустить эксплойт"))
                             Spacer(minLength: 8)
                             if state.running {
                                 ProgressView().scaleEffect(0.8)
@@ -45,7 +37,7 @@ struct ContentView: View {
                     }
                     .disabled(state.running)
                 } header: {
-                    Label(state.t("Kernel Offsets", "Оффсеты ядра"), systemImage: "cpu")
+                    Label(state.t("Exploit", "Эксплойт"), systemImage: "cpu")
                 }
 
                 Section {
