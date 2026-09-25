@@ -5,7 +5,7 @@ import Combine
 
 @MainActor
 final class KeepAlive: NSObject, ObservableObject {
-    nonisolated(unsafe) static let shared = KeepAlive()
+    static let shared = KeepAlive()
 
     @Published private(set) var audioActive: Bool = false
     @Published private(set) var locationActive: Bool = false
@@ -105,23 +105,21 @@ final class KeepAlive: NSObject, ObservableObject {
     }
 }
 
-extension KeepAlive: CLLocationManagerDelegate {
-    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+extension KeepAlive: @preconcurrency CLLocationManagerDelegate {
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
-        Task { @MainActor in
-            if status == .authorizedAlways || status == .authorizedWhenInUse {
-                manager.startUpdatingLocation()
-                KeepAlive.shared.locationActive = true
-            } else if status == .denied || status == .restricted {
-                KeepAlive.shared.locationActive = false
-            }
+        if status == .authorizedAlways || status == .authorizedWhenInUse {
+            manager.startUpdatingLocation()
+            locationActive = true
+        } else if status == .denied || status == .restricted {
+            locationActive = false
         }
     }
 
-    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
     }
 
-    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         NSLog("[KeepAlive] location error: \(error)")
     }
 }

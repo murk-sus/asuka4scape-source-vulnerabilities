@@ -3,7 +3,7 @@ import Combine
 
 @MainActor
 final class OffsetsStore: ObservableObject {
-    nonisolated(unsafe) static let shared = OffsetsStore()
+    static let shared = OffsetsStore()
 
     struct Group: Codable {
         let title: String
@@ -29,7 +29,7 @@ final class OffsetsStore: ObservableObject {
         let defaults: [String: String]
     }
 
-    private nonisolated static let bundled: File? = {
+    nonisolated private static let bundled: File? = {
         guard let fileURL = resolveActiveFileURL() else { return nil }
         guard let fileData = try? Data(contentsOf: fileURL),
               let parsed = try? JSONDecoder().decode(File.self, from: fileData)
@@ -44,7 +44,7 @@ final class OffsetsStore: ObservableObject {
         resolveActiveEntry()
     }
 
-    private nonisolated static func loadIndex() -> Index? {
+    nonisolated private static func loadIndex() -> Index? {
         guard let url = Bundle.main.url(forResource: "index", withExtension: "json", subdirectory: "Offsets"),
               let data = try? Data(contentsOf: url),
               let index = try? JSONDecoder().decode(Index.self, from: data)
@@ -52,7 +52,7 @@ final class OffsetsStore: ObservableObject {
         return index
     }
 
-    private nonisolated static func resolveActiveEntry() -> VersionEntry? {
+    nonisolated private static func resolveActiveEntry() -> VersionEntry? {
         guard let index = loadIndex() else { return nil }
         let device = DeviceName.machineID()
         let v = ProcessInfo.processInfo.operatingSystemVersion
@@ -61,7 +61,7 @@ final class OffsetsStore: ObservableObject {
             ?? index.versions.first(where: { $0.device == device })
     }
 
-    private nonisolated static func resolveActiveFileURL() -> URL? {
+    nonisolated private static func resolveActiveFileURL() -> URL? {
         guard let entry = resolveActiveEntry() else { return nil }
         let parts = entry.file.split(separator: ".", maxSplits: 1).map(String.init)
         let name = parts.first ?? entry.file

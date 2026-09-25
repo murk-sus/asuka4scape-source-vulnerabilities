@@ -2,6 +2,35 @@ import SwiftUI
 import UIKit
 import Foundation
 
+final class LockedBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String = ""
+
+    func append(_ s: String) {
+        lock.lock()
+        value += s
+        value += "\n"
+        if value.count > 10000 {
+            value = String(value.suffix(6000))
+        }
+        lock.unlock()
+    }
+
+    func drain() -> String {
+        lock.lock()
+        let v = value
+        value = ""
+        lock.unlock()
+        return v
+    }
+
+    func clear() {
+        lock.lock()
+        value = ""
+        lock.unlock()
+    }
+}
+
 private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
     guard let line = line else { return }
     var bytes: [UInt8] = []
@@ -11,9 +40,7 @@ private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line i
         p = p.advanced(by: 1)
     }
     let s = String(decoding: bytes, as: UTF8.self)
-    Task { @MainActor in
-        AppState.shared.append(s)
-    }
+    AppState.shared.append(s)
 }
 
 private func osVersionString() -> String {
@@ -120,7 +147,7 @@ struct NotSupportedView: View {
 
 @MainActor
 final class AppState: ObservableObject {
-    nonisolated(unsafe) static let shared = AppState()
+    static let shared = AppState()
 
     enum Status {
         case idle, running, ok, failed
@@ -143,9 +170,7 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(lang, forKey: "lang") }
     }
 
-    private var flusher: Timer?
-    private var pending: String = ""
-    private let lock = NSLock()
+    private let buffer = LockedBuffer()
 
     private init() {
         self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
@@ -157,14 +182,12 @@ final class AppState: ObservableObject {
     }
 
     private func startFlusher() {
-        flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
+        Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(300))
                 guard let self else { return }
-                self.lock.lock()
-                let chunk = self.pending
-                self.pending = ""
-                self.lock.unlock()
-                guard !chunk.isEmpty else { return }
+                let chunk = self.buffer.drain()
+                guard !chunk.isEmpty else { continue }
                 var newLog = self.log
                 newLog += chunk
                 if newLog.count > 30000 {
@@ -176,13 +199,7 @@ final class AppState: ObservableObject {
     }
 
     nonisolated func append(_ s: String) {
-        lock.lock()
-        pending += s
-        pending += "\n"
-        if pending.count > 10000 {
-            pending = String(pending.suffix(6000))
-        }
-        lock.unlock()
+        buffer.append(s)
     }
 
     func run() {
@@ -204,9 +221,7 @@ final class AppState: ObservableObject {
     }
 
     func clear() {
-        lock.lock()
-        pending = ""
-        lock.unlock()
+        buffer.clear()
         log = ""
     }
 }
