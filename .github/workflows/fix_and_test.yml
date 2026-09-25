@@ -18,7 +18,7 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v14
+  CACHE_SALT: v15
 
 jobs:
   fix-and-test:
@@ -40,21 +40,25 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/aircard
           git clone --depth 1 https://github.com/Mak5er/AirCard-iOS.git /tmp/aircard
+
           mkdir -p natsuk1/External
           rm -rf natsuk1/External/AirliftFFI.xcframework
           cp -R /tmp/aircard/AirliftFFI.xcframework natsuk1/External/
+
           cp /tmp/aircard/ios-app/GrappaHelper.h natsuk1/Exploit/
           cp /tmp/aircard/ios-app/GrappaHelper.m natsuk1/Exploit/
           cp /tmp/aircard/ios-app/NetworkStatus.swift natsuk1/Helpers/
           cp /tmp/aircard/ios-app/PairingController.swift natsuk1/Helpers/
+
           test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a
           test -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers/airlift.h
 
-      - name: Strip comments from AirCard sources
+      - name: Strip comments and imports from AirCard sources
         run: |
           python3 <<'PYEOF'
-          import os
-          def strip(source):
+          import os, re
+
+          def strip_comments(source):
               out = []
               i = 0
               n = len(source)
@@ -101,6 +105,7 @@ jobs:
                       blank = 0
                       cleaned.append(line)
               return '\n'.join(cleaned)
+
           for p in [
               "natsuk1/Helpers/NetworkStatus.swift",
               "natsuk1/Helpers/PairingController.swift",
@@ -110,21 +115,19 @@ jobs:
               if os.path.exists(p):
                   with open(p) as f:
                       src = f.read()
-                  s = strip(src)
+                  s = strip_comments(src)
+                  s = re.sub(r'^\s*import\s+AirliftFFI\s*\n', '', s, flags=re.M)
                   with open(p, "w") as f:
                       f.write(s)
-                  print(f"stripped {p} ({len(src)} -> {len(s)})")
-          PYEOF
+                  print(f"cleaned {p}")
 
-      - name: Patch PairingController
-        run: |
-          python3 <<'PYEOF'
           p = "natsuk1/Helpers/PairingController.swift"
-          s = open(p).read()
-          s = s.replace('private let hostName = "AirCard-iOS"', 'private let hostName = "natsuk1"')
-          s = s.replace('Pair with AirCard-iOS', 'Pair with natsuk1')
-          s = s.replace('Settings › AirCard-iOS › Local Network', 'Settings › natsuk1 › Local Network')
-          open(p, "w").write(s)
+          if os.path.exists(p):
+              s = open(p).read()
+              s = s.replace('private let hostName = "AirCard-iOS"', 'private let hostName = "natsuk1"')
+              s = s.replace('Pair with AirCard-iOS', 'Pair with natsuk1')
+              s = s.replace('Settings › AirCard-iOS › Local Network', 'Settings › natsuk1 › Local Network')
+              open(p, "w").write(s)
           PYEOF
 
       - name: Clean target directories
@@ -146,7 +149,7 @@ jobs:
           rm -f natsuk1/Exploit/nk_api.c
           rm -f natsuk1/Exploit/nk_offsets.h
 
-      - name: Write bridging.h and C sources
+      - name: Write bridging and C sources
         run: |
           cat > natsuk1/bridging.h <<'EOF'
           #ifndef NATSUK1_BRIDGING_H
@@ -1854,12 +1857,398 @@ jobs:
           }
           EOF
 
-      - name: Write natsuk1.swift
-        run: |
           cat > natsuk1/natsuk1.swift <<'EOF'
           import SwiftUI
           import UIKit
           import Foundation
 
           final class LockedBuffer: @unchecked Sendable {
-              static let shared =
+              static let shared = LockedBuffer()
+              private let lock = NSLock()
+              private var value: String = ""
+
+              private init() {}
+
+              func append(_ s: String) {
+                  lock.lock()
+                  value += s
+                  value += "\n"
+                  if value.count > 10000 {
+                      value = String(value.suffix(6000))
+                  }
+                  lock.unlock()
+              }
+
+              func drain() -> String {
+                  lock.lock()
+                  let v = value
+                  value = ""
+                  lock.unlock()
+                  return v
+              }
+
+              func clear() {
+                  lock.lock()
+                  value = ""
+                  lock.unlock()
+              }
+          }
+
+          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
+              guard let line = line else { return }
+              var bytes: [UInt8] = []
+              var p = line
+              while p.pointee != 0 {
+                  bytes.append(UInt8(bitPattern: p.pointee))
+                  p = p.advanced(by: 1)
+              }
+              LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))
+          }
+
+          private func osVersionString() -> String {
+              let v = ProcessInfo.processInfo.operatingSystemVersion
+              return "\(v.majorVersion).\(v.minorVersion)"
+          }
+
+          private func appVersionString() -> String {
+              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+          }
+
+          private var isSupportedIOS: Bool {
+              ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
+          }
+
+          @main
+          struct natsuk1App: App {
+              var body: some Scene {
+                  WindowGroup {
+                      RootView()
+                  }
+              }
+          }
+
+          struct RootView: View {
+              @StateObject private var state = AppState.shared
+              @StateObject private var offsets = OffsetsStore.shared
+              @StateObject private var airlift = AirliftBridge.shared
+              @AppStorage("auto_run") private var auto_run = false
+              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
+              @AppStorage("keep_alive_location") private var keep_alive_location = false
+
+              init() {
+                  UserDefaults.standard.register(defaults: [
+                      "auto_run": false,
+                      "keep_alive_audio": false,
+                      "keep_alive_location": false,
+                      "lang": "en",
+                  ])
+              }
+
+              var body: some View {
+                  Group {
+                      if isSupportedIOS {
+                          ContentView()
+                              .environmentObject(state)
+                              .environmentObject(offsets)
+                              .environmentObject(airlift)
+                              .onAppear {
+                                  nk_set_log(cCallback)
+                                  if state.log.isEmpty {
+                                      state.append("[*] natsuk1 v\(appVersionString())")
+                                      state.append("[*] iOS \(osVersionString()) / arm64e")
+                                      if let version = OffsetsStore.activeVersion {
+                                          state.append("[*] offsets: \(version.device) / iOS \(version.ios) (\(version.build))")
+                                      }
+                                      state.append("")
+                                  }
+                                  if keep_alive_audio { KeepAlive.shared.startAudio() }
+                                  if keep_alive_location { KeepAlive.shared.startLocation() }
+                                  if auto_run {
+                                      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                          state.run()
+                                      }
+                                  }
+                              }
+                              .onChange(of: keep_alive_audio) { _, value in
+                                  if value { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
+                              }
+                              .onChange(of: keep_alive_location) { _, value in
+                                  if value { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
+                              }
+                              .overlay {
+                                  if state.show_respring {
+                                      RespringView()
+                                          .brightness(-1.0)
+                                          .ignoresSafeArea()
+                                  }
+                              }
+                      } else {
+                          NotSupportedView(version: osVersionString())
+                      }
+                  }
+                  .preferredColorScheme(.dark)
+              }
+          }
+
+          struct NotSupportedView: View {
+              let version: String
+
+              var body: some View {
+                  VStack(spacing: 20) {
+                      Image(systemName: "exclamationmark.triangle.fill")
+                          .font(.system(size: 56))
+                          .foregroundStyle(.orange)
+                      Text("Not supported for iOS \(version)")
+                          .font(.title3)
+                          .fontWeight(.semibold)
+                          .multilineTextAlignment(.center)
+                      Text("natsuk1 runs on iOS 27 only.")
+                          .font(.subheadline)
+                          .foregroundColor(.secondary)
+                          .multilineTextAlignment(.center)
+                  }
+                  .padding(40)
+                  .frame(maxWidth: .infinity, maxHeight: .infinity)
+                  .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+              }
+          }
+
+          @MainActor
+          final class AppState: ObservableObject {
+              static let shared = AppState()
+
+              enum Status {
+                  case idle, running, ok, failed
+                  var color: Color {
+                      switch self {
+                      case .idle:    return .secondary
+                      case .running: return .orange
+                      case .ok:      return .green
+                      case .failed:  return .red
+                      }
+                  }
+              }
+
+              @Published var log: String = ""
+              @Published var status: Status = .idle
+              @Published var running: Bool = false
+              @Published var show_respring: Bool = false
+
+              @Published var lang: String {
+                  didSet { UserDefaults.standard.set(lang, forKey: "lang") }
+              }
+
+              private init() {
+                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
+                  startFlusher()
+              }
+
+              func t(_ en: String, _ ru: String) -> String {
+                  lang == "ru" ? ru : en
+              }
+
+              private func startFlusher() {
+                  Task { @MainActor [weak self] in
+                      while !Task.isCancelled {
+                          try? await Task.sleep(for: .milliseconds(300))
+                          guard let self else { return }
+                          let chunk = LockedBuffer.shared.drain()
+                          guard !chunk.isEmpty else { continue }
+                          var newLog = self.log
+                          newLog += chunk
+                          if newLog.count > 30000 {
+                              newLog = String(newLog.suffix(20000))
+                          }
+                          self.log = newLog
+                      }
+                  }
+              }
+
+              func append(_ s: String) {
+                  LockedBuffer.shared.append(s)
+              }
+
+              func run() {
+                  if running { return }
+                  running = true
+                  status = .running
+
+                  Task.detached {
+                      _ = nk_full_exploit()
+                      await MainActor.run {
+                          AppState.shared.running = false
+                          AppState.shared.status = .ok
+                      }
+                  }
+              }
+
+              func respring() {
+                  show_respring = true
+              }
+
+              func clear() {
+                  LockedBuffer.shared.clear()
+                  log = ""
+              }
+          }
+          EOF
+
+      - name: Patch Info.plist
+        run: |
+          python3 <<'PYEOF'
+          import re
+          p = "natsuk1/Resources/Info.plist"
+          s = open(p).read()
+
+          if "NSBonjourServices" not in s:
+              insert = (
+                  "    <key>NSBonjourServices</key>\n"
+                  "    <array>\n"
+                  "        <string>_remotepairing-pairable-host._tcp</string>\n"
+                  "    </array>\n"
+                  "    <key>NSLocalNetworkUsageDescription</key>\n"
+                  "    <string>natsuk1 advertises a local pairing service so this device can pair with itself.</string>\n"
+              )
+              s = s.replace("</dict>\n</plist>", insert + "</dict>\n</plist>")
+
+          if "UIBackgroundModes" not in s:
+              insert = (
+                  "    <key>UIBackgroundModes</key>\n"
+                  "    <array>\n"
+                  "        <string>audio</string>\n"
+                  "    </array>\n"
+              )
+              s = s.replace("</dict>\n</plist>", insert + "</dict>\n</plist>")
+
+          open(p, "w").write(s)
+          PYEOF
+
+      - name: Patch project.yml
+        run: |
+          python3 <<'PYEOF'
+          import re
+          p = "project.yml"
+          s = open(p).read()
+
+          s = re.sub(
+              r'^\s*- framework: natsuk1/External/AirliftFFI\.xcframework\n\s*embed: false\n',
+              '',
+              s, flags=re.M,
+          )
+          s = re.sub(
+              r'^\s*- path: natsuk1/External\n(?:\s*excludes:\n(?:\s*-.*\n)*)?',
+              '',
+              s, flags=re.M,
+          )
+          s = re.sub(r'(-lc\+\+)(\s+-lc\+\+)', r'\1', s)
+
+          hdr = '        HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers $(SRCROOT)/natsuk1/Exploit"'
+          if "HEADER_SEARCH_PATHS" in s:
+              s = re.sub(r'^\s*HEADER_SEARCH_PATHS:.*\n', hdr + '\n', s, flags=re.M)
+          else:
+              s = re.sub(
+                  r'(^\s*OTHER_LDFLAGS:.*\n)',
+                  r'\1' + hdr + '\n',
+                  s, flags=re.M,
+              )
+
+          lib = '$(SRCROOT)/natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a'
+          if lib not in s:
+              s = re.sub(
+                  r'^(\s*OTHER_LDFLAGS:\s*)(.*)$',
+                  r'\1\2 ' + lib + ' -lc++',
+                  s, flags=re.M,
+              )
+          elif "-lc++" not in s:
+              s = re.sub(
+                  r'^(\s*OTHER_LDFLAGS:\s*)(.*)$',
+                  r'\1\2 -lc++',
+                  s, flags=re.M,
+              )
+
+          open(p, "w").write(s)
+          print(s)
+          PYEOF
+
+      - name: Cache Homebrew
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: brew-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: |
+            brew-${{ runner.os }}-
+
+      - name: Install tools
+        run: |
+          brew install xcodegen ldid
+          brew link --overwrite xcodegen ldid || true
+
+      - name: Generate xcodeproj
+        run: xcodegen generate
+
+      - name: Cache DerivedData
+        uses: actions/cache@v5
+        with:
+          path: |
+            build/Build/Intermediates.noindex
+            build/ModuleCache.noindex
+            build/SDKStatCaches.noindex
+          key: dd-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ env.CACHE_SALT }}-${{ hashFiles('natsuk1/**/*.swift', 'natsuk1/**/*.c', 'natsuk1/**/*.h', 'project.yml') }}
+          restore-keys: |
+            dd-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ env.CACHE_SALT }}-
+            dd-${{ runner.os }}-${{ env.XCODE_VERSION }}-
+
+      - name: Build
+        id: build
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project natsuk1.xcodeproj \
+            -scheme natsuk1 \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            -parallelizeTargets \
+            -jobs "$(sysctl -n hw.ncpu)" \
+            CODE_SIGNING_ALLOWED=NO \
+            -UseModernBuildSystem=YES \
+            build -quiet
+
+          APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "No .app produced"
+            exit 1
+          fi
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          ls -la "$APP_PATH"
+
+      - name: Package app for handoff
+        run: |
+          set -euo pipefail
+          APP_PATH="${{ steps.build.outputs.app_path }}"
+          APP_DIR="$(dirname "$APP_PATH")"
+          APP_NAME="$(basename "$APP_PATH")"
+          COPYFILE_DISABLE=1 tar -czf /tmp/natsuk1-app.tar.gz -C "$APP_DIR" "$APP_NAME"
+          ls -lh /tmp/natsuk1-app.tar.gz
+
+      - name: Upload app tarball
+        uses: actions/upload-artifact@v6
+        with:
+          name: natsuk1-app-tar
+          path: /tmp/natsuk1-app.tar.gz
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Commit fixes if any
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add natsuk1/ project.yml .gitignore 2>/dev/null || git add natsuk1/ project.yml
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "Airlift integration + remove import AirliftFFI [skip ci]"
+          git push
