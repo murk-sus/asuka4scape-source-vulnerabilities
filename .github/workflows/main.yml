@@ -1,4 +1,4 @@
-name: Rebuild latest Swift black background
+name: Fix concurrency SDK target
 
 on:
   workflow_dispatch:
@@ -7,25 +7,20 @@ permissions:
   contents: write
 
 jobs:
-  rebuild:
+  fix:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Patch config files
+      - name: Patch config
         run: |
           python3 <<'PYEOF'
           import os, re
 
-          def w(path, content):
-              d = os.path.dirname(path)
-              if d:
-                  os.makedirs(d, exist_ok=True)
-              with open(path, "w") as f:
-                  f.write(content)
-
           p = "project.yml"
           s = open(p).read()
+          s = re.sub(r'(^\s*iOS:\s*)"[^"]*"', r'\1"26.0"', s, flags=re.M)
+          s = re.sub(r'(IPHONEOS_DEPLOYMENT_TARGET:\s*)"[^"]*"', r'\1"26.0"', s, flags=re.M)
           s = re.sub(r'^\s*SWIFT_VERSION:.*\n', '    SWIFT_VERSION: "6.0"\n', s, flags=re.M)
           if "SWIFT_STRICT_CONCURRENCY" not in s:
               s = s.replace(
@@ -35,1280 +30,1499 @@ jobs:
               )
           s = re.sub(r'^\s*HEADER_SEARCH_PATHS:.*\n', '', s, flags=re.M)
           s = re.sub(r'^\s*USER_HEADER_SEARCH_PATHS:.*\n', '', s, flags=re.M)
-          w("project.yml", s)
+          open(p, "w").write(s)
 
           p = "natsuk1/Resources/Info.plist"
           s = open(p).read()
+          s = re.sub(
+              r'<key>MinimumOSVersion</key>\s*<string>[^<]*</string>',
+              '<key>MinimumOSVersion</key><string>26.0</string>',
+              s
+          )
           s = re.sub(
               r'<key>UILaunchScreen</key>\s*<dict>.*?</dict>',
               '<key>UILaunchScreen</key>\n    <dict/>',
               s, flags=re.DOTALL
           )
-          w("natsuk1/Resources/Info.plist", s)
-
+          open(p, "w").write(s)
           print("config OK")
           PYEOF
 
       - name: Write natsuk1.swift
         run: |
-          python3 <<'PYEOF'
-          import os, textwrap
-          D = textwrap.dedent
+          cat > natsuk1/natsuk1.swift <<'NKEOF'
+          import SwiftUI
+          import UIKit
+          import Foundation
 
-          def w(path, content):
-              d = os.path.dirname(path)
-              if d:
-                  os.makedirs(d, exist_ok=True)
-              with open(path, "w") as f:
-                  f.write(content)
+          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
+              guard let line = line else { return }
+              var bytes: [UInt8] = []
+              var p = line
+              while p.pointee != 0 {
+                  bytes.append(UInt8(bitPattern: p.pointee))
+                  p = p.advanced(by: 1)
+              }
+              let s = String(decoding: bytes, as: UTF8.self)
+              Task { @MainActor in
+                  AppState.shared.append(s)
+              }
+          }
 
-          w("natsuk1/natsuk1.swift", D(r"""
-              import SwiftUI
-              import UIKit
-              import Foundation
+          private func osVersionString() -> String {
+              let v = ProcessInfo.processInfo.operatingSystemVersion
+              return "\(v.majorVersion).\(v.minorVersion)"
+          }
 
-              private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
-                  guard let line = line else { return }
-                  let s = String(cString: line)
-                  DispatchQueue.main.async {
-                      AppState.shared.append(s)
+          private var isSupportedIOS: Bool {
+              ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
+          }
+
+          @main
+          struct natsuk1App: App {
+              var body: some Scene {
+                  WindowGroup {
+                      RootView()
                   }
               }
+          }
 
-              private func osVersionString() -> String {
-                  let v = ProcessInfo.processInfo.operatingSystemVersion
-                  return "\(v.majorVersion).\(v.minorVersion)"
+          struct RootView: View {
+              @StateObject private var state = AppState.shared
+              @StateObject private var offsets = OffsetsStore.shared
+              @AppStorage("auto_run") private var auto_run = false
+              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
+              @AppStorage("keep_alive_location") private var keep_alive_location = false
+
+              init() {
+                  UserDefaults.standard.register(defaults: [
+                      "auto_run": false,
+                      "keep_alive_audio": false,
+                      "keep_alive_location": false,
+                      "lang": "en",
+                  ])
               }
 
-              private var isSupportedIOS: Bool {
-                  ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
-              }
-
-              @main
-              struct natsuk1App: App {
-                  var body: some Scene {
-                      WindowGroup {
-                          RootView()
-                      }
-                  }
-              }
-
-              struct RootView: View {
-                  @StateObject private var state = AppState.shared
-                  @StateObject private var offsets = OffsetsStore.shared
-                  @AppStorage("auto_run") private var auto_run = false
-                  @AppStorage("keep_alive_audio") private var keep_alive_audio = false
-                  @AppStorage("keep_alive_location") private var keep_alive_location = false
-
-                  init() {
-                      UserDefaults.standard.register(defaults: [
-                          "auto_run": false,
-                          "keep_alive_audio": false,
-                          "keep_alive_location": false,
-                          "lang": "en",
-                      ])
-                  }
-
-                  var body: some View {
-                      Group {
-                          if isSupportedIOS {
-                              ContentView()
-                                  .environmentObject(state)
-                                  .environmentObject(offsets)
-                                  .onAppear {
-                                      nk_set_log(cCallback)
-                                      if state.log.isEmpty {
-                                          state.append("[*] natsuk1 v6.0")
-                                          state.append("[*] iOS \(osVersionString()) / arm64e")
-                                          if let version = OffsetsStore.activeVersion {
-                                              state.append("[*] offsets: \(version.device) / iOS \(version.ios) (\(version.build))")
-                                          }
-                                          state.append("")
+              var body: some View {
+                  Group {
+                      if isSupportedIOS {
+                          ContentView()
+                              .environmentObject(state)
+                              .environmentObject(offsets)
+                              .onAppear {
+                                  nk_set_log(cCallback)
+                                  if state.log.isEmpty {
+                                      state.append("[*] natsuk1 v6.0")
+                                      state.append("[*] iOS \(osVersionString()) / arm64e")
+                                      if let version = OffsetsStore.activeVersion {
+                                          state.append("[*] offsets: \(version.device) / iOS \(version.ios) (\(version.build))")
                                       }
-                                      if keep_alive_audio { KeepAlive.shared.startAudio() }
-                                      if keep_alive_location { KeepAlive.shared.startLocation() }
-                                      if auto_run {
-                                          DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                              state.run()
-                                          }
+                                      state.append("")
+                                  }
+                                  if keep_alive_audio { KeepAlive.shared.startAudio() }
+                                  if keep_alive_location { KeepAlive.shared.startLocation() }
+                                  if auto_run {
+                                      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                          state.run()
                                       }
                                   }
-                                  .onChange(of: keep_alive_audio) { _, value in
-                                      if value { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
-                                  }
-                                  .onChange(of: keep_alive_location) { _, value in
-                                      if value { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
-                                  }
-                                  .overlay {
-                                      if state.show_respring {
-                                          RespringView()
-                                              .brightness(-1.0)
-                                              .ignoresSafeArea()
-                                      }
-                                  }
-                          } else {
-                              NotSupportedView(version: osVersionString())
-                          }
-                      }
-                      .preferredColorScheme(.dark)
-                  }
-              }
-
-              struct NotSupportedView: View {
-                  let version: String
-
-                  var body: some View {
-                      VStack(spacing: 20) {
-                          Image(systemName: "exclamationmark.triangle.fill")
-                              .font(.system(size: 56))
-                              .foregroundStyle(.orange)
-                          Text("Not supported for iOS \(version)")
-                              .font(.title3)
-                              .fontWeight(.semibold)
-                              .multilineTextAlignment(.center)
-                          Text("natsuk1 runs on iOS 27 only.")
-                              .font(.subheadline)
-                              .foregroundColor(.secondary)
-                              .multilineTextAlignment(.center)
-                      }
-                      .padding(40)
-                      .frame(maxWidth: .infinity, maxHeight: .infinity)
-                      .background(Color.black.ignoresSafeArea())
-                  }
-              }
-
-              final class AppState: ObservableObject {
-                  static let shared = AppState()
-
-                  enum Status {
-                      case idle, running, ok, failed
-                      var color: Color {
-                          switch self {
-                          case .idle:    return .secondary
-                          case .running: return .orange
-                          case .ok:      return .green
-                          case .failed:  return .red
-                          }
-                      }
-                  }
-
-                  @Published var log: String = ""
-                  @Published var status: Status = .idle
-                  @Published var running: Bool = false
-                  @Published var show_respring: Bool = false
-
-                  @Published var lang: String {
-                      didSet { UserDefaults.standard.set(lang, forKey: "lang") }
-                  }
-
-                  private var flusher: Timer?
-                  private var pending: String = ""
-                  private let lock = NSLock()
-
-                  private init() {
-                      self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
-                      startFlusher()
-                  }
-
-                  func t(_ en: String, _ ru: String) -> String {
-                      lang == "ru" ? ru : en
-                  }
-
-                  private func startFlusher() {
-                      DispatchQueue.main.async { [weak self] in
-                          guard let self = self else { return }
-                          self.flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-                              guard let self = self else { return }
-                              self.lock.lock()
-                              let chunk = self.pending
-                              self.pending = ""
-                              self.lock.unlock()
-                              guard !chunk.isEmpty else { return }
-                              var newLog = self.log
-                              newLog += chunk
-                              if newLog.count > 30000 {
-                                  newLog = String(newLog.suffix(20000))
                               }
-                              self.log = newLog
-                          }
+                              .onChange(of: keep_alive_audio) { _, value in
+                                  if value { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
+                              }
+                              .onChange(of: keep_alive_location) { _, value in
+                                  if value { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
+                              }
+                              .overlay {
+                                  if state.show_respring {
+                                      RespringView()
+                                          .brightness(-1.0)
+                                          .ignoresSafeArea()
+                                  }
+                              }
+                      } else {
+                          NotSupportedView(version: osVersionString())
                       }
                   }
+                  .preferredColorScheme(.dark)
+              }
+          }
 
-                  func append(_ s: String) {
-                      lock.lock()
-                      pending += s
-                      pending += "\n"
-                      if pending.count > 10000 {
-                          pending = String(pending.suffix(6000))
+          struct NotSupportedView: View {
+              let version: String
+
+              var body: some View {
+                  VStack(spacing: 20) {
+                      Image(systemName: "exclamationmark.triangle.fill")
+                          .font(.system(size: 56))
+                          .foregroundStyle(.orange)
+                      Text("Not supported for iOS \(version)")
+                          .font(.title3)
+                          .fontWeight(.semibold)
+                          .multilineTextAlignment(.center)
+                      Text("natsuk1 runs on iOS 27 only.")
+                          .font(.subheadline)
+                          .foregroundColor(.secondary)
+                          .multilineTextAlignment(.center)
+                  }
+                  .padding(40)
+                  .frame(maxWidth: .infinity, maxHeight: .infinity)
+                  .background(Color.black.ignoresSafeArea())
+              }
+          }
+
+          final class AppState: ObservableObject {
+              nonisolated(unsafe) static let shared = AppState()
+
+              enum Status {
+                  case idle, running, ok, failed
+                  var color: Color {
+                      switch self {
+                      case .idle:    return .secondary
+                      case .running: return .orange
+                      case .ok:      return .green
+                      case .failed:  return .red
                       }
-                      lock.unlock()
-                  }
-
-                  func run() {
-                      if running { return }
-                      running = true
-                      status = .running
-
-                      let t = Thread { [weak self] in
-                          _ = nk_full_exploit()
-                          DispatchQueue.main.async {
-                              guard let self = self else { return }
-                              self.running = false
-                              self.status = .ok
-                          }
-                      }
-                      t.qualityOfService = .userInitiated
-                      t.stackSize = 16 * 1024 * 1024
-                      t.start()
-                  }
-
-                  func respring() {
-                      show_respring = true
-                  }
-
-                  func clear() {
-                      lock.lock()
-                      pending = ""
-                      lock.unlock()
-                      log = ""
                   }
               }
-              """))
 
-          print("natsuk1.swift OK")
-          PYEOF
+              @Published var log: String = ""
+              @Published var status: Status = .idle
+              @Published var running: Bool = false
+              @Published var show_respring: Bool = false
+
+              @Published var lang: String {
+                  didSet { UserDefaults.standard.set(lang, forKey: "lang") }
+              }
+
+              private var flusher: Timer?
+              private var pending: String = ""
+              private let lock = NSLock()
+
+              private init() {
+                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
+                  startFlusher()
+              }
+
+              func t(_ en: String, _ ru: String) -> String {
+                  lang == "ru" ? ru : en
+              }
+
+              private func startFlusher() {
+                  DispatchQueue.main.async { [weak self] in
+                      guard let self = self else { return }
+                      self.flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+                          guard let self = self else { return }
+                          self.lock.lock()
+                          let chunk = self.pending
+                          self.pending = ""
+                          self.lock.unlock()
+                          guard !chunk.isEmpty else { return }
+                          var newLog = self.log
+                          newLog += chunk
+                          if newLog.count > 30000 {
+                              newLog = String(newLog.suffix(20000))
+                          }
+                          self.log = newLog
+                      }
+                  }
+              }
+
+              func append(_ s: String) {
+                  lock.lock()
+                  pending += s
+                  pending += "\n"
+                  if pending.count > 10000 {
+                      pending = String(pending.suffix(6000))
+                  }
+                  lock.unlock()
+              }
+
+              func run() {
+                  if running { return }
+                  running = true
+                  status = .running
+
+                  let t = Thread { [weak self] in
+                      _ = nk_full_exploit()
+                      DispatchQueue.main.async {
+                          guard let self = self else { return }
+                          self.running = false
+                          self.status = .ok
+                      }
+                  }
+                  t.qualityOfService = .userInitiated
+                  t.stackSize = 16 * 1024 * 1024
+                  t.start()
+              }
+
+              func respring() {
+                  show_respring = true
+              }
+
+              func clear() {
+                  lock.lock()
+                  pending = ""
+                  lock.unlock()
+                  log = ""
+              }
+          }
+          NKEOF
 
       - name: Write ContentView
         run: |
-          python3 <<'PYEOF'
-          import os, textwrap
-          D = textwrap.dedent
+          cat > natsuk1/Views/ContentView.swift <<'NKEOF'
+          import SwiftUI
+          import UIKit
 
-          def w(path, content):
-              d = os.path.dirname(path)
-              if d:
-                  os.makedirs(d, exist_ok=True)
-              with open(path, "w") as f:
-                  f.write(content)
+          struct ContentView: View {
+              @EnvironmentObject var state: AppState
 
-          w("natsuk1/Views/ContentView.swift", D(r"""
-              import SwiftUI
-              import UIKit
+              @State private var show_settings: Bool = false
+              @State private var show_device: Bool = false
 
-              struct ContentView: View {
-                  @EnvironmentObject var state: AppState
-
-                  @State private var show_settings: Bool = false
-                  @State private var show_device: Bool = false
-
-                  var body: some View {
-                      NavigationStack {
-                          List {
-                              Section {
-                                  Button {
-                                      state.run()
-                                  } label: {
-                                      HStack(spacing: 10) {
-                                          Image(systemName: "bolt.fill")
-                                              .foregroundStyle(.secondary)
-                                              .frame(width: 20)
-                                          Text(state.t("Run Exploit", "Запустить эксплойт"))
-                                              .foregroundStyle(.primary)
-                                          Spacer(minLength: 8)
-                                          if state.running {
-                                              ProgressView().scaleEffect(0.8)
-                                          }
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section {
+                              Button {
+                                  state.run()
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "bolt.fill")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text(state.t("Run Exploit", "Запустить эксплойт"))
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                      if state.running {
+                                          ProgressView().scaleEffect(0.8)
                                       }
-                                      .contentShape(Rectangle())
                                   }
-                                  .buttonStyle(.plain)
-                                  .disabled(state.running)
-                              } header: {
-                                  Label(state.t("Actions", "Действия"), systemImage: "play.circle")
-                              } footer: {
-                                  Text(state.t("Runs kernel exploit, prints offsets and reference data.",
-                                               "Запускает эксплойт, выводит оффсеты и справочные данные."))
+                                  .contentShape(Rectangle())
                               }
-
-                              Section {
-                                  HStack {
-                                      Text(state.t("Status", "Статус"))
-                                      Spacer()
-                                      Circle()
-                                          .fill(state.status.color)
-                                          .frame(width: 8, height: 8)
-                                          .shadow(color: state.status.color.opacity(0.7), radius: 3)
-                                  }
-
-                                  Button {
-                                      show_device = true
-                                  } label: {
-                                      HStack(spacing: 8) {
-                                          Text(state.t("Device", "Устройство"))
-                                              .foregroundColor(.primary)
-                                          Spacer(minLength: 8)
-                                          Text(DeviceName.full())
-                                              .font(.system(size: 13, design: .monospaced))
-                                              .foregroundColor(.secondary)
-                                              .lineLimit(1)
-                                              .minimumScaleFactor(0.7)
-                                          Image(systemName: "chevron.right")
-                                              .font(.system(size: 13, weight: .semibold))
-                                              .foregroundStyle(Color(UIColor.tertiaryLabel))
-                                      }
-                                      .contentShape(Rectangle())
-                                  }
-                                  .buttonStyle(.plain)
-                              } header: {
-                                  Label(state.t("Runtime", "Состояние"), systemImage: "waveform.path.ecg")
-                              }
-
-                              Section {
-                                  LogView()
-                                      .environmentObject(state)
-                                      .terminalPlatter()
-                                      .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                                      .listRowBackground(Color.clear)
-                              } header: {
-                                  Label(state.t("Logs", "Логи"), systemImage: "apple.terminal")
-                              }
+                              .buttonStyle(.plain)
+                              .disabled(state.running)
+                          } header: {
+                              Label(state.t("Actions", "Действия"), systemImage: "play.circle")
+                          } footer: {
+                              Text(state.t("Runs kernel exploit, prints offsets and reference data.",
+                                           "Запускает эксплойт, выводит оффсеты и справочные данные."))
                           }
-                          .listStyle(.insetGrouped)
-                          .scrollContentBackground(.hidden)
-                          .background(Color.black)
-                          .navigationTitle("natsuk1")
-                          .navigationBarTitleDisplayMode(.inline)
-                          .toolbar {
-                              ToolbarItem(placement: .navigationBarTrailing) {
-                                  Button {
-                                      show_settings = true
-                                  } label: {
-                                      Image(systemName: "gear")
+
+                          Section {
+                              HStack {
+                                  Text(state.t("Status", "Статус"))
+                                  Spacer()
+                                  Circle()
+                                      .fill(state.status.color)
+                                      .frame(width: 8, height: 8)
+                                      .shadow(color: state.status.color.opacity(0.7), radius: 3)
+                              }
+
+                              Button {
+                                  show_device = true
+                              } label: {
+                                  HStack(spacing: 8) {
+                                      Text(state.t("Device", "Устройство"))
+                                          .foregroundColor(.primary)
+                                      Spacer(minLength: 8)
+                                      Text(DeviceName.full())
+                                          .font(.system(size: 13, design: .monospaced))
+                                          .foregroundColor(.secondary)
+                                          .lineLimit(1)
+                                          .minimumScaleFactor(0.7)
+                                      Image(systemName: "chevron.right")
+                                          .font(.system(size: 13, weight: .semibold))
                                           .foregroundStyle(Color(UIColor.tertiaryLabel))
                                   }
-                                  .buttonStyle(.plain)
+                                  .contentShape(Rectangle())
                               }
+                              .buttonStyle(.plain)
+                          } header: {
+                              Label(state.t("Runtime", "Состояние"), systemImage: "waveform.path.ecg")
+                          }
+
+                          Section {
+                              LogView()
+                                  .environmentObject(state)
+                                  .terminalPlatter()
+                                  .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                                  .listRowBackground(Color.clear)
+                          } header: {
+                              Label(state.t("Logs", "Логи"), systemImage: "apple.terminal")
                           }
                       }
-                      .background(Color.black.ignoresSafeArea())
-                      .sheet(isPresented: $show_settings) {
-                          SettingsView()
-                              .environmentObject(state)
-                              .presentationBackground(Color.black)
-                      }
-                      .sheet(isPresented: $show_device) {
-                          DeviceInfoView()
-                              .presentationBackground(Color.black)
-                      }
-                  }
-              }
-
-              struct LogView: View {
-                  @EnvironmentObject var state: AppState
-
-                  var body: some View {
-                      ScrollViewReader { proxy in
-                          ScrollView(showsIndicators: false) {
-                              VStack(alignment: .leading, spacing: 0) {
-                                  Text(state.log.isEmpty ? "Awaiting execution." : state.log)
-                                      .font(.system(size: 10, design: .monospaced))
-                                      .multilineTextAlignment(.leading)
-                                      .foregroundColor(state.log.isEmpty ? .secondary : .primary)
-                                      .frame(maxWidth: .infinity, alignment: .leading)
-
-                                  Spacer(minLength: 0)
-                                      .id(0)
-                              }
-                              .frame(maxWidth: .infinity, minHeight: 240, alignment: .topLeading)
-                              .contentShape(Rectangle())
-                          }
-                          .tint(Color(UIColor.systemGray))
-                          .contextMenu {
+                      .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .navigationTitle("natsuk1")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarTrailing) {
                               Button {
-                                  UIPasteboard.general.string = state.log
+                                  show_settings = true
                               } label: {
-                                  Label("Copy Output", systemImage: "doc.on.doc")
+                                  Image(systemName: "gear")
+                                      .foregroundStyle(Color(UIColor.tertiaryLabel))
                               }
-
-                              Button(role: .destructive) {
-                                  state.clear()
-                              } label: {
-                                  Label("Clear", systemImage: "trash")
-                              }
+                              .buttonStyle(.plain)
                           }
-                          .onChange(of: state.log) { _, _ in
-                              withAnimation(.linear(duration: 0.05)) {
-                                  proxy.scrollTo(0, anchor: .bottom)
-                              }
+                      }
+                  }
+                  .background(Color.black.ignoresSafeArea())
+                  .sheet(isPresented: $show_settings) {
+                      SettingsView()
+                          .environmentObject(state)
+                          .presentationBackground(Color.black)
+                  }
+                  .sheet(isPresented: $show_device) {
+                      DeviceInfoView()
+                          .presentationBackground(Color.black)
+                  }
+              }
+          }
+
+          struct LogView: View {
+              @EnvironmentObject var state: AppState
+
+              var body: some View {
+                  ScrollViewReader { proxy in
+                      ScrollView(showsIndicators: false) {
+                          VStack(alignment: .leading, spacing: 0) {
+                              Text(state.log.isEmpty ? "Awaiting execution." : state.log)
+                                  .font(.system(size: 10, design: .monospaced))
+                                  .multilineTextAlignment(.leading)
+                                  .foregroundColor(state.log.isEmpty ? .secondary : .primary)
+                                  .frame(maxWidth: .infinity, alignment: .leading)
+
+                              Spacer(minLength: 0)
+                                  .id(0)
+                          }
+                          .frame(maxWidth: .infinity, minHeight: 240, alignment: .topLeading)
+                          .contentShape(Rectangle())
+                      }
+                      .tint(Color(UIColor.systemGray))
+                      .contextMenu {
+                          Button {
+                              UIPasteboard.general.string = state.log
+                          } label: {
+                              Label("Copy Output", systemImage: "doc.on.doc")
+                          }
+
+                          Button(role: .destructive) {
+                              state.clear()
+                          } label: {
+                              Label("Clear", systemImage: "trash")
+                          }
+                      }
+                      .onChange(of: state.log) { _, _ in
+                          withAnimation(.linear(duration: 0.05)) {
+                              proxy.scrollTo(0, anchor: .bottom)
                           }
                       }
                   }
               }
+          }
 
-              private extension View {
-                  func terminalPlatter() -> some View {
-                      self
-                          .frame(maxWidth: .infinity)
-                          .frame(minHeight: 180, idealHeight: 260, maxHeight: 400)
-                          .padding(10)
-                          .background(Color(UIColor.secondarySystemGroupedBackground))
-                          .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                  }
+          private extension View {
+              func terminalPlatter() -> some View {
+                  self
+                      .frame(maxWidth: .infinity)
+                      .frame(minHeight: 180, idealHeight: 260, maxHeight: 400)
+                      .padding(10)
+                      .background(Color(white: 0.11))
+                      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
               }
-              """))
-
-          print("ContentView OK")
-          PYEOF
+          }
+          NKEOF
 
       - name: Write SettingsView
         run: |
-          python3 <<'PYEOF'
-          import os, textwrap
-          D = textwrap.dedent
+          cat > natsuk1/Views/SettingsView.swift <<'NKEOF'
+          import SwiftUI
+          import UIKit
 
-          def w(path, content):
-              d = os.path.dirname(path)
-              if d:
-                  os.makedirs(d, exist_ok=True)
-              with open(path, "w") as f:
-                  f.write(content)
+          struct SettingsView: View {
+              @Environment(\.dismiss) private var dismiss
+              @EnvironmentObject var state: AppState
+              @EnvironmentObject var offsets: OffsetsStore
 
-          w("natsuk1/Views/SettingsView.swift", D(r"""
-              import SwiftUI
-              import UIKit
+              @AppStorage("auto_run")   private var auto_run: Bool = false
+              @AppStorage("verbose")    private var verbose: Bool = true
+              @AppStorage("keep_alive_audio")    private var keep_alive_audio: Bool = false
+              @AppStorage("keep_alive_location") private var keep_alive_location: Bool = false
 
-              struct SettingsView: View {
-                  @Environment(\.dismiss) private var dismiss
-                  @EnvironmentObject var state: AppState
-                  @EnvironmentObject var offsets: OffsetsStore
-
-                  @AppStorage("auto_run")   private var auto_run: Bool = false
-                  @AppStorage("verbose")    private var verbose: Bool = true
-                  @AppStorage("keep_alive_audio")    private var keep_alive_audio: Bool = false
-                  @AppStorage("keep_alive_location") private var keep_alive_location: Bool = false
-
-                  private var appName: String {
-                      Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
-                          ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
-                          ?? "natsuk1"
-                  }
-
-                  private var version: String {
-                      Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-                  }
-
-                  private var appIcon: UIImage? {
-                      if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
-                         let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
-                         let files = primary["CFBundleIconFiles"] as? [String],
-                         let last = files.last {
-                          return UIImage(named: last)
-                      }
-                      return UIImage(named: "AppIcon")
-                  }
-
-                  private var activeVersionLabel: String {
-                      guard let v = OffsetsStore.activeVersion else { return "unknown" }
-                      return "\(v.device) / iOS \(v.ios) (\(v.build))"
-                  }
-
-                  var body: some View {
-                      NavigationStack {
-                          List {
-                              Section {
-                                  HStack(spacing: 14) {
-                                      Group {
-                                          if let icon = appIcon {
-                                              Image(uiImage: icon)
-                                                  .resizable()
-                                                  .aspectRatio(contentMode: .fill)
-                                          } else {
-                                              ZStack {
-                                                  LinearGradient(
-                                                      colors: [
-                                                          Color(red: 0.65, green: 0.30, blue: 0.90),
-                                                          Color(red: 0.30, green: 0.65, blue: 0.95)
-                                                      ],
-                                                      startPoint: .topLeading,
-                                                      endPoint: .bottomTrailing
-                                                  )
-                                                  Image(systemName: "bolt.fill")
-                                                      .font(.system(size: 26, weight: .semibold))
-                                                      .foregroundStyle(.white)
-                                              }
-                                          }
-                                      }
-                                      .frame(width: 56, height: 56)
-                                      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                                      VStack(alignment: .leading, spacing: 2) {
-                                          Text(appName)
-                                              .font(.title3)
-                                              .fontWeight(.semibold)
-                                          Text("Version \(version)")
-                                              .font(.subheadline)
-                                              .foregroundColor(.secondary)
-                                      }
-                                      Spacer(minLength: 8)
-                                  }
-                                  .padding(.vertical, 4)
-
-                                  NavigationLink {
-                                      AboutView().environmentObject(state)
-                                  } label: {
-                                      HStack(spacing: 10) {
-                                          Image(systemName: "info.circle")
-                                              .foregroundStyle(.secondary)
-                                              .frame(width: 20)
-                                          Text("Credits")
-                                              .foregroundStyle(.primary)
-                                          Spacer(minLength: 8)
-                                      }
-                                      .contentShape(Rectangle())
-                                  }
-                              } header: {
-                                  Label("About", systemImage: "info.circle")
-                              }
-
-                              Section {
-                                  HStack(spacing: 10) {
-                                      Image(systemName: "cpu")
-                                          .foregroundStyle(.secondary)
-                                          .frame(width: 20)
-                                      Text("Offsets")
-                                          .foregroundStyle(.secondary)
-                                      Spacer(minLength: 8)
-                                      Text(activeVersionLabel)
-                                          .font(.system(size: 12, design: .monospaced))
-                                          .foregroundColor(.secondary)
-                                          .lineLimit(1)
-                                          .truncationMode(.middle)
-                                  }
-                                  .padding(.vertical, 2)
-
-                                  NavigationLink {
-                                      OffsetsView().environmentObject(offsets)
-                                  } label: {
-                                      HStack(spacing: 10) {
-                                          Image(systemName: "list.number")
-                                              .foregroundStyle(.secondary)
-                                              .frame(width: 20)
-                                          Text("Modify Offsets")
-                                              .foregroundStyle(.primary)
-                                          Spacer(minLength: 8)
-                                          Text("\(offsets.filledCount())/\(offsets.totalCount())")
-                                              .font(.system(size: 13, design: .monospaced))
-                                              .foregroundColor(.secondary)
-                                      }
-                                      .contentShape(Rectangle())
-                                  }
-                              } header: {
-                                  Label("Exploit", systemImage: "cpu")
-                              }
-
-                              Section {
-                                  Toggle(isOn: $keep_alive_audio) {
-                                      VStack(alignment: .leading, spacing: 2) {
-                                          Text("Silent Audio")
-                                          Text("Plays inaudible audio so iOS keeps the app running.")
-                                              .font(.caption)
-                                              .foregroundColor(.secondary)
-                                      }
-                                  }
-
-                                  Toggle(isOn: $keep_alive_location) {
-                                      VStack(alignment: .leading, spacing: 2) {
-                                          Text("Background Location")
-                                          Text("Uses low-accuracy location to stay alive when an activity needs it.")
-                                              .font(.caption)
-                                              .foregroundColor(.secondary)
-                                      }
-                                  }
-                              } header: {
-                                  Label("Background Keep-Alive", systemImage: "waveform.circle")
-                              }
-
-                              Section {
-                                  Toggle("Auto Run on Launch", isOn: $auto_run)
-                                  Toggle("Verbose Output", isOn: $verbose)
-                              } header: {
-                                  Label("Options", systemImage: "gearshape")
-                              }
-
-                              Section {
-                                  Button {
-                                      state.respring()
-                                  } label: {
-                                      HStack(spacing: 10) {
-                                          Image(systemName: "arrow.clockwise")
-                                              .foregroundStyle(.secondary)
-                                              .frame(width: 20)
-                                          Text("Respring")
-                                              .foregroundStyle(.primary)
-                                          Spacer(minLength: 8)
-                                      }
-                                      .contentShape(Rectangle())
-                                  }
-                                  .buttonStyle(.plain)
-
-                                  Button {
-                                      state.clear()
-                                  } label: {
-                                      HStack(spacing: 10) {
-                                          Image(systemName: "trash")
-                                              .foregroundStyle(.secondary)
-                                              .frame(width: 20)
-                                          Text("Clear Log")
-                                              .foregroundStyle(.primary)
-                                          Spacer(minLength: 8)
-                                      }
-                                      .contentShape(Rectangle())
-                                  }
-                                  .buttonStyle(.plain)
-                              } header: {
-                                  Label("Tools", systemImage: "wrench.and.screwdriver")
-                              }
-                          }
-                          .listStyle(.insetGrouped)
-                          .scrollContentBackground(.hidden)
-                          .background(Color.black)
-                          .navigationTitle("Settings")
-                          .navigationBarTitleDisplayMode(.large)
-                          .toolbar {
-                              ToolbarItem(placement: .navigationBarTrailing) {
-                                  Button("Done") { dismiss() }
-                                      .fontWeight(.semibold)
-                              }
-                          }
-                      }
-                      .background(Color.black.ignoresSafeArea())
-                  }
+              private var appName: String {
+                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+                      ?? "natsuk1"
               }
-              """))
 
-          print("SettingsView OK")
-          PYEOF
+              private var version: String {
+                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+              }
 
-      - name: Write AboutView
-        run: |
-          python3 <<'PYEOF'
-          import os, textwrap
-          D = textwrap.dedent
-
-          def w(path, content):
-              d = os.path.dirname(path)
-              if d:
-                  os.makedirs(d, exist_ok=True)
-              with open(path, "w") as f:
-                  f.write(content)
-
-          w("natsuk1/Views/AboutView.swift", D(r"""
-              import SwiftUI
-              import UIKit
-
-              struct AboutView: View {
-                  @Environment(\.openURL) private var openURL
-                  @EnvironmentObject var state: AppState
-
-                  private let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")!
-
-                  private var appName: String {
-                      Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
-                          ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
-                          ?? "natsuk1"
+              private var appIcon: UIImage? {
+                  if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+                     let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+                     let files = primary["CFBundleIconFiles"] as? [String],
+                     let last = files.last {
+                      return UIImage(named: last)
                   }
+                  return UIImage(named: "AppIcon")
+              }
 
-                  private var version: String {
-                      Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-                  }
+              private var activeVersionLabel: String {
+                  guard let v = OffsetsStore.activeVersion else { return "unknown" }
+                  return "\(v.device) / iOS \(v.ios) (\(v.build))"
+              }
 
-                  private var build: String {
-                      Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-                  }
-
-                  var body: some View {
+              var body: some View {
+                  NavigationStack {
                       List {
                           Section {
-                              VStack(alignment: .leading, spacing: 6) {
-                                  Text(appName)
-                                      .font(.title2)
-                                      .fontWeight(.semibold)
+                              HStack(spacing: 14) {
+                                  Group {
+                                      if let icon = appIcon {
+                                          Image(uiImage: icon)
+                                              .resizable()
+                                              .aspectRatio(contentMode: .fill)
+                                      } else {
+                                          ZStack {
+                                              LinearGradient(
+                                                  colors: [
+                                                      Color(red: 0.65, green: 0.30, blue: 0.90),
+                                                      Color(red: 0.30, green: 0.65, blue: 0.95)
+                                                  ],
+                                                  startPoint: .topLeading,
+                                                  endPoint: .bottomTrailing
+                                              )
+                                              Image(systemName: "bolt.fill")
+                                                  .font(.system(size: 26, weight: .semibold))
+                                                  .foregroundStyle(.white)
+                                          }
+                                      }
+                                  }
+                                  .frame(width: 56, height: 56)
+                                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                                  Text("Version \(version) (\(build))")
-                                      .font(.subheadline)
-                                      .foregroundColor(.secondary)
-
-                                  Text("Research project iOS.")
-                                      .font(.footnote)
-                                      .foregroundColor(.secondary)
-                                      .fixedSize(horizontal: false, vertical: true)
-                                      .padding(.top, 2)
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text(appName)
+                                          .font(.title3)
+                                          .fontWeight(.semibold)
+                                      Text("Version \(version)")
+                                          .font(.subheadline)
+                                          .foregroundColor(.secondary)
+                                  }
+                                  Spacer(minLength: 8)
                               }
-                              .padding(.vertical, 6)
-                          }
+                              .padding(.vertical, 4)
 
-                          Section {
-                              linkRow("Source Repository", url: repoURL)
-                              linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
-                          } header: {
-                              Text("Open Source")
-                          }
-
-                          Section {
-                              linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
-                          } header: {
-                              Text("Community")
-                          }
-
-                          Section {
                               NavigationLink {
-                                  AcknowledgementsView().environmentObject(state)
+                                  AboutView().environmentObject(state)
                               } label: {
-                                  HStack {
-                                      Text("Acknowledgements")
-                                          .foregroundColor(.primary)
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "info.circle")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Credits")
+                                          .foregroundStyle(.primary)
                                       Spacer(minLength: 8)
                                   }
                                   .contentShape(Rectangle())
                               }
+                          } header: {
+                              Label("About", systemImage: "info.circle")
                           }
 
                           Section {
+                              HStack(spacing: 10) {
+                                  Image(systemName: "cpu")
+                                      .foregroundStyle(.secondary)
+                                      .frame(width: 20)
+                                  Text("Offsets")
+                                      .foregroundStyle(.secondary)
+                                  Spacer(minLength: 8)
+                                  Text(activeVersionLabel)
+                                      .font(.system(size: 12, design: .monospaced))
+                                      .foregroundColor(.secondary)
+                                      .lineLimit(1)
+                                      .truncationMode(.middle)
+                              }
+                              .padding(.vertical, 2)
+
+                              NavigationLink {
+                                  OffsetsView().environmentObject(offsets)
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "list.number")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Modify Offsets")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                      Text("\(offsets.filledCount())/\(offsets.totalCount())")
+                                          .font(.system(size: 13, design: .monospaced))
+                                          .foregroundColor(.secondary)
+                                  }
+                                  .contentShape(Rectangle())
+                              }
                           } header: {
-                              Text("Disclaimer")
-                          } footer: {
-                              Text("Independent research project. Not affiliated with Apple Inc. Provided as-is.")
-                                  .font(.footnote)
-                                  .foregroundColor(.secondary)
+                              Label("Exploit", systemImage: "cpu")
+                          }
+
+                          Section {
+                              Toggle(isOn: $keep_alive_audio) {
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text("Silent Audio")
+                                      Text("Plays inaudible audio so iOS keeps the app running.")
+                                          .font(.caption)
+                                          .foregroundColor(.secondary)
+                                  }
+                              }
+
+                              Toggle(isOn: $keep_alive_location) {
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text("Background Location")
+                                      Text("Uses low-accuracy location to stay alive when an activity needs it.")
+                                          .font(.caption)
+                                          .foregroundColor(.secondary)
+                                  }
+                              }
+                          } header: {
+                              Label("Background Keep-Alive", systemImage: "waveform.circle")
+                          }
+
+                          Section {
+                              Toggle("Auto Run on Launch", isOn: $auto_run)
+                              Toggle("Verbose Output", isOn: $verbose)
+                          } header: {
+                              Label("Options", systemImage: "gearshape")
+                          }
+
+                          Section {
+                              Button {
+                                  state.respring()
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "arrow.clockwise")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Respring")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                  }
+                                  .contentShape(Rectangle())
+                              }
+                              .buttonStyle(.plain)
+
+                              Button {
+                                  state.clear()
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "trash")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Clear Log")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                  }
+                                  .contentShape(Rectangle())
+                              }
+                              .buttonStyle(.plain)
+                          } header: {
+                              Label("Tools", systemImage: "wrench.and.screwdriver")
                           }
                       }
                       .listStyle(.insetGrouped)
                       .scrollContentBackground(.hidden)
-                      .background(Color.black)
-                      .navigationTitle("About")
-                      .navigationBarTitleDisplayMode(.inline)
-                  }
-
-                  private func linkRow(_ title: String, url: URL) -> some View {
-                      Button {
-                          openURL(url)
-                      } label: {
-                          HStack(alignment: .top, spacing: 8) {
-                              Text(title)
-                                  .foregroundStyle(.tint)
-                                  .font(.body)
-                                  .fontWeight(.medium)
-                              Spacer(minLength: 8)
-                              Image(systemName: "link")
-                                  .font(.system(size: 14, weight: .semibold))
-                                  .foregroundStyle(.tint)
+                      .navigationTitle("Settings")
+                      .navigationBarTitleDisplayMode(.large)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Done") { dismiss() }
+                                  .fontWeight(.semibold)
                           }
-                          .padding(.vertical, 2)
-                          .contentShape(Rectangle())
                       }
-                      .buttonStyle(.plain)
+                  }
+                  .background(Color.black.ignoresSafeArea())
+              }
+          }
+          NKEOF
+
+      - name: Write AboutView
+        run: |
+          cat > natsuk1/Views/AboutView.swift <<'NKEOF'
+          import SwiftUI
+          import UIKit
+
+          struct AboutView: View {
+              @Environment(\.openURL) private var openURL
+              @EnvironmentObject var state: AppState
+
+              private let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")!
+
+              private var appName: String {
+                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+                      ?? "natsuk1"
+              }
+
+              private var version: String {
+                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+              }
+
+              private var build: String {
+                  Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+              }
+
+              var body: some View {
+                  List {
+                      Section {
+                          VStack(alignment: .leading, spacing: 6) {
+                              Text(appName)
+                                  .font(.title2)
+                                  .fontWeight(.semibold)
+
+                              Text("Version \(version) (\(build))")
+                                  .font(.subheadline)
+                                  .foregroundColor(.secondary)
+
+                              Text("Research project iOS.")
+                                  .font(.footnote)
+                                  .foregroundColor(.secondary)
+                                  .fixedSize(horizontal: false, vertical: true)
+                                  .padding(.top, 2)
+                          }
+                          .padding(.vertical, 6)
+                      }
+
+                      Section {
+                          linkRow("Source Repository", url: repoURL)
+                          linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
+                      } header: {
+                          Text("Open Source")
+                      }
+
+                      Section {
+                          linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
+                      } header: {
+                          Text("Community")
+                      }
+
+                      Section {
+                          NavigationLink {
+                              AcknowledgementsView().environmentObject(state)
+                          } label: {
+                              HStack {
+                                  Text("Acknowledgements")
+                                      .foregroundColor(.primary)
+                                  Spacer(minLength: 8)
+                              }
+                              .contentShape(Rectangle())
+                          }
+                      }
+
+                      Section {
+                      } header: {
+                          Text("Disclaimer")
+                      } footer: {
+                          Text("Independent research project. Not affiliated with Apple Inc. Provided as-is.")
+                              .font(.footnote)
+                              .foregroundColor(.secondary)
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .navigationTitle("About")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .background(Color.black.ignoresSafeArea())
+              }
+
+              private func linkRow(_ title: String, url: URL) -> some View {
+                  Button {
+                      openURL(url)
+                  } label: {
+                      HStack(alignment: .top, spacing: 8) {
+                          Text(title)
+                              .foregroundStyle(.tint)
+                              .font(.body)
+                              .fontWeight(.medium)
+                          Spacer(minLength: 8)
+                          Image(systemName: "link")
+                              .font(.system(size: 14, weight: .semibold))
+                              .foregroundStyle(.tint)
+                      }
+                      .padding(.vertical, 2)
+                      .contentShape(Rectangle())
+                  }
+                  .buttonStyle(.plain)
+              }
+          }
+
+          struct AcknowledgementsView: View {
+              @Environment(\.openURL) private var openURL
+              @EnvironmentObject var state: AppState
+
+              private struct Entry {
+                  let name: String
+                  let license: String
+                  let url: URL
+              }
+
+              private let entries: [Entry] = [
+                  Entry(name: "XcodeGen", license: "MIT",
+                        url: URL(string: "https://github.com/yonaskolb/XcodeGen")!),
+                  Entry(name: "ldid", license: "GPL-3.0",
+                        url: URL(string: "https://github.com/ProcursusTeam/ldid")!),
+                  Entry(name: "libplist", license: "LGPL-2.1",
+                        url: URL(string: "https://github.com/libimobiledevice/libplist")!),
+              ]
+
+              var body: some View {
+                  List {
+                      Section {
+                          ForEach(entries, id: \.name) { entry in
+                              Button {
+                                  openURL(entry.url)
+                              } label: {
+                                  HStack(alignment: .top, spacing: 8) {
+                                      Text(entry.name)
+                                          .foregroundStyle(.tint)
+                                          .font(.body)
+                                          .fontWeight(.medium)
+                                      Spacer(minLength: 8)
+                                      Text(entry.license)
+                                          .font(.system(.footnote, design: .monospaced))
+                                          .foregroundColor(.secondary)
+                                      Image(systemName: "link")
+                                          .font(.system(size: 14, weight: .semibold))
+                                          .foregroundStyle(.tint)
+                                  }
+                                  .padding(.vertical, 2)
+                                  .contentShape(Rectangle())
+                              }
+                              .buttonStyle(.plain)
+                          }
+                      } header: {
+                          Text("Libraries")
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .navigationTitle("Acknowledgements")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .background(Color.black.ignoresSafeArea())
+              }
+          }
+          NKEOF
+
+      - name: Write DeviceInfoView
+        run: |
+          cat > natsuk1/Views/DeviceInfoView.swift <<'NKEOF'
+          import SwiftUI
+          import UIKit
+
+          struct DeviceInfoView: View {
+              @Environment(\.dismiss) private var dismiss
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          row("Model", DeviceName.friendly())
+                          row("Identifier", machineID())
+                          row("Chip", DeviceName.chip())
+                          row("iOS", sysctlString("kern.osproductversion"))
+                          row("Build", sysctlString("kern.osversion"))
+                          row("RAM", ram())
+                          row("Architecture", arch())
+                          row("Locale", localeShort())
+                          row("Region", regionShort())
+                          row("Uptime", uptime())
+                      }
+                      .listStyle(.insetGrouped)
+                      .scrollContentBackground(.hidden)
+                      .navigationTitle("Device")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Done") { dismiss() }
+                          }
+                      }
+                  }
+                  .background(Color.black.ignoresSafeArea())
+              }
+
+              private func row(_ key: String, _ value: String) -> some View {
+                  HStack {
+                      Text(key)
+                      Spacer()
+                      Text(value)
+                          .font(.system(.body, design: .monospaced))
+                          .foregroundColor(.secondary)
+                          .lineLimit(1)
+                          .truncationMode(.middle)
                   }
               }
 
-              struct AcknowledgementsView: View {
-                  @Environment(\.openURL) private var openURL
-                  @EnvironmentObject var state: AppState
-
-                  private struct Entry {
-                      let name: String
-                      let license: String
-                      let url: URL
+              private func machineID() -> String {
+                  var sysinfo = utsname()
+                  uname(&sysinfo)
+                  return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
+                      guard let v = el.value as? Int8, v != 0 else { return id }
+                      return id + String(UnicodeScalar(UInt8(v)))
                   }
+              }
 
-                  private let entries: [Entry] = [
-                      Entry(name: "XcodeGen", license: "MIT",
-                            url: URL(string: "https://github.com/yonaskolb/XcodeGen")!),
-                      Entry(name: "ldid", license: "GPL-3.0",
-                            url: URL(string: "https://github.com/ProcursusTeam/ldid")!),
-                      Entry(name: "libplist", license: "LGPL-2.1",
-                            url: URL(string: "https://github.com/libimobiledevice/libplist")!),
-                  ]
+              private func sysctlString(_ name: String) -> String {
+                  var size = 0
+                  sysctlbyname(name, nil, &size, nil, 0)
+                  var buf = [CChar](repeating: 0, count: size)
+                  sysctlbyname(name, &buf, &size, nil, 0)
+                  let bytes = buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                  return String(decoding: bytes, as: UTF8.self)
+              }
 
-                  var body: some View {
-                      List {
+              private func ram() -> String {
+                  var size: UInt64 = 0
+                  var len = MemoryLayout<UInt64>.size
+                  if sysctlbyname("hw.memsize", &size, &len, nil, 0) != 0 { return "unknown" }
+                  return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .memory)
+              }
+
+              private func arch() -> String {
+                  #if arch(arm64)
+                  return "arm64"
+                  #else
+                  return "unknown"
+                  #endif
+              }
+
+              private func localeShort() -> String {
+                  Locale.current.identifier
+                      .split(separator: "_")
+                      .first
+                      .map(String.init)?
+                      .uppercased() ?? "—"
+              }
+
+              private func regionShort() -> String {
+                  let region = Locale.current.region?.identifier ?? ""
+                  return region.isEmpty ? "—" : region.uppercased()
+              }
+
+              private func uptime() -> String {
+                  let t = ProcessInfo.processInfo.systemUptime
+                  let h = Int(t) / 3600
+                  let m = (Int(t) % 3600) / 60
+                  return "\(h)h \(m)m"
+              }
+          }
+          NKEOF
+
+      - name: Write OffsetsView
+        run: |
+          cat > natsuk1/Views/OffsetsView.swift <<'NKEOF'
+          import SwiftUI
+          import UIKit
+
+          struct OffsetsView: View {
+              @EnvironmentObject var store: OffsetsStore
+              @State private var query = ""
+              @State private var editing: String? = nil
+              @State private var showResetAll = false
+              @State private var showExport = false
+
+              var body: some View {
+                  List {
+                      Section {
+                          HStack {
+                              Text("Filled")
+                              Spacer()
+                              Text("\(store.filledCount()) / \(store.totalCount())")
+                                  .font(.system(.body, design: .monospaced))
+                                  .foregroundColor(.secondary)
+                          }
+                      }
+
+                      ForEach(filteredGroups, id: \.title) { group in
                           Section {
-                              ForEach(entries, id: \.name) { entry in
+                              ForEach(group.items, id: \.self) { name in
                                   Button {
-                                      openURL(entry.url)
+                                      editing = name
                                   } label: {
-                                      HStack(alignment: .top, spacing: 8) {
-                                          Text(entry.name)
-                                              .foregroundStyle(.tint)
-                                              .font(.body)
-                                              .fontWeight(.medium)
-                                          Spacer(minLength: 8)
-                                          Text(entry.license)
-                                              .font(.system(.footnote, design: .monospaced))
-                                              .foregroundColor(.secondary)
-                                          Image(systemName: "link")
-                                              .font(.system(size: 14, weight: .semibold))
-                                              .foregroundStyle(.tint)
-                                      }
-                                      .padding(.vertical, 2)
-                                      .contentShape(Rectangle())
+                                      OffsetRow(name: name, value: store.value(for: name))
                                   }
                                   .buttonStyle(.plain)
                               }
                           } header: {
-                              Text("Libraries")
+                              Text(group.title)
                           }
                       }
-                      .listStyle(.insetGrouped)
-                      .scrollContentBackground(.hidden)
-                      .background(Color.black)
-                      .navigationTitle("Acknowledgements")
-                      .navigationBarTitleDisplayMode(.inline)
                   }
-              }
-              """))
-
-          print("AboutView OK")
-          PYEOF
-
-      - name: Write DeviceInfoView
-        run: |
-          python3 <<'PYEOF'
-          import os, textwrap
-          D = textwrap.dedent
-
-          def w(path, content):
-              d = os.path.dirname(path)
-              if d:
-                  os.makedirs(d, exist_ok=True)
-              with open(path, "w") as f:
-                  f.write(content)
-
-          w("natsuk1/Views/DeviceInfoView.swift", D(r"""
-              import SwiftUI
-              import UIKit
-
-              struct DeviceInfoView: View {
-                  @Environment(\.dismiss) private var dismiss
-
-                  var body: some View {
-                      NavigationStack {
-                          List {
-                              row("Model", DeviceName.friendly())
-                              row("Identifier", machineID())
-                              row("Chip", DeviceName.chip())
-                              row("iOS", sysctlString("kern.osproductversion"))
-                              row("Build", sysctlString("kern.osversion"))
-                              row("RAM", ram())
-                              row("Architecture", arch())
-                              row("Locale", localeShort())
-                              row("Region", regionShort())
-                              row("Uptime", uptime())
-                          }
-                          .listStyle(.insetGrouped)
-                          .scrollContentBackground(.hidden)
-                          .background(Color.black)
-                          .navigationTitle("Device")
-                          .navigationBarTitleDisplayMode(.inline)
-                          .toolbar {
-                              ToolbarItem(placement: .navigationBarTrailing) {
-                                  Button("Done") { dismiss() }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+                  .navigationTitle("Modify Offsets")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .toolbar {
+                      ToolbarItem(placement: .navigationBarTrailing) {
+                          Menu {
+                              Button { showExport = true } label: {
+                                  Label("Export JSON", systemImage: "square.and.arrow.up")
                               }
+                              Button(role: .destructive) { showResetAll = true } label: {
+                                  Label("Reset All", systemImage: "arrow.uturn.backward")
+                              }
+                          } label: {
+                              Image(systemName: "ellipsis.circle")
+                                  .foregroundStyle(Color(UIColor.tertiaryLabel))
                           }
                       }
-                      .background(Color.black.ignoresSafeArea())
                   }
-
-                  private func row(_ key: String, _ value: String) -> some View {
-                      HStack {
-                          Text(key)
-                          Spacer()
-                          Text(value)
-                              .font(.system(.body, design: .monospaced))
-                              .foregroundColor(.secondary)
-                              .lineLimit(1)
-                              .truncationMode(.middle)
-                      }
+                  .sheet(item: Binding(
+                      get: { editing.map { EditTarget(name: $0) } },
+                      set: { editing = $0?.name }
+                  )) { target in
+                      EditOffsetView(name: target.name)
+                          .environmentObject(store)
+                          .presentationBackground(Color.black)
                   }
-
-                  private func machineID() -> String {
-                      var sysinfo = utsname()
-                      uname(&sysinfo)
-                      return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
-                          guard let v = el.value as? Int8, v != 0 else { return id }
-                          return id + String(UnicodeScalar(UInt8(v)))
-                      }
+                  .sheet(isPresented: $showExport) {
+                      ExportOffsetsView()
+                          .environmentObject(store)
+                          .presentationBackground(Color.black)
                   }
-
-                  private func sysctlString(_ name: String) -> String {
-                      var size = 0
-                      sysctlbyname(name, nil, &size, nil, 0)
-                      var buf = [CChar](repeating: 0, count: size)
-                      sysctlbyname(name, &buf, &size, nil, 0)
-                      return String(cString: buf)
+                  .alert("Reset All Offsets?", isPresented: $showResetAll) {
+                      Button("Cancel", role: .cancel) {}
+                      Button("Reset", role: .destructive) { store.reset() }
+                  } message: {
+                      Text("All offsets will be set to built-in defaults.")
                   }
+                  .background(Color.black.ignoresSafeArea())
+              }
 
-                  private func ram() -> String {
-                      var size: UInt64 = 0
-                      var len = MemoryLayout<UInt64>.size
-                      if sysctlbyname("hw.memsize", &size, &len, nil, 0) != 0 { return "unknown" }
-                      return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .memory)
-                  }
-
-                  private func arch() -> String {
-                      #if arch(arm64)
-                      return "arm64"
-                      #else
-                      return "unknown"
-                      #endif
-                  }
-
-                  private func localeShort() -> String {
-                      Locale.current.identifier
-                          .split(separator: "_")
-                          .first
-                          .map(String.init)?
-                          .uppercased() ?? "—"
-                  }
-
-                  private func regionShort() -> String {
-                      let region = Locale.current.region?.identifier ?? ""
-                      return region.isEmpty ? "—" : region.uppercased()
-                  }
-
-                  private func uptime() -> String {
-                      let t = ProcessInfo.processInfo.systemUptime
-                      let h = Int(t) / 3600
-                      let m = (Int(t) % 3600) / 60
-                      return "\(h)h \(m)m"
+              private var filteredGroups: [OffsetsStore.Group] {
+                  if query.isEmpty { return OffsetsStore.groups }
+                  let q = query.lowercased()
+                  return OffsetsStore.groups.compactMap { g in
+                      let items = g.items.filter { $0.lowercased().contains(q) }
+                      if items.isEmpty { return nil }
+                      return OffsetsStore.Group(title: g.title, items: items)
                   }
               }
-              """))
+          }
 
-          print("DeviceInfoView OK")
-          PYEOF
+          struct EditTarget: Identifiable {
+              let name: String
+              var id: String { name }
+          }
 
-      - name: Write OffsetsView
-        run: |
-          python3 <<'PYEOF'
-          import os, textwrap
-          D = textwrap.dedent
+          struct OffsetRow: View {
+              let name: String
+              let value: String
 
-          def w(path, content):
-              d = os.path.dirname(path)
-              if d:
-                  os.makedirs(d, exist_ok=True)
-              with open(path, "w") as f:
-                  f.write(content)
+              private var valueColor: Color {
+                  value == "0x0" ? Color.secondary : Color.green
+              }
 
-          w("natsuk1/Views/OffsetsView.swift", D(r"""
-              import SwiftUI
-              import UIKit
+              var body: some View {
+                  HStack(alignment: .firstTextBaseline, spacing: 8) {
+                      Text(name)
+                          .foregroundStyle(Color.primary)
+                          .font(.system(size: 13, design: .monospaced))
+                          .lineLimit(2)
+                          .multilineTextAlignment(.leading)
+                      Spacer(minLength: 8)
+                      Text(value)
+                          .font(.system(size: 13, design: .monospaced))
+                          .foregroundColor(valueColor)
+                  }
+                  .padding(.vertical, 4)
+                  .contentShape(Rectangle())
+              }
+          }
 
-              struct OffsetsView: View {
-                  @EnvironmentObject var store: OffsetsStore
-                  @State private var query = ""
-                  @State private var editing: String? = nil
-                  @State private var showResetAll = false
-                  @State private var showExport = false
+          struct EditOffsetView: View {
+              @EnvironmentObject var store: OffsetsStore
+              @Environment(\.dismiss) private var dismiss
+              let name: String
 
-                  var body: some View {
-                      List {
+              @State private var text: String = ""
+              @State private var showError = false
+              @State private var errorMsg = ""
+
+              var body: some View {
+                  NavigationStack {
+                      Form {
                           Section {
-                              HStack {
-                                  Text("Filled")
-                                  Spacer()
-                                  Text("\(store.filledCount()) / \(store.totalCount())")
-                                      .font(.system(.body, design: .monospaced))
-                                      .foregroundColor(.secondary)
-                              }
+                              Text(name)
+                                  .font(.system(size: 12, design: .monospaced))
+                                  .foregroundStyle(.secondary)
+                          } header: {
+                              Text("Offset")
                           }
 
-                          ForEach(filteredGroups, id: \.title) { group in
-                              Section {
-                                  ForEach(group.items, id: \.self) { name in
-                                      Button {
-                                          editing = name
-                                      } label: {
-                                          OffsetRow(name: name, value: store.value(for: name))
-                                      }
-                                      .buttonStyle(.plain)
+                          Section {
+                              TextField("Value", text: $text)
+                                  .font(.system(size: 14, design: .monospaced))
+                                  .autocorrectionDisabled()
+                                  .textInputAutocapitalization(.never)
+                                  .keyboardType(.asciiCapable)
+                          } header: {
+                              Text("Value")
+                          } footer: {
+                              Text("Hex (0x...) or decimal. Default: \(OffsetsStore.defaults[name] ?? "0x0")")
+                          }
+
+                          Section {
+                              Button {
+                                  store.resetOne(name)
+                                  dismiss()
+                              } label: {
+                                  HStack {
+                                      Image(systemName: "arrow.uturn.backward")
+                                      Text("Restore Default")
                                   }
-                              } header: {
-                                  Text(group.title)
                               }
                           }
                       }
-                      .listStyle(.insetGrouped)
                       .scrollContentBackground(.hidden)
-                      .background(Color.black)
-                      .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
-                      .navigationTitle("Modify Offsets")
+                      .navigationTitle("Edit")
                       .navigationBarTitleDisplayMode(.inline)
                       .toolbar {
+                          ToolbarItem(placement: .navigationBarLeading) {
+                              Button("Cancel") { dismiss() }
+                          }
                           ToolbarItem(placement: .navigationBarTrailing) {
-                              Menu {
-                                  Button { showExport = true } label: {
-                                      Label("Export JSON", systemImage: "square.and.arrow.up")
-                                  }
-                                  Button(role: .destructive) { showResetAll = true } label: {
-                                      Label("Reset All", systemImage: "arrow.uturn.backward")
+                              Button("Save") { save() }.fontWeight(.semibold)
+                          }
+                      }
+                      .alert("Invalid Value", isPresented: $showError) {
+                          Button("OK", role: .cancel) {}
+                      } message: {
+                          Text(errorMsg)
+                      }
+                      .onAppear { text = store.value(for: name) }
+                  }
+                  .background(Color.black.ignoresSafeArea())
+              }
+
+              private func save() {
+                  let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                  if trimmed.isEmpty {
+                      errorMsg = "Value cannot be empty."; showError = true; return
+                  }
+                  if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+                      let hexPart = String(trimmed.dropFirst(2))
+                      if UInt64(hexPart, radix: 16) == nil {
+                          errorMsg = "Invalid hex value."; showError = true; return
+                      }
+                  } else if UInt64(trimmed) == nil {
+                      errorMsg = "Invalid numeric value."; showError = true; return
+                  }
+                  store.update(name, value: trimmed)
+                  dismiss()
+              }
+          }
+
+          struct ExportOffsetsView: View {
+              @EnvironmentObject var store: OffsetsStore
+              @Environment(\.dismiss) private var dismiss
+              @State private var copied = false
+
+              private var json: String {
+                  let sorted = store.values.sorted { $0.key < $1.key }
+                  let dict = Dictionary(uniqueKeysWithValues: sorted)
+                  if let data = try? JSONSerialization.data(
+                      withJSONObject: dict,
+                      options: [.prettyPrinted, .sortedKeys]
+                  ), let str = String(data: data, encoding: .utf8) {
+                      return str
+                  }
+                  return "{}"
+              }
+
+              var body: some View {
+                  NavigationStack {
+                      ScrollView {
+                          Text(json)
+                              .font(.system(size: 11, design: .monospaced))
+                              .padding()
+                              .frame(maxWidth: .infinity, alignment: .leading)
+                              .textSelection(.enabled)
+                      }
+                      .navigationTitle("Export")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarLeading) {
+                              Button("Done") { dismiss() }
+                          }
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button {
+                                  UIPasteboard.general.string = json
+                                  copied = true
+                                  DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                      copied = false
                                   }
                               } label: {
-                                  Image(systemName: "ellipsis.circle")
-                                      .foregroundStyle(Color(UIColor.tertiaryLabel))
+                                  Image(systemName: copied ? "checkmark" : "doc.on.doc")
                               }
                           }
                       }
-                      .sheet(item: Binding(
-                          get: { editing.map { EditTarget(name: $0) } },
-                          set: { editing = $0?.name }
-                      )) { target in
-                          EditOffsetView(name: target.name)
-                              .environmentObject(store)
-                              .presentationBackground(Color.black)
-                      }
-                      .sheet(isPresented: $showExport) {
-                          ExportOffsetsView()
-                              .environmentObject(store)
-                              .presentationBackground(Color.black)
-                      }
-                      .alert("Reset All Offsets?", isPresented: $showResetAll) {
-                          Button("Cancel", role: .cancel) {}
-                          Button("Reset", role: .destructive) { store.reset() }
-                      } message: {
-                          Text("All offsets will be set to built-in defaults.")
-                      }
-                      .background(Color.black.ignoresSafeArea())
                   }
-
-                  private var filteredGroups: [OffsetsStore.Group] {
-                      if query.isEmpty { return OffsetsStore.groups }
-                      let q = query.lowercased()
-                      return OffsetsStore.groups.compactMap { g in
-                          let items = g.items.filter { $0.lowercased().contains(q) }
-                          if items.isEmpty { return nil }
-                          return OffsetsStore.Group(title: g.title, items: items)
-                      }
-                  }
+                  .background(Color.black.ignoresSafeArea())
               }
+          }
+          NKEOF
 
-              struct EditTarget: Identifiable {
-                  let name: String
-                  var id: String { name }
-              }
-
-              struct OffsetRow: View {
-                  let name: String
-                  let value: String
-
-                  private var valueColor: Color {
-                      value == "0x0" ? Color.secondary : Color.green
-                  }
-
-                  var body: some View {
-                      HStack(alignment: .firstTextBaseline, spacing: 8) {
-                          Text(name)
-                              .foregroundStyle(Color.primary)
-                              .font(.system(size: 13, design: .monospaced))
-                              .lineLimit(2)
-                              .multilineTextAlignment(.leading)
-                          Spacer(minLength: 8)
-                          Text(value)
-                              .font(.system(size: 13, design: .monospaced))
-                              .foregroundColor(valueColor)
-                      }
-                      .padding(.vertical, 4)
-                      .contentShape(Rectangle())
-                  }
-              }
-
-              struct EditOffsetView: View {
-                  @EnvironmentObject var store: OffsetsStore
-                  @Environment(\.dismiss) private var dismiss
-                  let name: String
-
-                  @State private var text: String = ""
-                  @State private var showError = false
-                  @State private var errorMsg = ""
-
-                  var body: some View {
-                      NavigationStack {
-                          Form {
-                              Section {
-                                  Text(name)
-                                      .font(.system(size: 12, design: .monospaced))
-                                      .foregroundStyle(.secondary)
-                              } header: {
-                                  Text("Offset")
-                              }
-
-                              Section {
-                                  TextField("Value", text: $text)
-                                      .font(.system(size: 14, design: .monospaced))
-                                      .autocorrectionDisabled()
-                                      .textInputAutocapitalization(.never)
-                                      .keyboardType(.asciiCapable)
-                              } header: {
-                                  Text("Value")
-                              } footer: {
-                                  Text("Hex (0x...) or decimal. Default: \(OffsetsStore.defaults[name] ?? "0x0")")
-                              }
-
-                              Section {
-                                  Button {
-                                      store.resetOne(name)
-                                      dismiss()
-                                  } label: {
-                                      HStack {
-                                          Image(systemName: "arrow.uturn.backward")
-                                          Text("Restore Default")
-                                      }
-                                  }
-                              }
-                          }
-                          .scrollContentBackground(.hidden)
-                          .background(Color.black)
-                          .navigationTitle("Edit")
-                          .navigationBarTitleDisplayMode(.inline)
-                          .toolbar {
-                              ToolbarItem(placement: .navigationBarLeading) {
-                                  Button("Cancel") { dismiss() }
-                              }
-                              ToolbarItem(placement: .navigationBarTrailing) {
-                                  Button("Save") { save() }.fontWeight(.semibold)
-                              }
-                          }
-                          .alert("Invalid Value", isPresented: $showError) {
-                              Button("OK", role: .cancel) {}
-                          } message: {
-                              Text(errorMsg)
-                          }
-                          .onAppear { text = store.value(for: name) }
-                      }
-                      .background(Color.black.ignoresSafeArea())
-                  }
-
-                  private func save() {
-                      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                      if trimmed.isEmpty {
-                          errorMsg = "Value cannot be empty."; showError = true; return
-                      }
-                      if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
-                          let hexPart = String(trimmed.dropFirst(2))
-                          if UInt64(hexPart, radix: 16) == nil {
-                              errorMsg = "Invalid hex value."; showError = true; return
-                          }
-                      } else if UInt64(trimmed) == nil {
-                          errorMsg = "Invalid numeric value."; showError = true; return
-                      }
-                      store.update(name, value: trimmed)
-                      dismiss()
-                  }
-              }
-
-              struct ExportOffsetsView: View {
-                  @EnvironmentObject var store: OffsetsStore
-                  @Environment(\.dismiss) private var dismiss
-                  @State private var copied = false
-
-                  private var json: String {
-                      let sorted = store.values.sorted { $0.key < $1.key }
-                      let dict = Dictionary(uniqueKeysWithValues: sorted)
-                      if let data = try? JSONSerialization.data(
-                          withJSONObject: dict,
-                          options: [.prettyPrinted, .sortedKeys]
-                      ), let str = String(data: data, encoding: .utf8) {
-                          return str
-                      }
-                      return "{}"
-                  }
-
-                  var body: some View {
-                      NavigationStack {
-                          ScrollView {
-                              Text(json)
-                                  .font(.system(size: 11, design: .monospaced))
-                                  .padding()
-                                  .frame(maxWidth: .infinity, alignment: .leading)
-                                  .textSelection(.enabled)
-                          }
-                          .background(Color.black)
-                          .navigationTitle("Export")
-                          .navigationBarTitleDisplayMode(.inline)
-                          .toolbar {
-                              ToolbarItem(placement: .navigationBarLeading) {
-                                  Button("Done") { dismiss() }
-                              }
-                              ToolbarItem(placement: .navigationBarTrailing) {
-                                  Button {
-                                      UIPasteboard.general.string = json
-                                      copied = true
-                                      DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                          copied = false
-                                      }
-                                  } label: {
-                                      Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                                  }
-                              }
-                          }
-                      }
-                      .background(Color.black.ignoresSafeArea())
-                  }
-              }
-              """))
-
-          print("OffsetsView OK")
-          PYEOF
-
-      - name: Write README
+      - name: Write KeepAlive
         run: |
-          python3 <<'PYEOF'
-          import textwrap
-          content = textwrap.dedent("""
-              <p align="right">
-              <img align="right" height="140" src="natsuk1.png?raw=true"/>
-              </p>
+          cat > natsuk1/Helpers/KeepAlive.swift <<'NKEOF'
+          import AVFoundation
+          import CoreLocation
+          import Foundation
+          import Combine
 
-              # natsuk1
+          final class KeepAlive: NSObject, ObservableObject {
+              nonisolated(unsafe) static let shared = KeepAlive()
 
-              iOS 27 only. Research project.
+              @Published private(set) var audioActive: Bool = false
+              @Published private(set) var locationActive: Bool = false
 
-              ## Features
+              private var player: AVAudioPlayer?
+              private var locationManager: CLLocationManager?
 
-              - Kernel offset viewer (iOS 27.0 / 24A437 reference data)
-              - Versioned offsets database in `natsuk1/Offsets/`
-              - Background keep-alive: silent audio + low-accuracy location
-              - Neon respring
-              - Device info panel
-              - Auto-run on launch
+              private override init() {
+                  super.init()
+              }
 
-              ## Requirements
+              func startAudio() {
+                  guard !audioActive else { return }
+                  do {
+                      let session = AVAudioSession.sharedInstance()
+                      try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                      try session.setActive(true)
 
-              - iPhone running **iOS 27.0** (any minor)
-              - Sideload via AltStore / TrollStore / Sideloadly / Xcode
+                      let wav = Self.silentWavData()
+                      let url = FileManager.default.temporaryDirectory
+                          .appendingPathComponent("keepalive.wav")
+                      try wav.write(to: url)
 
-              ## Install
+                      let p = try AVAudioPlayer(contentsOf: url)
+                      p.numberOfLoops = -1
+                      p.volume = 0.0
+                      p.prepareToPlay()
+                      p.play()
+                      player = p
+                      audioActive = true
+                  } catch {
+                      NSLog("[KeepAlive] audio failed: \(error)")
+                      audioActive = false
+                  }
+              }
 
-              Download the latest `natsuk1.ipa` from the [development release](../../releases/tag/development) and sideload it.
+              func stopAudio() {
+                  guard audioActive else { return }
+                  player?.stop()
+                  player = nil
+                  audioActive = false
+              }
 
-              ## Build
+              func startLocation() {
+                  guard !locationActive else { return }
+                  DispatchQueue.main.async { [weak self] in
+                      guard let self = self else { return }
+                      let m = CLLocationManager()
+                      m.delegate = self
+                      m.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+                      m.distanceFilter = 3000
+                      m.pausesLocationUpdatesAutomatically = false
+                      m.allowsBackgroundLocationUpdates = true
+                      m.showsBackgroundLocationIndicator = false
 
-              ```
-              brew install xcodegen ldid
-              xcodegen generate
-              xcodebuild -project natsuk1.xcodeproj -scheme natsuk1 -configuration Release -sdk iphoneos
-              ```
+                      let status = m.authorizationStatus
+                      if status == .notDetermined {
+                          m.requestAlwaysAuthorization()
+                      } else if status == .authorizedAlways || status == .authorizedWhenInUse {
+                          m.startUpdatingLocation()
+                          self.locationActive = true
+                      }
+                      self.locationManager = m
+                  }
+              }
 
-              ## Credits
+              func stopLocation() {
+                  locationManager?.stopUpdatingLocation()
+                  locationManager = nil
+                  locationActive = false
+              }
 
-              - [@flong69zxc-max](https://github.com/flong69zxc-max)
-              - [@murk-sus](https://github.com/murk-sus)
-              - [@eurogoth](https://t.me/eurogoth)
-              - [@asuka4scape](https://t.me/asuka4scape_developer)
-              """).lstrip()
-          open("README.md", "w").write(content)
-          print("README OK")
-          PYEOF
+              private static func silentWavData() -> Data {
+                  let sampleRate: UInt32 = 8000
+                  let channels: UInt16 = 1
+                  let bitsPerSample: UInt16 = 16
+                  let durationSec: UInt32 = 1
+                  let numSamples = sampleRate * durationSec
+                  let blockAlign = channels * bitsPerSample / 8
+                  let byteRate = sampleRate * UInt32(blockAlign)
+                  let dataSize = numSamples * UInt32(blockAlign)
+
+                  var d = Data()
+                  func u32(_ v: UInt32) {
+                      var x = v.littleEndian
+                      withUnsafeBytes(of: &x) { d.append(contentsOf: $0) }
+                  }
+                  func u16(_ v: UInt16) {
+                      var x = v.littleEndian
+                      withUnsafeBytes(of: &x) { d.append(contentsOf: $0) }
+                  }
+                  func str(_ s: String) { d.append(contentsOf: Array(s.utf8)) }
+
+                  str("RIFF"); u32(36 + dataSize); str("WAVE")
+                  str("fmt "); u32(16); u16(1); u16(channels)
+                  u32(sampleRate); u32(byteRate); u16(blockAlign); u16(bitsPerSample)
+                  str("data"); u32(dataSize)
+                  d.append(Data(repeating: 0, count: Int(dataSize)))
+                  return d
+              }
+          }
+
+          extension KeepAlive: CLLocationManagerDelegate {
+              func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+                  let status = manager.authorizationStatus
+                  if status == .authorizedAlways || status == .authorizedWhenInUse {
+                      manager.startUpdatingLocation()
+                      locationActive = true
+                  } else if status == .denied || status == .restricted {
+                      locationActive = false
+                  }
+              }
+
+              func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+              }
+
+              func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+                  NSLog("[KeepAlive] location error: \(error)")
+              }
+          }
+          NKEOF
+
+      - name: Write OffsetsStore
+        run: |
+          cat > natsuk1/Helpers/OffsetsStore.swift <<'NKEOF'
+          import Foundation
+          import Combine
+
+          final class OffsetsStore: ObservableObject {
+              nonisolated(unsafe) static let shared = OffsetsStore()
+
+              struct Group: Codable {
+                  let title: String
+                  let items: [String]
+              }
+
+              struct VersionEntry: Codable {
+                  let file: String
+                  let device: String
+                  let deviceName: String
+                  let chip: String
+                  let ios: String
+                  let build: String
+                  let verified: Bool
+              }
+
+              struct Index: Codable {
+                  let versions: [VersionEntry]
+              }
+
+              private struct File: Codable {
+                  let groups: [Group]
+                  let defaults: [String: String]
+              }
+
+              private static let bundled: File? = {
+                  guard let fileURL = resolveActiveFileURL() else { return nil }
+                  guard let fileData = try? Data(contentsOf: fileURL),
+                        let parsed = try? JSONDecoder().decode(File.self, from: fileData)
+                  else { return nil }
+                  return parsed
+              }()
+
+              static var groups: [Group] { bundled?.groups ?? [] }
+              static var defaults: [String: String] { bundled?.defaults ?? [:] }
+
+              static var activeVersion: VersionEntry? {
+                  resolveActiveEntry()
+              }
+
+              private static func loadIndex() -> Index? {
+                  guard let url = Bundle.main.url(forResource: "index", withExtension: "json", subdirectory: "Offsets"),
+                        let data = try? Data(contentsOf: url),
+                        let index = try? JSONDecoder().decode(Index.self, from: data)
+                  else { return nil }
+                  return index
+              }
+
+              private static func resolveActiveEntry() -> VersionEntry? {
+                  guard let index = loadIndex() else { return nil }
+                  let device = DeviceName.machineID()
+                  let v = ProcessInfo.processInfo.operatingSystemVersion
+                  let ios = "\(v.majorVersion).\(v.minorVersion)"
+                  return index.versions.first(where: { $0.device == device && $0.ios == ios })
+                      ?? index.versions.first(where: { $0.device == device })
+              }
+
+              private static func resolveActiveFileURL() -> URL? {
+                  guard let entry = resolveActiveEntry() else { return nil }
+                  let parts = entry.file.split(separator: ".", maxSplits: 1).map(String.init)
+                  let name = parts.first ?? entry.file
+                  let ext  = parts.count > 1 ? parts[1] : "json"
+                  return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")
+              }
+
+              @Published var values: [String: String] = [:]
+
+              private let storageKey = "natsuk1_offsets_v2"
+
+              private init() { load() }
+
+              func load() {
+                  let saved = UserDefaults.standard.dictionary(forKey: storageKey) as? [String: String]
+                  var merged = Self.defaults
+                  if let saved = saved {
+                      for (k, v) in saved where merged[k] != nil { merged[k] = v }
+                  }
+                  values = merged
+                  if saved == nil { save() }
+              }
+
+              func save() {
+                  UserDefaults.standard.set(values, forKey: storageKey)
+              }
+
+              func reset() {
+                  values = Self.defaults
+                  save()
+              }
+
+              func resetOne(_ name: String) {
+                  values[name] = Self.defaults[name] ?? "0x0"
+                  save()
+              }
+
+              func update(_ name: String, value: String) {
+                  values[name] = value
+                  save()
+              }
+
+              func value(for name: String) -> String {
+                  values[name] ?? Self.defaults[name] ?? "0x0"
+              }
+
+              func filledCount() -> Int {
+                  values.filter { $0.value != "0x0" && !$0.value.isEmpty }.count
+              }
+
+              func totalCount() -> Int {
+                  Self.groups.reduce(0) { $0 + $1.items.count }
+              }
+          }
+          NKEOF
+
+      - name: Write DeviceName
+        run: |
+          cat > natsuk1/Helpers/DeviceName.swift <<'NKEOF'
+          import Foundation
+          import UIKit
+
+          enum DeviceName {
+
+              private struct Device {
+                  let id: String
+                  let name: String
+                  let chip: String
+              }
+
+              private static let devices: [Device] = [
+                  Device(id: "iPhone11,2", name: "iPhone XS",           chip: "A12 Bionic"),
+                  Device(id: "iPhone11,4", name: "iPhone XS Max",       chip: "A12 Bionic"),
+                  Device(id: "iPhone11,6", name: "iPhone XS Max",       chip: "A12 Bionic"),
+                  Device(id: "iPhone11,8", name: "iPhone XR",           chip: "A12 Bionic"),
+                  Device(id: "iPhone12,1", name: "iPhone 11",           chip: "A13 Bionic"),
+                  Device(id: "iPhone12,3", name: "iPhone 11 Pro",       chip: "A13 Bionic"),
+                  Device(id: "iPhone12,5", name: "iPhone 11 Pro Max",   chip: "A13 Bionic"),
+                  Device(id: "iPhone12,8", name: "iPhone SE (2nd gen)", chip: "A13 Bionic"),
+                  Device(id: "iPhone13,1", name: "iPhone 12 mini",      chip: "A14 Bionic"),
+                  Device(id: "iPhone13,2", name: "iPhone 12",           chip: "A14 Bionic"),
+                  Device(id: "iPhone13,3", name: "iPhone 12 Pro",       chip: "A14 Bionic"),
+                  Device(id: "iPhone13,4", name: "iPhone 12 Pro Max",   chip: "A14 Bionic"),
+                  Device(id: "iPhone14,2", name: "iPhone 13 Pro",       chip: "A15 Bionic"),
+                  Device(id: "iPhone14,3", name: "iPhone 13 Pro Max",   chip: "A15 Bionic"),
+                  Device(id: "iPhone14,4", name: "iPhone 13 mini",      chip: "A15 Bionic"),
+                  Device(id: "iPhone14,5", name: "iPhone 13",           chip: "A15 Bionic"),
+                  Device(id: "iPhone14,6", name: "iPhone SE (3rd gen)", chip: "A15 Bionic"),
+                  Device(id: "iPhone14,7", name: "iPhone 14",           chip: "A15 Bionic"),
+                  Device(id: "iPhone14,8", name: "iPhone 14 Plus",      chip: "A15 Bionic"),
+                  Device(id: "iPhone15,2", name: "iPhone 14 Pro",       chip: "A16 Bionic"),
+                  Device(id: "iPhone15,3", name: "iPhone 14 Pro Max",   chip: "A16 Bionic"),
+                  Device(id: "iPhone15,4", name: "iPhone 15",           chip: "A16 Bionic"),
+                  Device(id: "iPhone15,5", name: "iPhone 15 Plus",      chip: "A16 Bionic"),
+                  Device(id: "iPhone16,1", name: "iPhone 15 Pro",       chip: "A17 Pro"),
+                  Device(id: "iPhone16,2", name: "iPhone 15 Pro Max",   chip: "A17 Pro"),
+                  Device(id: "iPhone17,1", name: "iPhone 16 Pro",       chip: "A18 Pro"),
+                  Device(id: "iPhone17,2", name: "iPhone 16 Pro Max",   chip: "A18 Pro"),
+                  Device(id: "iPhone17,3", name: "iPhone 16",           chip: "A18"),
+                  Device(id: "iPhone17,4", name: "iPhone 16 Plus",      chip: "A18"),
+                  Device(id: "iPhone17,5", name: "iPhone 16e",          chip: "A18"),
+                  Device(id: "iPhone18,1", name: "iPhone 17 Pro",       chip: "A19 Pro"),
+                  Device(id: "iPhone18,2", name: "iPhone 17 Pro Max",   chip: "A19 Pro"),
+                  Device(id: "iPhone18,3", name: "iPhone 17",           chip: "A19"),
+                  Device(id: "iPhone18,4", name: "iPhone Air",          chip: "A19 Pro"),
+                  Device(id: "iPhone18,5", name: "iPhone 17e",          chip: "A19"),
+              ]
+
+              private static let byID: [String: Device] = Dictionary(
+                  uniqueKeysWithValues: devices.map { ($0.id, $0) }
+              )
+
+              static func friendly() -> String {
+                  let id = machineID()
+                  return byID[id]?.name ?? id
+              }
+
+              static func short() -> String {
+                  let name = friendly()
+                  if name.hasPrefix("iPhone ") {
+                      return String(name.dropFirst("iPhone ".count))
+                  }
+                  return name
+              }
+
+              static func chip() -> String {
+                  byID[machineID()]?.chip ?? "unknown"
+              }
+
+              static func full() -> String {
+                  let v = ProcessInfo.processInfo.operatingSystemVersion
+                  return "\(friendly()) · iOS \(v.majorVersion).\(v.minorVersion)"
+              }
+
+              static func fullWithChip() -> String {
+                  let v = ProcessInfo.processInfo.operatingSystemVersion
+                  return "\(friendly()) · \(chip()) · iOS \(v.majorVersion).\(v.minorVersion)"
+              }
+
+              static func machineID() -> String {
+                  var info = utsname()
+                  uname(&info)
+                  return Mirror(reflecting: info.machine).children.reduce("") { id, el in
+                      guard let v = el.value as? Int8, v != 0 else { return id }
+                      return id + String(UnicodeScalar(UInt8(v)))
+                  }
+              }
+          }
+          NKEOF
 
       - name: Commit and push
         run: |
@@ -1319,5 +1533,5 @@ jobs:
             echo "No changes"
             exit 0
           fi
-          git commit -m "Swift 6, black background everywhere, iOS 27 polish"
+          git commit -m "Fix Swift 6 concurrency, SDK target 26.0, String(cString:) deprecation"
           git push
