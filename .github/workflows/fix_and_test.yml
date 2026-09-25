@@ -29,7 +29,6 @@ jobs:
         run: |
           rm -f .github/workflows/natsuk1.yml
           rm -f .github/workflows/main.yml
-          ls -la .github/workflows/
 
       - name: Fetch fresh sources
         run: |
@@ -55,6 +54,7 @@ jobs:
               s = re.sub(r"\bnonisolated\s+(?![\(])", "", s)
               return s
 
+          # --- PairingController ---
           p = "natsuk1/Helpers/PairingController.swift"
           s = open(p).read()
 
@@ -72,10 +72,6 @@ jobs:
           s = clean(s)
 
           s = s.replace(
-              'private static let altIRKKey = "aircardPairingHostAltIRK"',
-              'nonisolated(unsafe) private static let altIRKKey = "aircardPairingHostAltIRK"')
-
-          s = s.replace(
               "static var customPairingFilePath: String? = nil",
               "nonisolated(unsafe) static var customPairingFilePath: String? = nil")
 
@@ -88,9 +84,26 @@ jobs:
 
           s = s.replace("AirCard-iOS", "natsuk1")
 
+          s = s.replace(
+              "Unmanaged<PairingController>.fromOpaque(ctx).release()",
+              "Unmanaged<PairingController>.fromOpaque(box.ptr).release()")
+
+          if "final class RawPtrBox" not in s:
+              s = s + (
+                  "\n"
+                  "final class RawPtrBox: @unchecked Sendable {\n"
+                  "    let ptr: UnsafeMutableRawPointer\n"
+                  "    init(_ ptr: UnsafeMutableRawPointer) { self.ptr = ptr }\n"
+                  "}\n")
+
+          s = s.replace(
+              "            DispatchQueue.main.async {\n                Unmanaged<PairingController>.fromOpaque(box.ptr).release()",
+              "            let box = RawPtrBox(ctx)\n            DispatchQueue.main.async {\n                Unmanaged<PairingController>.fromOpaque(box.ptr).release()")
+
           open(p, "w").write(s)
           print("patched PairingController")
 
+          # --- NetworkStatus ---
           p = "natsuk1/Helpers/NetworkStatus.swift"
           s = open(p).read()
           s = s.replace(
@@ -99,6 +112,7 @@ jobs:
           open(p, "w").write(s)
           print("patched NetworkStatus")
 
+          # --- KeepAlive ---
           p = "natsuk1/Helpers/KeepAlive.swift"
           if os.path.exists(p):
               s = open(p).read()
@@ -111,9 +125,6 @@ jobs:
                   "final class KeepAlive: NSObject, ObservableObject {",
                   "final class KeepAlive: NSObject, @unchecked Sendable {")
               s = clean(s)
-              s = s.replace(
-                  "static let shared = KeepAlive()",
-                  "nonisolated(unsafe) static let shared = KeepAlive()")
               open(p, "w").write(s)
               print("patched KeepAlive")
           ENDSCRIPT
@@ -134,22 +145,20 @@ jobs:
           grep -n "pairReadyCallback\|pairPinCallback" PairingController.swift || true
           echo "===== class decl ====="
           grep -n "class PairingController" PairingController.swift || true
-          echo "===== KeepAlive shared ====="
+          echo "===== shared ====="
           grep -n "static let shared" KeepAlive.swift || true
           echo "===== cString ====="
           grep -n "String(cString: host)" NetworkStatus.swift || true
-
-          grep -q "nonisolated(unsafe) private static let altIRKKey" PairingController.swift || fail "altIRKKey not patched"
-          grep -q "nonisolated(unsafe) private let pairReadyCallback" PairingController.swift || fail "pairReadyCallback not patched"
-          grep -q "nonisolated(unsafe) private let pairPinCallback" PairingController.swift || fail "pairPinCallback not patched"
-          grep -q "nonisolated(unsafe) static let shared = KeepAlive()" KeepAlive.swift || fail "KeepAlive.shared not patched"
+          echo "===== RawPtrBox ====="
+          grep -n "RawPtrBox" PairingController.swift || true
 
           if grep -q "final class PairingController.*ObservableObject" PairingController.swift; then fail "PairingController still ObservableObject"; fi
           if grep -q "final class KeepAlive.*ObservableObject" KeepAlive.swift; then fail "KeepAlive still ObservableObject"; fi
           if grep -q "String(cString: host)" NetworkStatus.swift; then fail "NetworkStatus still String(cString:)"; fi
-
           if grep -q "nonisolated(unsafe) nonisolated(unsafe)" PairingController.swift; then fail "duplicate in PairingController"; fi
           if grep -q "nonisolated(unsafe) nonisolated(unsafe)" KeepAlive.swift; then fail "duplicate in KeepAlive"; fi
+          grep -q "final class RawPtrBox" PairingController.swift || fail "RawPtrBox not declared"
+          grep -q "fromOpaque(box.ptr).release()" PairingController.swift || fail "release not patched"
 
           echo "verify OK"
 
@@ -196,7 +205,7 @@ jobs:
             --title "Development" \
             --prerelease \
             --latest=false \
-            --notes "Swift 6.2 isolation fix"
+            --notes "Swift 6.2 sendable fix"
 
       - name: Commit
         run: |
@@ -207,5 +216,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "Idempotent Swift 6.2 isolation patch [skip ci]"
+          git commit -m "RawPtrBox for ctx, drop redundant nonisolated(unsafe) [skip ci]"
           git push
