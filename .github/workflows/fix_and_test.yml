@@ -62,16 +62,15 @@ jobs:
           s = s.replace("import AirliftFFI\n", "@preconcurrency import AirliftFFI\n")
           s = clean(s)
 
-          if "nonisolated final class PairingController" not in s:
-              s = s.replace(
-                  "final class PairingController: ObservableObject, @unchecked Sendable {",
-                  "nonisolated final class PairingController: @unchecked Sendable {")
-              s = s.replace(
-                  "final class PairingController: ObservableObject {",
-                  "nonisolated final class PairingController: @unchecked Sendable {")
-              s = s.replace(
-                  "final class PairingController: @unchecked Sendable {",
-                  "nonisolated final class PairingController: @unchecked Sendable {")
+          s = s.replace(
+              "final class PairingController: ObservableObject, @unchecked Sendable {",
+              "nonisolated final class PairingController: @unchecked Sendable {")
+          s = s.replace(
+              "final class PairingController: ObservableObject {",
+              "nonisolated final class PairingController: @unchecked Sendable {")
+          s = s.replace(
+              "final class PairingController: @unchecked Sendable {",
+              "nonisolated final class PairingController: @unchecked Sendable {")
 
           s = s.replace(
               "static var customPairingFilePath: String? = nil",
@@ -137,21 +136,37 @@ jobs:
       - name: Force nonisolated default in project.yml
         run: |
           set -euo pipefail
-          if [ -f project.yml ]; then
-            python3 - <<'PY'
+          python3 - <<'PY'
           p = "project.yml"
           s = open(p).read()
+
+          anchor = '    SWIFT_VERSION: "6.0"\n'
+          extra = (
+              '    SWIFT_VERSION: "6.0"\n'
+              '    SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated\n'
+              '    SWIFT_APPROACHABLE_CONCURRENCY: NO\n'
+              '    SWIFT_STRICT_CONCURRENCY: minimal\n'
+          )
           if "SWIFT_DEFAULT_ACTOR_ISOLATION" not in s:
-              s = s.replace(
-                  "    settings:",
-                  "    settings:\n      SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated\n      SWIFT_APPROACHABLE_CONCURRENCY: NO\n      SWIFT_STRICT_CONCURRENCY: minimal\n",
-                  1)
+              if anchor in s:
+                  s = s.replace(anchor, extra, 1)
+              else:
+                  s = s.replace("settings:\n", "settings:\n  base:\n" + extra, 1)
+
+          tgt_anchor = "        SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h\n"
+          tgt_extra = (
+              "        SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h\n"
+              "        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated\n"
+              "        SWIFT_APPROACHABLE_CONCURRENCY: NO\n"
+              "        SWIFT_STRICT_CONCURRENCY: minimal\n"
+              '        OTHER_SWIFT_FLAGS: "$(inherited) -default-isolation nonisolated"\n'
+          )
+          if "OTHER_SWIFT_FLAGS" not in s and tgt_anchor in s:
+              s = s.replace(tgt_anchor, tgt_extra, 1)
+
           open(p, "w").write(s)
-          print(open(p).read())
+          print(s)
           PY
-          else
-            echo "no project.yml"
-          fi
 
       - name: Verify
         run: |
@@ -170,6 +185,10 @@ jobs:
           grep -q "@preconcurrency import AirliftFFI" PairingController.swift || fail "preconcurrency import missing"
           grep -q "nonisolated final class PairingController" PairingController.swift || fail "PairingController not nonisolated"
           grep -q "nonisolated final class RawPtrBox" PairingController.swift || fail "RawPtrBox not nonisolated"
+
+          cd ../..
+          grep -q "SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated" project.yml || fail "project.yml missing SWIFT_DEFAULT_ACTOR_ISOLATION"
+          grep -q "SWIFT_APPROACHABLE_CONCURRENCY: NO" project.yml || fail "project.yml missing SWIFT_APPROACHABLE_CONCURRENCY"
 
           echo "verify OK"
 
@@ -195,6 +214,7 @@ jobs:
             SWIFT_DEFAULT_ACTOR_ISOLATION=nonisolated \
             SWIFT_APPROACHABLE_CONCURRENCY=NO \
             SWIFT_STRICT_CONCURRENCY=minimal \
+            OTHER_SWIFT_FLAGS="-default-isolation nonisolated" \
             -UseModernBuildSystem=YES \
             build -quiet
 
