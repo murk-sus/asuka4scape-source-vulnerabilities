@@ -4,25 +4,42 @@
       "title": "Kernel",
       "items": [
         "off_kernel_base",
+        "off_sysent_base",
+        "off_sysent_count",
+        "off_sysent_stride",
         "off_mach_trap_table"
       ]
     },
     {
       "title": "Globals",
       "items": [
-        "off_g_allproc",
         "off_g_kernproc",
         "off_g_kernel_task",
+        "off_g_zone_map",
         "off_g_task_list",
         "off_g_kernel_map",
-        "off_g_zone_map"
+        "off_g_allproc"
       ]
     },
     {
-      "title": "proc / task / thread",
+      "title": "Primitives",
+      "items": [
+        "off_fn_copyin",
+        "off_fn_copyout",
+        "off_fn_kalloc_ext",
+        "off_fn_kfree_ext"
+      ]
+    },
+    {
+      "title": "proc",
       "items": [
         "off_proc_p_pid",
-        "off_proc_ro_p_ucred",
+        "off_proc_ro_p_ucred"
+      ]
+    },
+    {
+      "title": "task / thread",
+      "items": [
         "off_task_map",
         "off_task_bsd_info",
         "off_task_itk_space",
@@ -38,24 +55,58 @@
       ]
     },
     {
-      "title": "Primitives",
+      "title": "Zones",
       "items": [
-        "off_fn_copyin",
-        "off_fn_copyout",
-        "off_fn_kalloc_ext",
-        "off_fn_kfree_ext"
+        "off_zone_data_kalloc",
+        "off_zone_early_kalloc",
+        "off_zone_kalloc_type_var",
+        "off_zone_site_struct_task",
+        "off_zone_site_struct_proc",
+        "off_zone_site_struct_thread",
+        "off_zone_site_struct_ucred",
+        "off_zone_site_struct_ipc_port",
+        "off_zone_site_struct_ipc_entry",
+        "off_zone_site_struct_fileproc",
+        "off_zone_site_struct_fileglob",
+        "off_zone_site_struct_vnode",
+        "off_zone_site_struct_mount",
+        "off_zone_site_struct_socket",
+        "off_zone_site_struct_inpcb",
+        "off_zone_site_struct_pipe",
+        "off_zone_site_struct_vm_page"
+      ]
+    },
+    {
+      "title": "SPTM",
+      "items": [
+        "off_sptm_base",
+        "off_sptm_ctrr_lock_boot",
+        "off_sptm_cpu_lock_system_registers",
+        "off_sptm_determine_kernel_ctrr",
+        "off_sptm_bootstrap",
+        "off_sptm_map",
+        "off_sptm_region",
+        "off_sptm_panic",
+        "off_sptm_page_table"
       ]
     }
   ],
   "defaults": {
     "off_kernel_base": "0xFFFFFFF007004000",
+    "off_sysent_base": "0xFFFFFFF007C192A0",
+    "off_sysent_count": "558",
+    "off_sysent_stride": "24",
     "off_mach_trap_table": "0xFFFFFFF007BE8018",
-    "off_g_allproc": "0xFFFFFFF007BBF048",
     "off_g_kernproc": "0xFFFFFFF007BBF040",
     "off_g_kernel_task": "0xFFFFFFF00700DC70",
+    "off_g_zone_map": "0xFFFFFFF00AD6A800",
     "off_g_task_list": "0xFFFFFFF0080D93F0",
     "off_g_kernel_map": "0xFFFFFFF007BBE228",
-    "off_g_zone_map": "0xFFFFFFF00AD6A800",
+    "off_g_allproc": "0xFFFFFFF007BBF048",
+    "off_fn_copyin": "0xFFFFFFF00A7B9570",
+    "off_fn_copyout": "0xFFFFFFF00A2C6C28",
+    "off_fn_kalloc_ext": "0xFFFFFFF00A200DCC",
+    "off_fn_kfree_ext": "0xFFFFFFF00A201000",
     "off_proc_p_pid": "0x74",
     "off_proc_ro_p_ucred": "0xB8",
     "off_task_map": "0x28",
@@ -65,9 +116,31 @@
     "off_necp_open": "0xFFFFFFF00A4E411C",
     "off_necp_client_add_flow": "0xFFFFFFF00A4E843C",
     "off_necp_client_remove_flow": "0xFFFFFFF00A4E93C4",
-    "off_fn_copyin": "0xFFFFFFF00A7B9570",
-    "off_fn_copyout": "0xFFFFFFF00A2C6C28",
-    "off_fn_kalloc_ext": "0xFFFFFFF00A200DCC",
-    "off_fn_kfree_ext": "0xFFFFFFF00A201000"
+    "off_zone_data_kalloc": "0xFFFFFFF007C62E70",
+    "off_zone_early_kalloc": "0xFFFFFFF007BBB170",
+    "off_zone_kalloc_type_var": "0xFFFFFFF007BC2800",
+    "off_zone_site_struct_task": "0xFFFFFFF007C64080",
+    "off_zone_site_struct_proc": "0xFFFFFFF007C71240",
+    "off_zone_site_struct_thread": "0xFFFFFFF007C63D00",
+    "off_zone_site_struct_ucred": "0xFFFFFFF007C6F140",
+    "off_zone_site_struct_ipc_port": "0xFFFFFFF007C79248",
+    "off_zone_site_struct_ipc_entry": "0xFFFFFFF007C79298",
+    "off_zone_site_struct_fileproc": "0xFFFFFFF007C7CD08",
+    "off_zone_site_struct_fileglob": "0xFFFFFFF007C7D708",
+    "off_zone_site_struct_vnode": "0xFFFFFFF007C660C0",
+    "off_zone_site_struct_mount": "0xFFFFFFF007C662C0",
+    "off_zone_site_struct_socket": "0xFFFFFFF007C70C40",
+    "off_zone_site_struct_inpcb": "0xFFFFFFF007C6D180",
+    "off_zone_site_struct_pipe": "0xFFFFFFF007C6FE80",
+    "off_zone_site_struct_vm_page": "0xFFFFFFF007C64C80",
+    "off_sptm_base": "0xFFFFFFF027004000",
+    "off_sptm_ctrr_lock_boot": "0xFFFFFFF027006E62",
+    "off_sptm_cpu_lock_system_registers": "0xFFFFFFF0270B39B4",
+    "off_sptm_determine_kernel_ctrr": "0xFFFFFFF0270B2224",
+    "off_sptm_bootstrap": "0xFFFFFFF0270D21CC",
+    "off_sptm_map": "0xFFFFFFF0270E97BC",
+    "off_sptm_region": "0xFFFFFFF0270ECFF0",
+    "off_sptm_panic": "0xFFFFFFF0270BEE18",
+    "off_sptm_page_table": "0xFFFFFFF0270D13D4"
   }
 }
