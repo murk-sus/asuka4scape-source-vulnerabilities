@@ -1,4 +1,4 @@
-name: Cleanup repository
+name: Fix menu, drop haptics, gray context menu
 
 on:
   workflow_dispatch:
@@ -7,138 +7,14 @@ permissions:
   contents: write
 
 jobs:
-  cleanup:
+  fix:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Delete dead files
+      - name: Remove haptics
         run: |
-          rm -f natsuk1/Exploit/nk_krw.c
-          rm -f natsuk1/Exploit/nk_krw.h
-          rm -f natsuk1/Exploit/nk_necp.c
-          rm -f natsuk1/Exploit/nk_necp.h
-          rm -f natsuk1/Exploit/nk_probe.c
-          rm -f natsuk1/Exploit/nk_probe.h
-          rm -f natsuk1/Exploit/nk_syscalls.c
-          rm -f natsuk1/Exploit/nk_syscalls.h
-          rm -f natsuk1/Exploit/nk_sptm.c
-          rm -f natsuk1/Exploit/nk_sptm.h
-          rm -f natsuk1/Helpers/KernelRW.swift
-          rm -f natsuk1/Helpers/KernelcacheFetcher.swift
-          rm -f natsuk1/Helpers/KernelcacheParser.swift
-          rm -rf natsuk1/External
-
-      - name: Write Haptics
-        run: |
-          cat > natsuk1/Helpers/Haptics.swift <<'NKEOF'
-          import UIKit
-
-          enum Haptics {
-              static func tap() {
-                  let g = UIImpactFeedbackGenerator(style: .light)
-                  g.prepare()
-                  g.impactOccurred()
-              }
-
-              static func soft() {
-                  let g = UIImpactFeedbackGenerator(style: .soft)
-                  g.prepare()
-                  g.impactOccurred()
-              }
-
-              static func success() {
-                  UINotificationFeedbackGenerator().notificationOccurred(.success)
-              }
-
-              static func warning() {
-                  UINotificationFeedbackGenerator().notificationOccurred(.warning)
-              }
-
-              static func error() {
-                  UINotificationFeedbackGenerator().notificationOccurred(.error)
-              }
-          }
-          NKEOF
-
-      - name: Write KeepAlive
-        run: |
-          cat > natsuk1/Helpers/KeepAlive.swift <<'NKEOF'
-          import AVFoundation
-          import Foundation
-
-          final class KeepAlive {
-              static let shared = KeepAlive()
-              private var player: AVAudioPlayer?
-              private var active = false
-
-              private init() {}
-
-              var isActive: Bool { active }
-
-              func start() {
-                  guard !active else { return }
-                  do {
-                      let session = AVAudioSession.sharedInstance()
-                      try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-                      try session.setActive(true)
-
-                      let wav = Self.silentWavData()
-                      let url = FileManager.default.temporaryDirectory
-                          .appendingPathComponent("keepalive.wav")
-                      try wav.write(to: url)
-
-                      let p = try AVAudioPlayer(contentsOf: url)
-                      p.numberOfLoops = -1
-                      p.volume = 0.0
-                      p.prepareToPlay()
-                      p.play()
-                      player = p
-                      active = true
-                  } catch {
-                      NSLog("[KeepAlive] start failed: \(error)")
-                      active = false
-                  }
-              }
-
-              func stop() {
-                  guard active else { return }
-                  player?.stop()
-                  player = nil
-                  try? AVAudioSession.sharedInstance().setActive(false)
-                  active = false
-              }
-
-              private static func silentWavData() -> Data {
-                  let sampleRate: UInt32 = 8000
-                  let channels: UInt16 = 1
-                  let bitsPerSample: UInt16 = 16
-                  let durationSec: UInt32 = 1
-                  let numSamples = sampleRate * durationSec
-                  let blockAlign = channels * bitsPerSample / 8
-                  let byteRate = sampleRate * UInt32(blockAlign)
-                  let dataSize = numSamples * UInt32(blockAlign)
-
-                  var d = Data()
-                  func u32(_ v: UInt32) {
-                      var x = v.littleEndian
-                      withUnsafeBytes(of: &x) { d.append(contentsOf: $0) }
-                  }
-                  func u16(_ v: UInt16) {
-                      var x = v.littleEndian
-                      withUnsafeBytes(of: &x) { d.append(contentsOf: $0) }
-                  }
-                  func str(_ s: String) { d.append(contentsOf: Array(s.utf8)) }
-
-                  str("RIFF"); u32(36 + dataSize); str("WAVE")
-                  str("fmt "); u32(16); u16(1); u16(channels)
-                  u32(sampleRate); u32(byteRate); u16(blockAlign); u16(bitsPerSample)
-                  str("data"); u32(dataSize)
-                  d.append(Data(repeating: 0, count: Int(dataSize)))
-                  return d
-              }
-          }
-          NKEOF
+          rm -f natsuk1/Helpers/Haptics.swift
 
       - name: Write natsuk1.swift
         run: |
@@ -280,7 +156,6 @@ jobs:
                   if running { return }
                   running = true
                   status = .running
-                  Haptics.tap()
 
                   let t = Thread { [weak self] in
                       _ = nk_full_exploit()
@@ -288,7 +163,6 @@ jobs:
                           guard let self = self else { return }
                           self.running = false
                           self.status = .ok
-                          Haptics.success()
                       }
                   }
                   t.qualityOfService = .userInitiated
@@ -297,7 +171,6 @@ jobs:
               }
 
               func respring() {
-                  Haptics.tap()
                   show_respring = true
               }
 
@@ -364,7 +237,6 @@ jobs:
                               }
 
                               Button {
-                                  Haptics.tap()
                                   show_device = true
                               } label: {
                                   HStack(spacing: 8) {
@@ -403,7 +275,6 @@ jobs:
                       .toolbar {
                           ToolbarItem(placement: .navigationBarTrailing) {
                               Button {
-                                  Haptics.tap()
                                   show_settings = true
                               } label: {
                                   Image(systemName: "gear")
@@ -428,34 +299,35 @@ jobs:
               var body: some View {
                   ScrollViewReader { proxy in
                       ScrollView(showsIndicators: false) {
-                          Text(state.log.isEmpty ? "Awaiting execution." : state.log)
-                              .font(.system(size: 10, design: .monospaced))
-                              .multilineTextAlignment(.leading)
-                              .foregroundColor(state.log.isEmpty ? .secondary : .primary)
-                              .frame(maxWidth: .infinity, alignment: .leading)
+                          VStack(alignment: .leading, spacing: 0) {
+                              Text(state.log.isEmpty ? "Awaiting execution." : state.log)
+                                  .font(.system(size: 10, design: .monospaced))
+                                  .multilineTextAlignment(.leading)
+                                  .foregroundColor(state.log.isEmpty ? .secondary : .primary)
+                                  .frame(maxWidth: .infinity, alignment: .leading)
 
-                          Spacer(minLength: 0)
-                              .id(0)
-                      }
-                      .onChange(of: state.log) { _ in
-                          withAnimation(.linear(duration: 0.05)) {
-                              proxy.scrollTo(0, anchor: .bottom)
+                              Spacer(minLength: 0)
+                                  .id(0)
                           }
+                          .frame(maxWidth: .infinity, minHeight: 240, alignment: .topLeading)
+                          .contentShape(Rectangle())
                       }
                       .contextMenu {
                           Button {
                               UIPasteboard.general.string = state.log
-                              Haptics.success()
                           } label: {
                               Label("Copy Output", systemImage: "doc.on.doc")
                           }
-                          .tint(.blue)
 
                           Button(role: .destructive) {
                               state.clear()
-                              Haptics.warning()
                           } label: {
                               Label("Clear", systemImage: "trash")
+                          }
+                      }
+                      .onChange(of: state.log) { _ in
+                          withAnimation(.linear(duration: 0.05)) {
+                              proxy.scrollTo(0, anchor: .bottom)
                           }
                       }
                   }
@@ -470,6 +342,197 @@ jobs:
                       .padding(10)
                       .background(Color(UIColor.secondarySystemGroupedBackground))
                       .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+              }
+          }
+          NKEOF
+
+      - name: Write SettingsView
+        run: |
+          cat > natsuk1/Views/SettingsView.swift <<'NKEOF'
+          import SwiftUI
+          import UIKit
+
+          struct SettingsView: View {
+              @Environment(\.dismiss) private var dismiss
+              @EnvironmentObject var state: AppState
+              @EnvironmentObject var offsets: OffsetsStore
+
+              @AppStorage("auto_run")   private var auto_run: Bool = false
+              @AppStorage("verbose")    private var verbose: Bool = true
+              @AppStorage("keep_alive") private var keep_alive: Bool = false
+
+              private var appName: String {
+                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+                      ?? "natsuk1"
+              }
+
+              private var version: String {
+                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+              }
+
+              private var appIcon: UIImage? {
+                  if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+                     let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+                     let files = primary["CFBundleIconFiles"] as? [String],
+                     let last = files.last {
+                      return UIImage(named: last)
+                  }
+                  return UIImage(named: "AppIcon")
+              }
+
+              private var activeVersionLabel: String {
+                  guard let v = OffsetsStore.activeVersion else { return "unknown" }
+                  return "\(v.device) / iOS \(v.ios) (\(v.build))"
+              }
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section {
+                              HStack(spacing: 14) {
+                                  Group {
+                                      if let icon = appIcon {
+                                          Image(uiImage: icon)
+                                              .resizable()
+                                              .aspectRatio(contentMode: .fill)
+                                      } else {
+                                          ZStack {
+                                              LinearGradient(
+                                                  colors: [
+                                                      Color(red: 0.65, green: 0.30, blue: 0.90),
+                                                      Color(red: 0.30, green: 0.65, blue: 0.95)
+                                                  ],
+                                                  startPoint: .topLeading,
+                                                  endPoint: .bottomTrailing
+                                              )
+                                              Image(systemName: "bolt.fill")
+                                                  .font(.system(size: 26, weight: .semibold))
+                                                  .foregroundStyle(.white)
+                                          }
+                                      }
+                                  }
+                                  .frame(width: 56, height: 56)
+                                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text(appName)
+                                          .font(.title3)
+                                          .fontWeight(.semibold)
+                                      Text("Version \(version)")
+                                          .font(.subheadline)
+                                          .foregroundColor(.secondary)
+                                  }
+                                  Spacer(minLength: 8)
+                              }
+                              .padding(.vertical, 4)
+
+                              NavigationLink {
+                                  AboutView().environmentObject(state)
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "info.circle")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Credits")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                  }
+                                  .contentShape(Rectangle())
+                              }
+                          } header: {
+                              Label("About", systemImage: "info.circle")
+                          }
+
+                          Section {
+                              HStack(spacing: 10) {
+                                  Image(systemName: "cpu")
+                                      .foregroundStyle(.secondary)
+                                      .frame(width: 20)
+                                  Text("Offsets")
+                                      .foregroundStyle(.secondary)
+                                  Spacer(minLength: 8)
+                                  Text(activeVersionLabel)
+                                      .font(.system(size: 12, design: .monospaced))
+                                      .foregroundColor(.secondary)
+                                      .lineLimit(1)
+                                      .truncationMode(.middle)
+                              }
+                              .padding(.vertical, 2)
+
+                              NavigationLink {
+                                  OffsetsView().environmentObject(offsets)
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "list.number")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Modify Offsets")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                      Text("\(offsets.filledCount())/\(offsets.totalCount())")
+                                          .font(.system(size: 13, design: .monospaced))
+                                          .foregroundColor(.secondary)
+                                  }
+                                  .contentShape(Rectangle())
+                              }
+                          } header: {
+                              Label("Exploit", systemImage: "cpu")
+                          }
+
+                          Section {
+                              Toggle("Auto Run on Launch", isOn: $auto_run)
+                              Toggle("Verbose Output", isOn: $verbose)
+                              Toggle("Keep Alive", isOn: $keep_alive)
+                          } header: {
+                              Label("Options", systemImage: "gearshape")
+                          }
+
+                          Section {
+                              Button {
+                                  state.respring()
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "arrow.clockwise")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Respring")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                  }
+                                  .contentShape(Rectangle())
+                              }
+                              .buttonStyle(.plain)
+
+                              Button {
+                                  state.clear()
+                              } label: {
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "trash")
+                                          .foregroundStyle(.secondary)
+                                          .frame(width: 20)
+                                      Text("Clear Log")
+                                          .foregroundStyle(.primary)
+                                      Spacer(minLength: 8)
+                                  }
+                                  .contentShape(Rectangle())
+                              }
+                              .buttonStyle(.plain)
+                          } header: {
+                              Label("Tools", systemImage: "wrench.and.screwdriver")
+                          }
+                      }
+                      .listStyle(.insetGrouped)
+                      .navigationTitle("Settings")
+                      .navigationBarTitleDisplayMode(.large)
+                      .tint(.blue)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button("Done") { dismiss() }
+                                  .fontWeight(.semibold)
+                          }
+                      }
+                  }
               }
           }
           NKEOF
@@ -578,7 +641,6 @@ jobs:
 
               private func linkRow(_ title: String, url: URL) -> some View {
                   Button {
-                      Haptics.tap()
                       openURL(url)
                   } label: {
                       HStack(alignment: .top, spacing: 8) {
@@ -622,7 +684,6 @@ jobs:
                       Section {
                           ForEach(entries, id: \.name) { entry in
                               Button {
-                                  Haptics.tap()
                                   openURL(entry.url)
                               } label: {
                                   HStack(alignment: .top, spacing: 8) {
@@ -655,218 +716,6 @@ jobs:
           }
           NKEOF
 
-      - name: Write SettingsView
-        run: |
-          cat > natsuk1/Views/SettingsView.swift <<'NKEOF'
-          import SwiftUI
-          import UIKit
-
-          struct SettingsView: View {
-              @Environment(\.dismiss) private var dismiss
-              @EnvironmentObject var state: AppState
-              @EnvironmentObject var offsets: OffsetsStore
-
-              @AppStorage("auto_run")   private var auto_run: Bool = false
-              @AppStorage("verbose")    private var verbose: Bool = true
-              @AppStorage("keep_alive") private var keep_alive: Bool = false
-
-              private var appName: String {
-                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
-                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
-                      ?? "natsuk1"
-              }
-
-              private var version: String {
-                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-              }
-
-              private var appIcon: UIImage? {
-                  if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
-                     let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
-                     let files = primary["CFBundleIconFiles"] as? [String],
-                     let last = files.last {
-                      return UIImage(named: last)
-                  }
-                  return UIImage(named: "AppIcon")
-              }
-
-              private var activeVersionLabel: String {
-                  guard let v = OffsetsStore.activeVersion else { return "unknown" }
-                  return "\(v.device) / iOS \(v.ios) (\(v.build))"
-              }
-
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          Section {
-                              HStack(spacing: 14) {
-                                  Group {
-                                      if let icon = appIcon {
-                                          Image(uiImage: icon)
-                                              .resizable()
-                                              .aspectRatio(contentMode: .fill)
-                                      } else {
-                                          ZStack {
-                                              LinearGradient(
-                                                  colors: [
-                                                      Color(red: 0.65, green: 0.30, blue: 0.90),
-                                                      Color(red: 0.30, green: 0.65, blue: 0.95)
-                                                  ],
-                                                  startPoint: .topLeading,
-                                                  endPoint: .bottomTrailing
-                                              )
-                                              Image(systemName: "bolt.fill")
-                                                  .font(.system(size: 26, weight: .semibold))
-                                                  .foregroundStyle(.white)
-                                          }
-                                      }
-                                  }
-                                  .frame(width: 56, height: 56)
-                                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text(appName)
-                                          .font(.title3)
-                                          .fontWeight(.semibold)
-                                      Text("Version \(version)")
-                                          .font(.subheadline)
-                                          .foregroundColor(.secondary)
-                                  }
-                                  Spacer(minLength: 8)
-                              }
-                              .padding(.vertical, 4)
-
-                              NavigationLink {
-                                  AboutView().environmentObject(state)
-                              } label: {
-                                  HStack(spacing: 10) {
-                                      Image(systemName: "info.circle")
-                                          .foregroundStyle(.secondary)
-                                          .frame(width: 20)
-                                      Text("Credits")
-                                          .foregroundStyle(.primary)
-                                      Spacer(minLength: 8)
-                                  }
-                                  .contentShape(Rectangle())
-                              }
-                              .simultaneousGesture(TapGesture().onEnded { Haptics.tap() })
-                          } header: {
-                              Label("About", systemImage: "info.circle")
-                          }
-
-                          Section {
-                              HStack(spacing: 10) {
-                                  Image(systemName: "cpu")
-                                      .foregroundStyle(.secondary)
-                                      .frame(width: 20)
-                                  Text("Offsets")
-                                      .foregroundStyle(.secondary)
-                                  Spacer(minLength: 8)
-                                  Text(activeVersionLabel)
-                                      .font(.system(size: 12, design: .monospaced))
-                                      .foregroundColor(.secondary)
-                                      .lineLimit(1)
-                                      .truncationMode(.middle)
-                              }
-                              .padding(.vertical, 2)
-
-                              NavigationLink {
-                                  OffsetsView().environmentObject(offsets)
-                              } label: {
-                                  HStack(spacing: 10) {
-                                      Image(systemName: "list.number")
-                                          .foregroundStyle(.secondary)
-                                          .frame(width: 20)
-                                      Text("Modify Offsets")
-                                          .foregroundStyle(.primary)
-                                      Spacer(minLength: 8)
-                                      Text("\(offsets.filledCount())/\(offsets.totalCount())")
-                                          .font(.system(size: 13, design: .monospaced))
-                                          .foregroundColor(.secondary)
-                                  }
-                                  .contentShape(Rectangle())
-                              }
-                              .simultaneousGesture(TapGesture().onEnded { Haptics.tap() })
-                          } header: {
-                              Label("Exploit", systemImage: "cpu")
-                          }
-
-                          Section {
-                              Toggle("Auto Run on Launch", isOn: $auto_run)
-                              Toggle("Verbose Output", isOn: $verbose)
-                              Toggle("Keep Alive", isOn: $keep_alive)
-                          } header: {
-                              Label("Options", systemImage: "gearshape")
-                          }
-
-                          Section {
-                              Button {
-                                  state.respring()
-                              } label: {
-                                  HStack(spacing: 10) {
-                                      Image(systemName: "arrow.clockwise")
-                                          .foregroundStyle(.secondary)
-                                          .frame(width: 20)
-                                      Text("Respring")
-                                          .foregroundStyle(.primary)
-                                      Spacer(minLength: 8)
-                                  }
-                                  .contentShape(Rectangle())
-                              }
-                              .buttonStyle(.plain)
-
-                              Button {
-                                  state.clear()
-                                  Haptics.warning()
-                              } label: {
-                                  HStack(spacing: 10) {
-                                      Image(systemName: "trash")
-                                          .foregroundStyle(.secondary)
-                                          .frame(width: 20)
-                                      Text("Clear Log")
-                                          .foregroundStyle(.primary)
-                                      Spacer(minLength: 8)
-                                  }
-                                  .contentShape(Rectangle())
-                              }
-                              .buttonStyle(.plain)
-                          } header: {
-                              Label("Tools", systemImage: "wrench.and.screwdriver")
-                          }
-                      }
-                      .listStyle(.insetGrouped)
-                      .navigationTitle("Settings")
-                      .navigationBarTitleDisplayMode(.large)
-                      .tint(.blue)
-                      .toolbar {
-                          ToolbarItem(placement: .navigationBarTrailing) {
-                              Button("Done") { dismiss() }
-                                  .fontWeight(.semibold)
-                          }
-                      }
-                  }
-              }
-          }
-          NKEOF
-
-      - name: Patch Offsets JSON
-        run: |
-          python3 <<'PYEOF'
-          import json
-
-          p = "natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
-          data = json.load(open(p))
-          data["defaults"].pop("off_kernel_entry", None)
-          for g in data["groups"]:
-              g["items"] = [x for x in g["items"] if x != "off_kernel_entry"]
-          data["groups"] = [g for g in data["groups"] if g["items"]]
-          with open(p, "w") as f:
-              json.dump(data, f, indent=2)
-              f.write("\n")
-
-          print("offsets patched")
-          PYEOF
-
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
@@ -876,5 +725,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "Silent-audio keep alive, haptics, short About, fix log menu"
+          git commit -m "Remove haptics, fix log context menu, gray menu icons"
           git push
