@@ -18,12 +18,12 @@ concurrency:
 
 env:
   XCODE_VERSION: "26.5"
-  CACHE_SALT: v9
+  CACHE_SALT: v10
 
 jobs:
   fix-and-test:
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -35,95 +35,457 @@ jobs:
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
-      - name: Write nk_api.h
+      - name: Fetch AirliftFFI from AirCard-iOS
         run: |
-          cat > natsuk1/Exploit/nk_api.h <<'CEOF'
-          #ifndef NK_API_H
-          #define NK_API_H
+          set -euo pipefail
+          rm -rf /tmp/aircard
+          git clone --depth 1 https://github.com/Mak5er/AirCard-iOS.git /tmp/aircard
 
-          #include <stdint.h>
-          #include <stddef.h>
+          mkdir -p natsuk1/External
+          rm -rf natsuk1/External/AirliftFFI.xcframework
+          cp -R /tmp/aircard/AirliftFFI.xcframework natsuk1/External/
 
-          void nk_set_log(void (*fn)(const char *));
-          void nk_logx(const char *tag, const char *fmt, ...);
-          void nk_log(const char *fmt, ...);
-          void nk_rule(void);
+          cp /tmp/aircard/ios-app/GrappaHelper.h natsuk1/Exploit/
+          cp /tmp/aircard/ios-app/GrappaHelper.m natsuk1/Exploit/
 
-          int nk_run(void);
-          int nk_full_exploit(void);
+          cp /tmp/aircard/ios-app/NetworkStatus.swift natsuk1/Helpers/
+          cp /tmp/aircard/ios-app/PairingController.swift natsuk1/Helpers/
 
-          #define NK_INFO(tag, ...) nk_logx(tag, __VA_ARGS__)
-          #define NK_WARN(tag, ...) nk_logx(tag, __VA_ARGS__)
-          #define NK_ERR(tag, ...)  nk_logx(tag, __VA_ARGS__)
+          echo "---- AirliftFFI xcframework ----"
+          find natsuk1/External/AirliftFFI.xcframework -type f | sort
 
-          #endif
-          CEOF
-
-      - name: Write nk_api.c
+      - name: Patch PairingController
         run: |
-          cat > natsuk1/Exploit/nk_api.c <<'CEOF'
-          #include "nk_api.h"
-          #include "nk_offsets.h"
-          #include <stdarg.h>
-          #include <stdio.h>
+          python3 <<'PYEOF'
+          import re
+          p = "natsuk1/Helpers/PairingController.swift"
+          s = open(p).read()
+          s = s.replace('private let hostName = "AirCard-iOS"', 'private let hostName = "natsuk1"')
+          s = s.replace('"Settings › Privacy & Security › Developer Mode › Pair with AirCard-iOS"',
+                        '"Settings › Privacy & Security › Developer Mode › Pair with natsuk1"')
+          s = s.replace('"Settings › Privacy & Security › Developer Mode"',
+                        '"Settings › Privacy & Security › Developer Mode"')
+          s = s.replace('Settings › AirCard-iOS › Local Network', 'Settings › natsuk1 › Local Network')
+          open(p, "w").write(s)
+          PYEOF
 
-          static void (*g_fn)(const char *) = NULL;
+      - name: Write AirliftBridge.swift
+        run: |
+          cat > natsuk1/Helpers/AirliftBridge.swift <<'SWIFTEOF'
+          import Foundation
+          import AirliftFFI
 
-          void nk_set_log(void (*fn)(const char *)) {
-              g_fn = fn;
+          @MainActor
+          final class AirliftBridge: ObservableObject {
+              static let shared = AirliftBridge()
+
+              enum State: Equatable {
+                  case idle
+                  case pairing
+                  case ready(pairingPath: String)
+                  case running
+                  case done(ok: Bool, message: String)
+              }
+
+              @Published private(set) var state: State = .idle
+              @Published private(set) var pairPIN: String? = nil
+              @Published private(set) var pairingStatus: String = ""
+              @Published private(set) var exploitLog: [String] = []
+              @Published var target: String = "/var/mobile/Library/SpringBoard"
+
+              private var loggedLines: [String] = []
+
+              private init() {
+                  al_log_init({ _, msg in
+                      guard let msg = msg else { return }
+                      let line = String(cString: msg)
+                      DispatchQueue.main.async {
+                          AirliftBridge.shared.appendLog(line)
+                      }
+                  }, nil)
+              }
+
+              nonisolated private func appendLog(_ s: String) {
+                  DispatchQueue.main.async {
+                      self.loggedLines.append(s)
+                      if self.loggedLines.count > 500 {
+                          self.loggedLines.removeFirst(self.loggedLines.count - 400)
+                      }
+                      self.exploitLog = self.loggedLines
+                  }
+              }
+
+              func clearLog() {
+                  loggedLines.removeAll()
+                  exploitLog = []
+              }
+
+              func pairingFilePath() -> String {
+                  let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                  return docs.appendingPathComponent("natsuk1_pairing.plist").path
+              }
+
+              func hasPairing() -> Bool {
+                  let p = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: p) else { return false }
+                  let size = (try? FileManager.default.attributesOfItem(atPath: p)[.size] as? Int) ?? 0
+                  return size > 0
+              }
+
+              func runPairing() {
+                  guard !hasPairing() else {
+                      state = .ready(pairingPath: pairingFilePath())
+                      return
+                  }
+
+                  state = .pairing
+                  pairingStatus = "Starting host…"
+                  pairPIN = nil
+
+                  let ctrl = PairingController.shared
+                  Task {
+                      do {
+                          let path = try await ctrl.startAndWait()
+                          self.state = .ready(pairingPath: path)
+                          self.pairingStatus = "Paired ✅"
+                          self.pairPIN = nil
+                      } catch is CancellationError {
+                          self.state = .idle
+                          self.pairingStatus = "Cancelled"
+                      } catch {
+                          self.state = .idle
+                          self.pairingStatus = "Failed: \(error.localizedDescription)"
+                      }
+                  }
+                  Task {
+                      while case .pairing = self.state {
+                          try? await Task.sleep(nanoseconds: 200_000_000)
+                          self.pairingStatus = ctrl.pairingStatus
+                          self.pairPIN = ctrl.pairingPIN
+                      }
+                  }
+              }
+
+              func cancelPairing() {
+                  PairingController.shared.softCancel()
+                  state = .idle
+                  pairingStatus = ""
+                  pairPIN = nil
+              }
+
+              func deletePairing() {
+                  try? FileManager.default.removeItem(atPath: pairingFilePath())
+                  PairingController.customPairingFilePath = nil
+                  state = .idle
+                  pairingStatus = ""
+              }
+
+              func runExploit() {
+                  let pairingPath = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairingPath) else {
+                      state = .done(ok: false, message: "No pairing file")
+                      return
+                  }
+
+                  state = .running
+                  loggedLines.removeAll()
+                  exploitLog = []
+                  let targetDir = target
+
+                  Task.detached {
+                      var outJson: UnsafeMutablePointer<CChar>? = nil
+                      var outError: UnsafeMutablePointer<CChar>? = nil
+
+                      let rc: Int32 = pairingPath.withCString { pc in
+                          targetDir.withCString { tc in
+                              al_exploit_run(pc, tc, nil, nil, &outJson, &outError)
+                          }
+                      }
+
+                      let jsonStr = outJson.flatMap { p -> String? in
+                          let s = String(cString: p); al_string_free(p); return s
+                      }
+                      let errStr = outError.flatMap { p -> String? in
+                          let s = String(cString: p); al_string_free(p); return s
+                      }
+
+                      await MainActor.run {
+                          if rc == 0 {
+                              let msg = jsonStr ?? "Canary write confirmed"
+                              self.state = .done(ok: true, message: msg)
+                          } else {
+                              let msg = errStr ?? "rc=\(rc)"
+                              self.state = .done(ok: false, message: msg)
+                          }
+                      }
+                  }
+              }
+
+              func respring() {
+                  let pairingPath = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairingPath) else { return }
+                  Task.detached {
+                      var outError: UnsafeMutablePointer<CChar>? = nil
+                      _ = pairingPath.withCString { pc in
+                          al_device_respring(pc, nil, nil, &outError)
+                      }
+                      if let p = outError { al_string_free(p) }
+                  }
+              }
+
+              func findContainer(bundleID: String) async -> String? {
+                  let pairingPath = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairingPath) else { return nil }
+
+                  return await withCheckedContinuation { cont in
+                      DispatchQueue.global(qos: .userInitiated).async {
+                          var outContainer: UnsafeMutablePointer<CChar>? = nil
+                          var outError: UnsafeMutablePointer<CChar>? = nil
+
+                          let rc: Int32 = pairingPath.withCString { pc in
+                              bundleID.withCString { bc in
+                                  al_find_app_container(pc, bc, nil, nil, &outContainer, &outError)
+                              }
+                          }
+
+                          let containerStr = outContainer.flatMap { p -> String? in
+                              let s = String(cString: p); al_string_free(p); return s
+                          }
+                          if let p = outError { al_string_free(p) }
+
+                          if rc == 0, let c = containerStr {
+                              cont.resume(returning: c)
+                          } else {
+                              cont.resume(returning: nil)
+                          }
+                      }
+                  }
+              }
+          }
+          SWIFTEOF
+
+      - name: Write AirliftView.swift
+        run: |
+          cat > natsuk1/Views/AirliftView.swift <<'SWIFTEOF'
+          import SwiftUI
+          import UIKit
+
+          struct AirliftView: View {
+              @EnvironmentObject var airlift: AirliftBridge
+
+              var body: some View {
+                  List {
+                      switch airlift.state {
+                      case .idle, .pairing:
+                          pairingSection
+                      case .ready, .running, .done:
+                          exploitSection
+                      }
+
+                      if !airlift.exploitLog.isEmpty {
+                          Section {
+                              AirliftLogView(lines: airlift.exploitLog, onClear: { airlift.clearLog() })
+                                  .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                          } header: {
+                              Label("Log", systemImage: "apple.terminal")
+                          }
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .scrollContentBackground(.hidden)
+                  .background(Color(UIColor.systemGroupedBackground))
+                  .navigationTitle("Airlift")
+                  .navigationBarTitleDisplayMode(.inline)
+              }
+
+              @ViewBuilder
+              private var pairingSection: some View {
+                  Section {
+                      VStack(alignment: .leading, spacing: 6) {
+                          HStack(spacing: 8) {
+                              Image(systemName: "checkmark.shield.fill")
+                                  .foregroundStyle(airlift.hasPairing() ? .green : .orange)
+                              Text(airlift.hasPairing() ? "Paired" : "Not paired")
+                                  .font(.subheadline.bold())
+                          }
+                          Text("Advertises natsuk1 as a local pairing host. Approve in Settings → Privacy & Security → Developer Mode → Pair with natsuk1.")
+                              .font(.caption)
+                              .foregroundColor(.secondary)
+                      }
+                      .padding(.vertical, 4)
+
+                      if case .pairing = airlift.state {
+                          HStack(spacing: 8) {
+                              ProgressView().scaleEffect(0.85)
+                              Text(airlift.pairingStatus.isEmpty ? "Starting…" : airlift.pairingStatus)
+                                  .font(.subheadline)
+                                  .foregroundColor(.secondary)
+                          }
+                      }
+
+                      if let pin = airlift.pairPIN {
+                          VStack(alignment: .leading, spacing: 10) {
+                              Text("ENTER THIS PIN")
+                                  .font(.caption2.bold())
+                                  .foregroundStyle(.secondary)
+                              Text(pin)
+                                  .font(.system(size: 36, weight: .black, design: .monospaced))
+                                  .foregroundStyle(.orange)
+                              Button {
+                                  if let url = URL(string: UIApplication.openSettingsURLString) {
+                                      UIApplication.shared.open(url)
+                                  }
+                              } label: {
+                                  Label("Open Settings", systemImage: "arrow.up.forward.app")
+                                      .frame(maxWidth: .infinity)
+                              }
+                              .buttonStyle(.borderedProminent)
+                              .tint(.orange)
+                          }
+                          .padding(12)
+                          .background(Color.orange.opacity(0.12))
+                          .clipShape(RoundedRectangle(cornerRadius: 12))
+                      }
+                  } header: {
+                      Label("Pairing", systemImage: "antenna.radiowaves.left.and.right")
+                  }
+
+                  Section {
+                      if case .pairing = airlift.state {
+                          Button(role: .destructive) {
+                              airlift.cancelPairing()
+                          } label: {
+                              Text("Cancel Pairing")
+                                  .frame(maxWidth: .infinity)
+                          }
+                      } else if airlift.hasPairing() {
+                          Button(role: .destructive) {
+                              airlift.deletePairing()
+                          } label: {
+                              Text("Delete Pairing")
+                                  .frame(maxWidth: .infinity)
+                          }
+                      } else {
+                          Button {
+                              airlift.runPairing()
+                          } label: {
+                              HStack {
+                                  Image(systemName: "antenna.radiowaves.left.and.right")
+                                  Text("Start Pairing")
+                                  Spacer()
+                              }
+                          }
+                      }
+                  }
+              }
+
+              @ViewBuilder
+              private var exploitSection: some View {
+                  Section {
+                      HStack {
+                          Text("Status")
+                          Spacer()
+                          switch airlift.state {
+                          case .ready:
+                              Text("Ready").foregroundColor(.green).font(.subheadline.bold())
+                          case .running:
+                              HStack(spacing: 6) {
+                                  ProgressView().scaleEffect(0.7)
+                                  Text("Running").foregroundColor(.orange)
+                              }
+                          case .done(let ok, _):
+                              Text(ok ? "Success" : "Failed")
+                                  .foregroundColor(ok ? .green : .red)
+                                  .font(.subheadline.bold())
+                          default:
+                              EmptyView()
+                          }
+                      }
+
+                      HStack {
+                          Text("Target")
+                          Spacer()
+                          TextField("/var/mobile/Library/SpringBoard", text: Binding(
+                              get: { airlift.target },
+                              set: { airlift.target = $0 }
+                          ))
+                          .font(.system(size: 12, design: .monospaced))
+                          .multilineTextAlignment(.trailing)
+                          .autocorrectionDisabled()
+                          .textInputAutocapitalization(.never)
+                      }
+                  } header: {
+                      Label("Exploit", systemImage: "bolt.shield")
+                  }
+
+                  Section {
+                      Button {
+                          airlift.runExploit()
+                      } label: {
+                          HStack {
+                              Image(systemName: "bolt.fill")
+                              Text("Run Airlift")
+                              Spacer()
+                          }
+                      }
+                      .disabled(airlift.state == .running)
+
+                      Button {
+                          airlift.respring()
+                      } label: {
+                          HStack {
+                              Image(systemName: "arrow.clockwise")
+                              Text("Respring (device)")
+                              Spacer()
+                          }
+                      }
+                      .disabled(airlift.state == .running)
+                  }
+              }
           }
 
-          void nk_logx(const char *tag, const char *fmt, ...) {
-              if (!g_fn) return;
-              char body[448];
-              va_list ap; va_start(ap, fmt);
-              vsnprintf(body, sizeof(body), fmt, ap);
-              va_end(ap);
-              char out[512];
-              snprintf(out, sizeof(out), "[%s] %s", tag, body);
-              g_fn(out);
+          struct AirliftLogView: View {
+              let lines: [String]
+              let onClear: () -> Void
+              @State private var copied = false
+
+              var body: some View {
+                  ScrollViewReader { proxy in
+                      ScrollView(showsIndicators: false) {
+                          Text(lines.isEmpty ? "No output yet." : lines.joined(separator: "\n"))
+                              .font(.system(size: 9, design: .monospaced))
+                              .multilineTextAlignment(.leading)
+                              .foregroundColor(lines.isEmpty ? .secondary : .primary)
+                              .frame(maxWidth: .infinity, alignment: .leading)
+
+                          Spacer(minLength: 0)
+                              .id(0)
+                      }
+                      .frame(maxHeight: 260)
+                      .padding(10)
+                      .background(Color(UIColor.secondarySystemGroupedBackground))
+                      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                      .onChange(of: lines.count) { _, _ in
+                          withAnimation(.linear(duration: 0.05)) {
+                              proxy.scrollTo(0, anchor: .bottom)
+                          }
+                      }
+                  }
+                  .contextMenu {
+                      Button {
+                          UIPasteboard.general.string = lines.joined(separator: "\n")
+                      } label: {
+                          Label("Copy All", systemImage: "doc.on.doc")
+                      }
+                      Button(role: .destructive) {
+                          onClear()
+                      } label: {
+                          Label("Clear", systemImage: "trash")
+                      }
+                  }
+              }
           }
-
-          void nk_log(const char *fmt, ...) {
-              if (!g_fn) return;
-              char body[448];
-              va_list ap; va_start(ap, fmt);
-              vsnprintf(body, sizeof(body), fmt, ap);
-              va_end(ap);
-              char out[512];
-              snprintf(out, sizeof(out), "[MAIN] %s", body);
-              g_fn(out);
-          }
-
-          void nk_rule(void) { nk_log("----"); }
-
-          int nk_run(void) {
-              NK_INFO("BASE", "kernel %llX", (unsigned long long)NK_KERNEL_BASE);
-              NK_INFO("BASE", "sysent %llX (%d)",
-                      (unsigned long long)NK_SYSENT_BASE, NK_SYSENT_COUNT);
-              NK_INFO("BASE", "mach_trap %llX", (unsigned long long)NK_MACH_TRAP_TABLE);
-              nk_rule();
-
-              NK_INFO("PRIM", "copyin %llX", (unsigned long long)NK_FN_COPYIN);
-              NK_INFO("PRIM", "copyout %llX", (unsigned long long)NK_FN_COPYOUT);
-              NK_INFO("PRIM", "kalloc %llX", (unsigned long long)NK_FN_KALLOC_EXT);
-              NK_INFO("PRIM", "kfree %llX", (unsigned long long)NK_FN_KFREE_EXT);
-              nk_rule();
-
-              NK_INFO("STRC", "proc_pid %X", NK_OFF_PROC_PID);
-              NK_INFO("STRC", "proc_ucred %X", NK_OFF_PROC_UCRED);
-              NK_INFO("STRC", "task_thread %X", NK_OFF_TASK_THREAD);
-              nk_rule();
-
-              NK_WARN("STAT", "No kernel R/W primitive.");
-              NK_WARN("STAT", "Reference data only.");
-              nk_rule();
-
-              return 0;
-          }
-
-          int nk_full_exploit(void) { return nk_run(); }
-          CEOF
+          SWIFTEOF
 
       - name: Write ContentView
         run: |
@@ -133,14 +495,35 @@ jobs:
 
           struct ContentView: View {
               @EnvironmentObject var state: AppState
+              @EnvironmentObject var airlift: AirliftBridge
 
               @State private var show_settings: Bool = false
               @State private var show_device: Bool = false
-              @State private var copied: Bool = false
 
               var body: some View {
                   NavigationStack {
                       List {
+                          Section {
+                              NavigationLink {
+                                  AirliftView().environmentObject(airlift)
+                              } label: {
+                                  HStack(spacing: 12) {
+                                      Image(systemName: "airplane")
+                                          .frame(width: 22, alignment: .center)
+                                      Text(state.t("Airlift", "Airlift"))
+                                      Spacer(minLength: 8)
+                                      Text(airlift.hasPairing() ? "Ready" : "Setup")
+                                          .font(.system(size: 12, design: .monospaced))
+                                          .foregroundColor(.secondary)
+                                  }
+                              }
+                          } header: {
+                              Label(state.t("Sandbox Escape", "Побег из песочницы"), systemImage: "bolt.shield")
+                          } footer: {
+                              Text(state.t("On-device AirTraffic sandbox escape. Requires Developer Mode pairing.",
+                                           "On-device побег из песочницы через AirTraffic. Требует Developer Mode pairing."))
+                          }
+
                           Section {
                               Button {
                                   state.run()
@@ -148,7 +531,7 @@ jobs:
                                   HStack(spacing: 12) {
                                       Image(systemName: "bolt.fill")
                                           .frame(width: 22, alignment: .center)
-                                      Text(state.t("Run Exploit", "Запустить эксплойт"))
+                                      Text(state.t("Run Offsets", "Показать оффсеты"))
                                       Spacer(minLength: 8)
                                       if state.running {
                                           ProgressView().scaleEffect(0.8)
@@ -157,7 +540,7 @@ jobs:
                               }
                               .disabled(state.running)
                           } header: {
-                              Label(state.t("Actions", "Действия"), systemImage: "play.circle")
+                              Label(state.t("Kernel Offsets", "Оффсеты ядра"), systemImage: "cpu")
                           }
 
                           Section {
@@ -202,18 +585,6 @@ jobs:
 
                           Section {
                               Button {
-                                  UIPasteboard.general.string = state.log
-                                  copied = true
-                                  DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                      copied = false
-                                  }
-                              } label: {
-                                  Text(copied
-                                       ? state.t("Copied!", "Скопировано!")
-                                       : state.t("Copy All", "Копировать всё"))
-                              }
-
-                              Button(role: .destructive) {
                                   state.clear()
                               } label: {
                                   Text(state.t("Clear", "Очистить"))
@@ -256,18 +627,15 @@ jobs:
 
               var body: some View {
                   ScrollViewReader { proxy in
-                      ScrollView(.horizontal, showsIndicators: false) {
-                          ScrollView(.vertical, showsIndicators: false) {
-                              Text(state.log.isEmpty ? "Awaiting execution." : state.log)
-                                  .font(.system(size: 9, design: .monospaced))
-                                  .multilineTextAlignment(.leading)
-                                  .foregroundColor(state.log.isEmpty ? .secondary : .primary)
-                                  .fixedSize(horizontal: true, vertical: false)
-                                  .frame(maxWidth: .infinity, alignment: .leading)
+                      ScrollView(showsIndicators: false) {
+                          Text(state.log.isEmpty ? "Awaiting execution." : state.log)
+                              .font(.system(size: 10, design: .monospaced))
+                              .multilineTextAlignment(.leading)
+                              .foregroundColor(state.log.isEmpty ? .secondary : .primary)
+                              .frame(maxWidth: .infinity, alignment: .leading)
 
-                              Spacer(minLength: 0)
-                                  .id(0)
-                          }
+                          Spacer(minLength: 0)
+                              .id(0)
                       }
                       .onChange(of: state.log) { _, _ in
                           withAnimation(.linear(duration: 0.05)) {
@@ -290,192 +658,114 @@ jobs:
           }
           SWIFTEOF
 
-      - name: Write SettingsView
+      - name: Patch natsuk1.swift
         run: |
-          cat > natsuk1/Views/SettingsView.swift <<'SWIFTEOF'
-          import SwiftUI
-          import UIKit
+          python3 <<'PYEOF'
+          import re
+          p = "natsuk1/natsuk1.swift"
+          s = open(p).read()
 
-          struct SettingsView: View {
-              @Environment(\.dismiss) private var dismiss
-              @EnvironmentObject var state: AppState
-              @EnvironmentObject var offsets: OffsetsStore
+          # add AirliftBridge state object
+          if "AirliftBridge.shared" not in s:
+              s = s.replace(
+                  '    @StateObject private var offsets = OffsetsStore.shared\n',
+                  '    @StateObject private var offsets = OffsetsStore.shared\n    @StateObject private var airlift = AirliftBridge.shared\n'
+              )
+              s = s.replace(
+                  '                              .environmentObject(offsets)\n',
+                  '                              .environmentObject(offsets)\n                              .environmentObject(airlift)\n'
+              )
 
-              @AppStorage("auto_run")   private var auto_run: Bool = false
-              @AppStorage("verbose")    private var verbose: Bool = true
-              @AppStorage("keep_alive_audio")    private var keep_alive_audio: Bool = false
-              @AppStorage("keep_alive_location") private var keep_alive_location: Bool = false
+          open(p, "w").write(s)
+          PYEOF
 
-              private var appName: String {
-                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
-                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
-                      ?? "natsuk1"
-              }
+      - name: Patch bridging.h
+        run: |
+          python3 <<'PYEOF'
+          p = "natsuk1/bridging.h"
+          s = open(p).read()
+          if "AirliftFFI" not in s:
+              s = s.replace(
+                  '#include "Exploit/nk_api.h"',
+                  '#include "Exploit/nk_api.h"\n#import <AirliftFFI/airlift.h>'
+              )
+              s = s.replace(
+                  '#endif',
+                  '#import "Exploit/GrappaHelper.h"\n\n#endif'
+              )
+          open(p, "w").write(s)
+          PYEOF
 
-              private var version: String {
-                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-              }
+      - name: Patch Info.plist
+        run: |
+          python3 <<'PYEOF'
+          import re
+          p = "natsuk1/Resources/Info.plist"
+          s = open(p).read()
 
-              private var appIcon: UIImage? {
-                  if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
-                     let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
-                     let files = primary["CFBundleIconFiles"] as? [String],
-                     let last = files.last {
-                      return UIImage(named: last)
-                  }
-                  return UIImage(named: "AppIcon")
-              }
+          if "NSBonjourServices" not in s:
+              insert = (
+                  "    <key>NSBonjourServices</key>\n"
+                  "    <array>\n"
+                  "        <string>_remotepairing-pairable-host._tcp</string>\n"
+                  "    </array>\n"
+                  "    <key>NSLocalNetworkUsageDescription</key>\n"
+                  "    <string>natsuk1 advertises a local pairing service so this device can pair with itself.</string>\n"
+              )
+              s = s.replace("</dict>\n</plist>", insert + "</dict>\n</plist>")
 
-              private var activeVersionLabel: String {
-                  guard let v = OffsetsStore.activeVersion else { return "unknown" }
-                  return "\(v.device) / iOS \(v.ios) (\(v.build))"
-              }
+          if "UIBackgroundModes" in s:
+              # ensure audio is present (needed for pairing keep-alive)
+              pass
+          else:
+              insert = (
+                  "    <key>UIBackgroundModes</key>\n"
+                  "    <array>\n"
+                  "        <string>audio</string>\n"
+                  "    </array>\n"
+              )
+              s = s.replace("</dict>\n</plist>", insert + "</dict>\n</plist>")
 
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          Section {
-                              HStack(spacing: 14) {
-                                  Group {
-                                      if let icon = appIcon {
-                                          Image(uiImage: icon)
-                                              .resizable()
-                                              .aspectRatio(contentMode: .fill)
-                                      } else {
-                                          ZStack {
-                                              LinearGradient(
-                                                  colors: [
-                                                      Color(red: 0.65, green: 0.30, blue: 0.90),
-                                                      Color(red: 0.30, green: 0.65, blue: 0.95)
-                                                  ],
-                                                  startPoint: .topLeading,
-                                                  endPoint: .bottomTrailing
-                                              )
-                                              Image(systemName: "bolt.fill")
-                                                  .font(.system(size: 26, weight: .semibold))
-                                                  .foregroundStyle(.white)
-                                          }
-                                      }
-                                  }
-                                  .frame(width: 56, height: 56)
-                                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+          open(p, "w").write(s)
+          PYEOF
 
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text(appName)
-                                          .font(.title3)
-                                          .fontWeight(.semibold)
-                                      Text("Version \(version)")
-                                          .font(.subheadline)
-                                          .foregroundColor(.secondary)
-                                  }
-                                  Spacer(minLength: 8)
-                              }
-                              .padding(.vertical, 4)
+      - name: Patch project.yml
+        run: |
+          python3 <<'PYEOF'
+          import re
+          p = "project.yml"
+          s = open(p).read()
 
-                              NavigationLink {
-                                  AboutView().environmentObject(state)
-                              } label: {
-                                  HStack(spacing: 12) {
-                                      Text("Credits")
-                                      Spacer(minLength: 8)
-                                  }
-                              }
-                          } header: {
-                              Label("About", systemImage: "info.circle")
-                          }
+          # add xcframework as dependency
+          if "AirliftFFI.xcframework" not in s:
+              if "    dependencies:" in s:
+                  s = s.replace(
+                      "    dependencies:\n",
+                      "    dependencies:\n      - framework: natsuk1/External/AirliftFFI.xcframework\n        embed: false\n",
+                      1
+                  )
 
-                          Section {
-                              HStack(spacing: 12) {
-                                  Image(systemName: "cpu")
-                                      .frame(width: 22, alignment: .center)
-                                      .foregroundStyle(.secondary)
-                                  Text("Offsets")
-                                      .foregroundStyle(.secondary)
-                                  Spacer(minLength: 8)
-                                  Text(activeVersionLabel)
-                                      .font(.system(size: 12, design: .monospaced))
-                                      .foregroundColor(.secondary)
-                                      .lineLimit(1)
-                                      .truncationMode(.middle)
-                              }
-                              .padding(.vertical, 2)
+          # add libc++ linking + C++ standard
+          if "-lc++" not in s:
+              s = re.sub(
+                  r'^(\s*OTHER_LDFLAGS:\s*)(.*)$',
+                  r'\1\2 -lc++',
+                  s, flags=re.M
+              )
 
-                              NavigationLink {
-                                  OffsetsView().environmentObject(offsets)
-                              } label: {
-                                  HStack(spacing: 12) {
-                                      Image(systemName: "list.number")
-                                          .frame(width: 22, alignment: .center)
-                                      Text("Modify Offsets")
-                                      Spacer(minLength: 8)
-                                      Text("\(offsets.filledCount())/\(offsets.totalCount())")
-                                          .font(.system(size: 13, design: .monospaced))
-                                          .foregroundColor(.secondary)
-                                  }
-                              }
-                          } header: {
-                              Label("Exploit", systemImage: "cpu")
-                          }
+          # add Exploit sources
+          if "- path: natsuk1/External\n" not in s:
+              marker = "      - path: natsuk1/Exploit\n"
+              if marker in s:
+                  s = s.replace(
+                      marker,
+                      marker + "      - path: natsuk1/External\n        excludes:\n          - \"**/*.xcframework/**\"\n"
+                  )
 
-                          Section {
-                              Toggle(isOn: $keep_alive_audio) {
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text("Silent Audio")
-                                      Text("Plays inaudible audio so iOS keeps the app running.")
-                                          .font(.caption)
-                                          .foregroundColor(.secondary)
-                                  }
-                              }
-
-                              Toggle(isOn: $keep_alive_location) {
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text("Background Location")
-                                      Text("Uses low-accuracy location to stay alive when an activity needs it.")
-                                          .font(.caption)
-                                          .foregroundColor(.secondary)
-                                  }
-                              }
-                          } header: {
-                              Label("Background Keep-Alive", systemImage: "waveform.circle")
-                          }
-
-                          Section {
-                              Toggle("Auto Run on Launch", isOn: $auto_run)
-                              Toggle("Verbose Output", isOn: $verbose)
-                          } header: {
-                              Label("Options", systemImage: "gearshape")
-                          }
-
-                          Section {
-                              Button {
-                                  state.respring()
-                              } label: {
-                                  HStack(spacing: 12) {
-                                      Image(systemName: "arrow.clockwise")
-                                          .frame(width: 22, alignment: .center)
-                                      Text("Respring")
-                                      Spacer(minLength: 8)
-                                  }
-                              }
-                          } header: {
-                              Label("Tools", systemImage: "wrench.and.screwdriver")
-                          }
-                      }
-                      .listStyle(.insetGrouped)
-                      .scrollContentBackground(.hidden)
-                      .background(Color(UIColor.systemGroupedBackground))
-                      .navigationTitle("Settings")
-                      .navigationBarTitleDisplayMode(.inline)
-                      .toolbar {
-                          ToolbarItem(placement: .navigationBarTrailing) {
-                              Button("Done") { dismiss() }
-                                  .fontWeight(.semibold)
-                          }
-                      }
-                  }
-              }
-          }
-          SWIFTEOF
+          open(p, "w").write(s)
+          print("---- project.yml ----")
+          print(s)
+          PYEOF
 
       - name: Cache Homebrew
         uses: actions/cache@v5
@@ -535,7 +825,6 @@ jobs:
           APP_PATH="${{ steps.build.outputs.app_path }}"
           APP_DIR="$(dirname "$APP_PATH")"
           APP_NAME="$(basename "$APP_PATH")"
-
           COPYFILE_DISABLE=1 tar -czf natsuk1-app.tar.gz -C "$APP_DIR" "$APP_NAME"
           ls -lh natsuk1-app.tar.gz
 
@@ -557,5 +846,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          git commit -m "Clean logs, no Credits icon, horizontal scroll fallback [skip ci]"
+          git commit -m "Integrate AirliftFFI: on-device AirTraffic sandbox escape [skip ci]"
           git push
