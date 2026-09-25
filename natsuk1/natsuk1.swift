@@ -121,6 +121,14 @@ final class AppState: ObservableObject, @unchecked Sendable {
             case .failed: return .red
             }
         }
+        var symbol: String {
+            switch self {
+            case .idle: return "circle.fill"
+            case .running: return "circle.fill"
+            case .ok: return "checkmark.circle.fill"
+            case .failed: return "xmark.circle.fill"
+            }
+        }
     }
     @Published var log: String = ""
     @Published var status: Status = .idle
@@ -164,10 +172,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
         if running { return }
         running = true; status = .running
         Task.detached {
-            _ = nk_necp_run()
+            let rc = nk_necp_run()
             await MainActor.run {
                 AppState.shared.running = false
-                AppState.shared.status = .ok
+                AppState.shared.status = (rc == 0) ? .ok : .failed
             }
         }
     }

@@ -26,7 +26,7 @@ struct OverviewView: View {
                     HStack {
                         Text(state.t("Status", "Статус"))
                         Spacer()
-                        Circle().fill(state.status.color).frame(width: 8, height: 8)
+                        StatusDot(status: state.status)
                     }
                 } header: {
                     Label(state.t("Runtime", "Состояние"), systemImage: "waveform.path.ecg")
@@ -53,6 +53,31 @@ struct OverviewView: View {
             .navigationTitle("natsuk1")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+}
+
+struct StatusDot: View {
+    let status: AppState.Status
+    @State private var pulse = false
+
+    var body: some View {
+        Image(systemName: status.symbol)
+            .font(.system(size: 14))
+            .foregroundStyle(status.color)
+            .shadow(color: status.color.opacity(0.8), radius: 6)
+            .scaleEffect(pulse ? 1.15 : 1.0)
+            .animation(
+                status == .running
+                    ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
+                    : .default,
+                value: pulse
+            )
+            .onAppear {
+                if status == .running { pulse = true }
+            }
+            .onChange(of: status) { _, newStatus in
+                pulse = (newStatus == .running)
+            }
     }
 }
 
