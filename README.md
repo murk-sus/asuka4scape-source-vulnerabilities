@@ -8,17 +8,19 @@ iOS 27.0 kernel research toolkit.
 
 ![platform](https://img.shields.io/badge/platform-iOS%2027.0-blue)
 ![arch](https://img.shields.io/badge/arch-arm64e-green)
-![device](https://img.shields.io/badge/device-iPhone14%2C5%20%2F%2014%2C7-lightgrey)
+![device](https://img.shields.io/badge/device-iPhone14%2C5-lightgrey)
 ![license](https://img.shields.io/badge/license-MIT-yellow)
 
 ## Overview
 
 Kernel-level research project targeting XNU on arm64e.
 
+- KASLR leak via NECP sysctl arena (op=0x0D)
+- Full NECP opcode map (0x01..0x1B)
 - NECP UAF primitives with double-free confirmation
 - Kernel offset database for iOS 27.0 / 24A437
 - Remote pairing host (RPPairing) for sandbox-escape research
-- Background keep-alive (silent audio + low-accuracy location)
+- Background keep-alive (silent audio + location)
 - Crash-safe logging with recovery across sessions
 
 ## Requirements
@@ -43,7 +45,7 @@ xcodebuild -project natsuk1.xcodeproj -scheme natsuk1 -configuration Release -sd
 
 ```
 natsuk1/
-├── Exploit/         C primitives (NECP, offsets)
+├── Exploit/         C primitives (NECP, KASLR leak, offsets)
 ├── Helpers/         Swift bridges (pairing, MG, keep-alive)
 ├── Offsets/         Versioned kernel offset DB
 ├── Resources/       Info.plist, entitlements, assets
@@ -53,7 +55,8 @@ natsuk1/
 ## Notes
 
 - All offsets are device/build specific. Verify before use.
-- NECP-flow kernel read is under active research.
+- NECP kread: verified closed (no user-controlled pointer sinks).
+- KASLR leak: NECP op=0x0D returns a kernel VA in user buffer.
 - This is a research project, not a general-purpose jailbreak.
 
 ## Credits
