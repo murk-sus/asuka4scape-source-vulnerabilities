@@ -30,6 +30,35 @@ jobs:
           rm -f .github/workflows/natsuk1.yml
           rm -f .github/workflows/main.yml
 
+      - name: Patch nk_api.c
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          F = "natsuk1/Exploit/nk_api.c"
+          with open(F) as f:
+              s = f.read()
+          if "natsuk1-v8-api" in s:
+              print("already patched")
+              raise SystemExit(0)
+          orig = s
+          old = "int nk_full_exploit(void) { return nk_run(); }"
+          new = ("/* natsuk1-v8-api */\n"
+                 "int nk_full_exploit(void) { return nk_necp_run(); }")
+          if old not in s:
+              print("ERROR: nk_full_exploit body not found")
+              raise SystemExit(1)
+          s = s.replace(old, new)
+          if s == orig:
+              raise SystemExit("ERROR: no changes")
+          if "natsuk1-v8-api" not in s:
+              raise SystemExit("ERROR: marker missing")
+          if s.count("int nk_full_exploit(void)") != 1:
+              raise SystemExit("ERROR: nk_full_exploit count != 1")
+          with open(F, "w") as f:
+              f.write(s)
+          print("nk_api.c patched")
+          PYEOF
+
       - name: Write necp.c
         run: |
           set -euo pipefail
@@ -424,8 +453,6 @@ jobs:
           '    __sync_lock_release(&g_busy);',
           '    return rc;',
           '}',
-          '',
-          'int nk_full_exploit(void) { return nk_necp_run(); }',
           ]
           with open("natsuk1/Exploit/necp.c", "w") as f:
               for l in lines:
@@ -433,7 +460,7 @@ jobs:
           print("wrote %d lines" % len(lines))
           PYEOF
 
-      - name: Verify necp.c syntax
+      - name: Verify
         run: |
           set -euo pipefail
           F=natsuk1/Exploit/necp.c
@@ -446,15 +473,14 @@ jobs:
           test "$(grep -c 'static uint64_t kr64' "$F")" = "1"
           test "$(grep -c 'static void dumpw' "$F")" = "1"
           test "$(grep -c 'natsuk1-kread-v8-fuzz' "$F")" = "1"
-          echo "--- spot checks ---"
+          test "$(grep -c 'nk_full_exploit' "$F")" = "0"
+          test "$(grep -c 'nk_full_exploit' natsuk1/Exploit/nk_api.c)" = "1"
+          test "$(grep -c 'natsuk1-v8-api' natsuk1/Exploit/nk_api.c)" = "1"
           grep -n 'memcpy(&val, buf + i, 8)' "$F"
           grep -n 'val >= KPTR_MIN && val <= KPTR_MAX' "$F"
-          echo "--- syntax check ---"
-          HEADER_SEARCH="$(pwd)/natsuk1/Exploit"
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
-            -I"$HEADER_SEARCH" -Wall -Wno-everything \
-            "$F"
+            -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$F"
           echo "syntax OK"
 
       - name: Write Offsets JSON
@@ -529,7 +555,6 @@ jobs:
               "off_zone_site_struct_pipe": "0xFFFFFFF007C6FE80",
               "off_zone_site_struct_vm_page": "0xFFFFFFF007C64C80",
               "off_sptm_base": "0xFFFFFFF027004000",
-              "off_sptm_ctrl_lock_boot": "0xFFFFFFF027006E62",
               "off_sptm_ctrr_lock_boot": "0xFFFFFFF027006E62",
               "off_sptm_cpu_lock_system_registers": "0xFFFFFFF0270B39B4",
               "off_sptm_determine_kernel_ctrr": "0xFFFFFFF0270B2224",
@@ -608,14 +633,14 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "kread v8-fuzz: NCF_ASSIGNED_OFF sweep 0x00..0x200"
+            --notes "kread v8-fuzz: NCF_ASSIGNED_OFF sweep, nk_full_exploit routed to fuzz"
 
       - name: Commit
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add natsuk1/Exploit/necp.c natsuk1/Offsets/
+          git add natsuk1/Exploit/necp.c natsuk1/Exploit/nk_api.c natsuk1/Offsets/
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "kread v8: fuzz NCF_ASSIGNED_OFF [skip ci]"
+          git commit -m "kread v8: fuzz + route nk_full_exploit [skip ci]"
           git push
