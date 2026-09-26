@@ -566,3 +566,427 @@ idevicesyslog | grep natsuk1
    одни и те же оффсеты.**
 5. **Все изменения в репо — через GitHub Actions workflow с verify-шагом
    до коммита.**
+```markdown
+# ai-hints.md — рабочие заметки для будущих сессий
+
+Проект: `natsuk1` — iOS 27.0 kernel research toolkit (arm64e, iPhone14,5).
+**Читать первым делом при любой задаче по этому репо.**
+
+---
+
+## 0. TL;DR — что работает
+
+- **Workflow `Extract Offsets`** — рабочий, подтверждён запуском. Warm-run 1–3 минуты,
+  cold 24–90 минут (только первый раз после смены версии кэша).
+- **Символизация**: `ipsw kernel symbolicate --signatures $SIG_PATH --json $KERNEL`.
+  `SIG_PATH` — это НЕ `symbolicator/kernel/27.0`, а `symbolicator/kernel/27.0/kexts`
+  (или `symbolicator/kernel/27.0` если `kexts/` нет).
+- **Ghidra**: warm = `-process -noanalysis` + `-postScript kernel_rw.py`. Не надо
+  переимпортировать kernelcache каждый раз.
+- **Kernelcache iOS 27 уже распакован** (`Mach-O 64-bit arm64e`). Декомпрессия
+  через `ipsw kernel dec` НЕ нужна и падает на этом файле.
+
+---
+
+## 1. GitHub Actions — правила, которые мы нарушали
+
+### 1.1 Ключи actions/cache должны быть статическими
+
+❌ **НИКОГДА так:**
+```yaml
+key: ghidra-project-${{ hashFiles('kernelcache/**') }}
+```
+
+hashFiles вычисляется ДО распаковки kernelcache → ключ всегда ghidra-project-.
+Кэш никогда не совпадает → cold run каждый раз.
+
+✅ ТОЛЬКО так:
+
+```yaml
+key: ghidra-project-24A437-v4
+```
+
+Статический ключ с версией. При смене kernelcache / обновлении логики — инкремент
+-v4 → -v5. Старые ключи не перезаписываются (кэш immutable), новый запуск
+делает cold, дальше warm.
+
+1.2 set -euo pipefail + || true для диагностики
+
+-e убивает step на первой же ошибке. Для шагов, где нужно видеть, что упало,
+обязательно || true или явный set +e:
+
+```bash
+ipsw kernel symbolicate ... 2>&1 | tee /tmp/sym.log || true
+```
+
+1.3 Upload artifact — только явные пути
+
+❌ НЕ так:
+
+```yaml
+path: |
+  result.txt
+  artifacts/
+  **/*.json
+```
+
+Глобы и папки захватят мусор из workspace (ghidra/, kernelcache/,
+symbolicator/, ipsw/ — 10+ GB).
+
+✅ ТОЛЬКО так:
+
+```yaml
+path: |
+  result.txt
+  offsets.json
+  kernel.log
+  symbols.json
+```
+
+Ровно 4 файла. Плюс шаг Cleanup workspace в конце с rm -rf для тяжёлых папок.
+
+1.4 Verify caches перед использованием
+
+Всегда печатать hit/miss:
+
+```yaml
+- name: Verify caches
+  run: |
+    echo "ghidra:       ${{ steps.cache-ghidra.outputs.cache-hit }}"
+    echo "kernelcache:  ${{ steps.cache-kernelcache.outputs.cache-hit }}"
+    echo "symbols:      ${{ steps.cache-symbols.outputs.cache-hit }}"
+    echo "project:      ${{ steps.cache-project.outputs.cache-hit }}"
+```
+
+Иначе непонятно, warm ты запускаешь или cold.
+
+1.5 Validate Ghidra после установки
+
+```bash
+test -x "$GHIDRA_ROOT/support/analyzeHeadless"
+test -d "$GHIDRA_ROOT/Ghidra/Extensions/Jython"
+```
+
+Если Jython не распакован — Ghidra не выполнит kernel_rw.py и молча завершится.
+
+1.6 Validate scripts перед прогоном
+
+```bash
+python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" scripts/kernel_rw.py
+```
+
+Ловит IndentationError на стороне workflow, а не в Ghidra через 25 минут.
+
+---
+
+2. Символизация — как работает и как НЕ работает
+
+2.1 Структура blacktop/symbolicator
+
+```
+symbolicator/
+└── kernel/
+    ├── 25.0/
+    │   └── kexts/
+    │       ├── AGXG16P.kext.json
+    │       ├── AppleA7IOP.kext.json
+    │       └── ... (десятки .json)
+    ├── 26.0/kexts/...
+    ├── 27.0/kexts/...
+    └── 27.2/kexts/...
+```
+
+Ключевое: сигнатуры лежат в kernel/<version>/kexts/*.json, а НЕ прямо в
+kernel/<version>/.
+
+2.2 Правильная команда
+
+```bash
+# НЕ так (мы так делали, не работало):
+ipsw kernel sym --signatures symbolicator/kernel/27.0 "$KERNEL"
+
+# НЕ так:
+ipsw kernel sym --signatures symbolicator/kernel "$KERNEL"
+
+# ТОЛЬКО так:
+ipsw kernel symbolicate --signatures symbolicator/kernel/27.0/kexts --json "$KERNEL"
+```
+
+symbolicate — новая команда (алиас sym устарел). Она автоматически:
+
+1. Применяет сигнатуры из --signatures.
+2. Дополнительно парсит встроенные таблицы: bsd_syscall_table,
+   mach_trap_table, mig_kern_subsystem.
+3. Пишет символы в stdout в JSON.
+
+2.3 Встроенные таблицы — что дают
+
+Даже без сигнатур symbolicate извлекает:
+
+· necp_open = syscall 501
+· necp_client_action = syscall 502
+· все mach traps
+· все MIG-подсистемы
+
+Это 100% точные адреса. Если в логе есть строки
+Found bsd_syscall_table=... / Found mach_trap_table=... — символика
+работает.
+
+2.4 Если symbolicate вернул []
+
+Причины в порядке вероятности:
+
+1. Неверный SIG_PATH (указали корень вместо kexts/).
+2. Для iOS 27.0 сигнатур нет в blacktop/symbolicator — используем fallback
+   адреса из NECP_FALLBACK.
+3. ipsw версии < 3.1.667 — обновить.
+4. Kernelcache повреждён / неверный формат.
+
+Fallback адреса подтверждены через switch-таблицу necp_client_action:
+
+```
+necp_client_copy_interface    0xFFFFFFF00A4EAC7C
+necp_client_copy_update       0xFFFFFFF00A4EC264
+necp_client_add_flow          0xFFFFFFF00A4E843C
+necp_client_remove_flow       0xFFFFFFF00A4E93C4
+```
+
+Это те же адреса, что и в symbolicate выдал бы.
+
+---
+
+3. Ghidra — warm vs cold
+
+3.1 Что такое warm
+
+```bash
+analyzeHeadless ghidra_project KernelProject \
+  -process "$KERNEL_NAME" -noanalysis \
+  -postScript kernel_rw.py -scriptPath scripts/
+```
+
+Открывает уже импортированный ghidra_project/KernelProject. Auto-analysis
+НЕ делается. Время: 1–3 минуты. В логе нет строки
+ANALYZING all memory and code.
+
+3.2 Что такое cold
+
+```bash
+analyzeHeadless ghidra_project KernelProject \
+  -import "$KERNEL" \
+  -processor "AARCH64:LE:64:AppleSilicon" \
+  -loader BinaryLoader \
+  -loader-baseAddr 0xFFFFFFF007004000 \
+  -postScript kernel_rw.py \
+  -analysisTimeoutPerFile 12000 \
+  -max-cpu 4
+```
+
+Импортирует kernelcache, делает auto-analysis. Время: 24–90 минут. В логе есть
+строка ANALYZING all memory and code + таблица
+AARCH64 ELF PLT Thunks / ASCII Strings / Basic Constant Reference Analyzer / ....
+
+3.3 Как переключать
+
+В одном шаге:
+
+```yaml
+if [ "${{ steps.cache-project.outputs.cache-hit }}" = "true" ]; then
+  echo "=== warm ==="
+  analyzeHeadless ... -process ...
+else
+  echo "=== cold ==="
+  rm -rf ghidra_project && mkdir ghidra_project
+  analyzeHeadless ... -import ...
+fi
+```
+
+Cold нужен один раз после смены версии кэша. Дальше только warm.
+Менять версию нужно, если:
+
+· Обновился kernelcache (новый билд iOS).
+· Изменилась версия Ghidra.
+· Кэш побился (редко).
+
+3.4 Не декомпрессировать Mach-O
+
+kernelcache.release.iPhone14,5 из iOS 27.0 — это уже распакованный Mach-O.
+file показывает Mach-O 64-bit arm64e. Попытка ipsw kernel dec на нём:
+
+```
+failed parse compressed kernelcache Img4: failed to ASN.1 parse IM4P:
+asn1: structure error: length too large
+```
+
+Правильная логика:
+
+```bash
+FTYPE=$(file "$KERNEL")
+if echo "$FTYPE" | grep -q "Mach-O"; then
+  echo "already decompressed, skip"
+  exit 0
+fi
+ipsw kernel dec "$KERNEL" -o "$OUTNAME"
+```
+
+---
+
+4. kernel_rw.py — Jython 2.7 особенности
+
+4.1 Отступы — только 4 пробела, без табов
+
+Jython 2.7 очень чувствителен к смеси табов и пробелов. Копипаст через
+markdown легко ломает отступы. Симптом в логе:
+
+```
+File "scripts/kernel_rw.py", line 229
+    )
+    ^
+IndentationError: unindent does not match any outer indentation level
+```
+
+Защита: писать файл через cat > file <<'EOF' в терминале, не через
+веб-редактор GitHub. Плюс проверка в workflow:
+
+```yaml
+- name: Validate scripts
+  run: |
+    python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" scripts/kernel_rw.py
+```
+
+4.2 Что работает, что нет
+
+Работает:
+
+· fh = open(path); data = json.load(fh); fh.close()
+· except Exception as e:
+· list(dict.items())[:5]
+· int(v, 16), int(v, 0) (только с явным префиксом)
+
+Не работает:
+
+· with open(path) as fh: ... (иногда падает)
+· голый except: без класса (Jython ругается)
+· f-string (нет в 2.7)
+· match/case (нет)
+
+4.3 Fallback-адреса NECP
+
+```python
+NECP_FALLBACK = {}
+NECP_FALLBACK["necp_open"] = 0xFFFFFFF00A4E411C
+NECP_FALLBACK["necp_client_add_flow"] = 0xFFFFFFF00A4E843C
+NECP_FALLBACK["necp_client_remove_flow"] = 0xFFFFFFF00A4E93C4
+NECP_FALLBACK["necp_client_copy_interface"] = 0xFFFFFFF00A4EAC7C
+NECP_FALLBACK["necp_client_copy_update"] = 0xFFFFFFF00A4EC264
+NECP_FALLBACK["necp_client_action"] = 0xFFFFFFF00A4E5C28
+NECP_FALLBACK["necp_client_copy_result"] = 0xFFFFFFF00A4E7BE8
+NECP_FALLBACK["necp_client_remove_client"] = 0xFFFFFFF00A4E76F4
+NECP_FALLBACK["necp_client_copy_list"] = 0xFFFFFFF00A4E80FC
+NECP_FALLBACK["necp_client_copy_result_inner"] = 0xFFFFFFF00A4F26F0
+```
+
+copy_result_inner — фактическая функция копирования, вызывается из
+copy_result через FUN_fffffff00a4f26f0. Это ключ к kread-примитиву.
+
+4.4 necp_client_copy_result — это case 3/4/0x10/0x1a в dispatcher'е
+
+В декомпиляции necp_client_action:
+
+```c
+case 3:
+case 4:
+case 0x10:
+case 0x1a:
+  uVar5 = FUN_fffffff00a4e7be8(pcVar7, param_2, param_3);  // copy_result
+```
+
+Внутри copy_result — не читает [flow+0x20], а ищет flow по UUID и вызывает
+FUN_fffffff00a4f26f0. Смотреть надо её декомпиляцию.
+
+---
+
+5. NECP — что искать в декомпиляции
+
+5.1 Поля flow
+
+Из necp_client_copy_interface:
+
+· [flow+0x20] — assigned_results pointer
+· [flow+0x88] — parent
+· [flow+0xCC] — флаги (ldrh)
+· [flow+0xD4], [flow+0xD8] — счётчики
+· [flow+0x100] — флаг
+· [flow+0x4A0] — используется в copy_result через puVar7[0x94]
+
+[flow+0x20] подтверждён в remove_flow (ldr_x [x23, #0x20]) и в
+copy_interface (ldr_x [x0, #0x20]).
+
+5.2 Что искать в copy_result_inner
+
+· memcpy(..., flow+X, ...) — если X user-controllable, примитив kread.
+· *(long *)(flow + X) где X > 0x100 — потенциально user-controlled offset.
+· Вызов copyout (это FUN_fffffff00a369a3c) — куда идёт результат.
+
+5.3 Если X фиксирован
+
+Переключаться на necp_get_tlv_at_offset — там может быть uint32 overflow в
+проверке длины. Искать в дизасме add wN, wN, #imm рядом с cmp wN, wM.
+
+---
+
+6. Что НЕ надо делать
+
+· ❌ Не ставить hashFiles('kernelcache/**') в ключ кэша. Всегда 0 → cold.
+· ❌ Не указывать symbolicator/kernel или symbolicator/kernel/27.0 в
+--signatures. Только /27.0/kexts.
+· ❌ Не декомпрессировать Mach-O через ipsw kernel dec. Проверять
+  file сначала.
+· ❌ Не заливать в артефакт workspace целиком. Только 4 файла явно.
+· ❌ Не смешивать табы и пробелы в kernel_rw.py. Только 4 пробела.
+· ❌ Не забывать || true для команд, где нужен лог ошибки.
+· ❌ Не делать cold каждый раз. Warm через -process -noanalysis.
+· ❌ Не создавать NEXTHINT.txt / GHIDRA_HINTS.txt. Cleanup в workflow
+  их удалит всё равно.
+· ❌ Не менять имя workflow Extract Offsets. Кэш ключи статические, но
+  имя важно для читаемости.
+· ❌ Не коммитить natsuk1.xcodeproj (в .gitignore).
+· ❌ Не вызывать al_device_respring — перезагружает телефон целиком.
+
+---
+
+7. Полезные команды
+
+```bash
+# Локально собрать
+brew install xcodegen ldid
+xcodegen generate
+xcodebuild -project natsuk1.xcodeproj -scheme natsuk1 \
+  -configuration Release -sdk iphoneos \
+  -destination 'generic/platform=iOS' \
+  CODE_SIGNING_ALLOWED=NO SWIFT_VERSION=5.0 build
+
+# Проверить kernel_rw.py на синтаксис
+python3 -c "import ast; ast.parse(open('scripts/kernel_rw.py').read())"
+
+# Смотреть результат
+cat result.txt | grep -A 3 "copy_result_inner"
+jq . offsets.json
+jq 'if type == "array" then length else keys | length end' symbols.json
+```
+
+---
+
+8. Итоговое правило
+
+1. Ключи кэша — статические с версией. Никаких hashFiles(kernelcache).
+2. Warm-run это -process -noanalysis. Cold только первый раз.
+3. Символизация — symbolicate + /kexts. Не sym + корень.
+4. Артефакт — ровно 4 файла. Явные пути, не глобы.
+5. Jython 2.7 — только 4 пробела. Валидировать через ast.parse.
+6. Kernelcache iOS 27 — уже Mach-O. Проверять file перед декомпрессией.
+7. Если после 2-3 попыток не работает — смотреть в kernel.log и
+result.txt, а не менять оффсеты наугад.
+
+```
+```
