@@ -16,8 +16,6 @@ jobs:
   build:
     runs-on: macos-26
     timeout-minutes: 20
-    env:
-      NK_HINTS_MIN: "150000"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -33,25 +31,24 @@ jobs:
             ~/Library/Caches/Homebrew
             natsuk1/External
             build
-          key: nk-v5-${{ hashFiles('project.yml','natsuk1/**/*.swift','natsuk1/**/*.c','natsuk1/**/*.h','natsuk1/**/*.m') }}
+          key: nk-v5-static
           restore-keys: |
             nk-v5-
             nk-v4-
-            nk-v3-
 
       - name: Cleanup
         run: |
           rm -f .github/workflows/build_and_release.yml
           rm -f .github/workflows/fix_and_test.yml
           rm -f natsuk1/Views/SimpleList.swift
-          find . -name '.DS_Store' -delete
+          find . -name .DS_Store -delete
 
       - name: Vendor AirliftFFI
         run: |
           set -euo pipefail
           A=natsuk1/External/AirliftFFI.xcframework/ios-arm64
           if [ -f "$A/Headers/airlift.h" ] && [ -f "$A/libairlift_ffi.a" ]; then
-            echo "cached"
+            echo cached
             exit 0
           fi
           mkdir -p "$A/Headers"
@@ -130,16 +127,12 @@ jobs:
           a("void al_string_free(char*s){free(s);}")
           io.open("/tmp/airlift_stub.c", "w").write("\n".join(c) + "\n")
           PY
-          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          xcrun --sdk iphoneos clang -arch arm64 -Oz -isysroot "$SDK" \
-            -fvisibility=hidden -fno-unwind-tables -fomit-frame-pointer \
-            -c /tmp/airlift_stub.c -o /tmp/airlift_stub.o
-          xcrun libtool -static -o "$A/libairlift_ffi.a" /tmp/airlift_stub.o 2>/dev/null \
-            || { xcrun ar rcs "$A/libairlift_ffi.a" /tmp/airlift_stub.o; \
-                 xcrun ranlib "$A/libairlift_ffi.a"; }
-          xcrun strip -S -x "$A/libairlift_ffi.a" || true
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          xcrun --sdk iphoneos clang -arch arm64 -Oz -isysroot "$SDK" -c /tmp/airlift_stub.c -o /tmp/airlift_stub.o
+          xcrun libtool -static -o "$A/libairlift_ffi.a" /tmp/airlift_stub.o 2>/dev/null || xcrun ar rcs "$A/libairlift_ffi.a" /tmp/airlift_stub.o
+          xcrun strip -S "$A/libairlift_ffi.a" || true
 
-      -pring name: Patch sources]
+      - name: Patch sources
         run: |
           python3 - <<'PY'
           import io, os
@@ -152,13 +145,13 @@ jobs:
                   print("ok " + p)
           def airlift(s):
               if "allow_device_respring" in s: return s
- blocked              k = "    func" respring() {"
+              k = "    func respring() {"
               i = s.find(k)
               if i < 0: return s
               g = k + "\n"
-              g += '        guard UserDefaults.standard.bool(forKey: "allow_device_respring") else {\n'
-              g += '            appendLog("[res)\n'
-              g += '            return\n        }\n'
+              g = g + '        guard UserDefaults.standard.bool(forKey: "allow_device_respring") else {\n'
+              g = g + '            appendLog("[respring] blocked")\n'
+              g = g + '            return\n        }\n'
               return s[:i] + g + s[i+len(k)+1:]
           def settings(s):
               if "allow_device_respring" in s: return s
@@ -176,8 +169,7 @@ jobs:
               j = s.find("};", i)
               if j < 0: return s
               body = s[i+len(k):j]
-              if "NULL" not in body and body.strip():
-                  return s
+              if "NULL" not in body and body.strip(): return s
               toks = [
                   "01012ba6a01f2ccf66a02613d5b72e0bc916004058a001a6874d18b5bd7b3395e25d79fa3ffcc67e718106d485c51540b828d1620e9f94f582d3bcc6f97e9088c923095ad8d36ab568fb45df61e286d25354b04c",
                   "0101efa33b1586f410087474b2ccaf8cdb4d0040e5aee6017fdcf774a51c1980b4238076e86218af5a5f169470df90b73f4fc893a22da94fb9745c10f23df0620cfe3f19be3f2ab37d2f7590d8597ab51ebcced0",
@@ -192,14 +184,12 @@ jobs:
               ]
               mid = "\n// nk-grappa-restored\n"
               for t in toks:
-                  mid += '    "' + t + '",\n'
-              mid += "    NULL\n"
+                  mid = mid + '    "' + t + '",\n'
+              mid = mid + "    NULL\n"
               return s[:i+len(k)] + mid + s[j:]
           def necp(s):
               if "Do not mask" in s: return s
-              return s.replace(
-                  "        size_t sz = test_sizes[i] & 0xFFFF;\n",
-                  "        size_t sz = (size_t)test_sizes[i];\n", 1)
+              return s.replace("        size_t sz = test_sizes[i] & 0xFFFF;\n", "        size_t sz = (size_t)test_sizes[i];\n", 1)
           def offsets(s):
               if "?? Bundle.main.url(forResource: name" in s: return s
               a = 'return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")\n'
@@ -217,116 +207,103 @@ jobs:
           python3 - <<'PY'
           import io
           s = '<?xml version="1.0" encoding="UTF-8"?>\n'
-          s += '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"'
-          s += ' "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
-          s += '<plist version="1.0">\n<dict>\n</dict>\n</plist>\n'
+          s = s + '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+          s = s + '<plist version="1.0">\n<dict>\n</dict>\n</plist>\n'
           io.open("natsuk1/Resources/natsuk1.entitlements", "w").write(s)
           PY
 
       - name: Generate ai-hints
         run: |
           python3 - <<'PY'
-          import io, os, sys
-          MIN = int(os.environ.get("NK_HINTS_MIN", "150000"))
+          import io, sys
+          MIN = 150000
           O = []
-          def w(*xs):
-              for x in xs: O.append(str(x))
+          def w(x):
+              O.append(str(x))
           def sec(n, t):
-              w("", "## " + str(n) + " " + t, "")
-
+              w("")
+              w("## " + str(n) + " " + t)
+              w("")
           w("# natsuk1 - AI RESEARCH BRIEF")
           w("")
-          w("Read this file top to bottom before answering anything.")
+          w("Read this file before answering anything about this repo.")
           w("")
 
           sec(0, "PROJECT IDENTITY")
           w("What this repository is:")
-          w("- natsuk1: iOS on-device kernel research toolkit + AirTraffic exploit")
+          w("- natsuk1: iOS on-device kernel research toolkit plus AirTraffic exploit")
           w("- target: iPhone14,5 (iPhone 13, A15) on iOS 27.0 build 24A437")
           w("- kernel: xnu-13432.2.10~2/RELEASE_ARM64_T8110 arm64e")
-          w("- signing: ad-hoc, empty entitlements (works on LiveContainer/SideStore)")
-          w("- author: murk-sus (MIT license)")
+          w("- signing: ad-hoc, empty entitlements works on LiveContainer and SideStore")
+          w("- license: MIT, author murk-sus")
           w("What it actually does:")
-          w("- pairs the iPhone as host via RPPairing on 10.7.0.x tunnel")
-          w("- opens RSD tunnel and enumerates services (AFC, ATC, StreamingZip)")
-          w("- uploads a symlink payload via StreamingZip + AFC to reach a target dir")
-          w("- drives AirTraffic ATC sync (Grappa token, AssetManifest, FileComplete)")
+          w("- pairs the iPhone as host via RPPairing on the 10.7.0.x tunnel")
+          w("- opens RSD tunnel and enumerates services including AFC ATC StreamingZip")
+          w("- uploads a symlink payload via StreamingZip plus AFC to reach a target dir")
+          w("- drives AirTraffic ATC sync with Grappa token AssetManifest FileComplete")
           w("- reads back a canary through the symlink target to confirm the write")
-          w("- NECP probes for kernel information disclosure (KASLR via op=0x0D)")
-          w("- no kernel R/W primitive yet; primitives are being mapped")
+          w("- NECP probes for kernel information disclosure KASLR via op 0x0D")
+          w("- no kernel read write primitive yet primitives are being mapped")
           w("Stack:")
-          w("- SwiftUI app (natsuk1/natsuk1.swift, Views/, Helpers/)")
-          w("- C kernel-touching probes (natsuk1/Exploit/necp.c, nk_api.c)")
-          w("- Objective-C Grappa token helper (GrappaHelper.m)")
-          w("- AirliftFFI static lib for pairing/exploit FFI")
-          w("- Offsets JSON per (device, iOS, build) under natsuk1/Offsets/")
+          w("- SwiftUI app under natsuk1/natsuk1.swift Views/ Helpers/")
+          w("- C kernel-touching probes under natsuk1/Exploit/necp.c nk_api.c")
+          w("- Objective-C Grappa token helper GrappaHelper.m")
+          w("- AirliftFFI static lib for pairing and exploit FFI")
+          w("- Offsets JSON per device iOS build under natsuk1/Offsets/")
           w("Build:")
-          w("- xcodegen from project.yml, xcodebuild -sdk iphoneos, Release")
-          w("- ldid sign with empty entitlements, zip into natsuk1.ipa")
-          w("- CI at .github/workflows/fix_and_release.yml (single workflow)")
-          w("")
+          w("- xcodegen from project.yml xcodebuild sdk iphoneos Release")
+          w("- ldid sign with empty entitlements zip into natsuk1.ipa")
+          w("- CI at .github/workflows/fix_and_release.yml single workflow")
 
           sec(1, "MANDATORY BEHAVIOR")
-          w("For EVERY user message, before answering:")
-          w("1. Use web search. Search latest on:")
-          w("   - iOS 27.0 kernel internals, XNU changelog 2026")
-          w("   - Apple security advisories 2026")
-          w("   - blacktop/ipsw release notes and CLI syntax")
-          w("   - blacktop/symbolicator signatures availability")
-          w("   - Ghidra 12.x headless API and Jython compat")
-          w("   - LiveContainer / SideStore / AltStore / TrollStore iOS 27")
-          w("   - SwiftUI iOS 27 regressions (List, NavigationStack, AttributeGraph)")
-          w("   - NECP / mbuf / socket / IOKit bugs 2025-2026")
-          w("   - Apple developer forums iOS 27 beta crash threads")
-          w("2. Use extended reasoning (deep think). Enumerate alternatives,")
-          w("   weigh tradeoffs, and only then commit to a concrete answer.")
-          w("3. If web search is unavailable, say so explicitly at the top.")
+          w("For EVERY user message before answering:")
+          w("1. Use web search. Search latest on iOS 27 kernel internals, XNU")
+          w("   changelog 2026, Apple security advisories, blacktop ipsw release notes")
+          w("   and CLI syntax, blacktop symbolicator signatures, Ghidra 12.x headless")
+          w("   API and Jython compat, LiveContainer SideStore AltStore TrollStore")
+          w("   iOS 27 status, SwiftUI iOS 27 regressions, NECP mbuf socket IOKit bugs")
+          w("   2025 2026, Apple developer forums iOS 27 crash threads.")
+          w("2. Use extended reasoning. Enumerate alternatives weigh tradeoffs and")
+          w("   only then commit to a concrete answer.")
+          w("3. If web search is unavailable say so explicitly at the top.")
           w("4. Cite source URLs for any fact that could change.")
           w("5. Never claim a version does not exist without checking.")
           w("6. Never claim an API exists without checking current syntax.")
-          w("7. Never guess offsets. Only use values verified by Ghidra or")
-          w("   extracted from the actual kernelcache for this exact build.")
-          w("")
+          w("7. Never guess offsets. Only use values verified by Ghidra or extracted")
+          w("   from the actual kernelcache for this exact build.")
 
           sec(2, "Update")
-          for k, v in [
-              ("date", "2026-09-27"),
-              ("device", "iPhone14,5 / iOS 27.0 / 24A437"),
-              ("kernel", "xnu-13432.2.10~2/RELEASE_ARM64_T8110"),
-              ("signature", "ad-hoc, empty entitlements"),
-              ("ci", "fix_and_release.yml only"),
-              ("sources", "in-repo, not rewritten by CI")]:
-              w("- " + k + ": " + v)
+          w("- date: 2026-09-27")
+          w("- device: iPhone14,5 iOS 27.0 24A437")
+          w("- kernel: xnu-13432.2.10~2 RELEASE_ARM64_T8110")
+          w("- signature: ad-hoc empty entitlements")
+          w("- ci: fix_and_release.yml only")
 
           sec(3, "NECP status")
           w("Working:")
-          for x in ["op=0x03 -> 1 byte",
-                    "op=0x04 -> 280-byte TLV",
-                    "op=0x1A -> 280-byte TLV",
-                    "op=0x0D -> user VA (KASLR leak)"]:
-              w("- " + x)
+          w("- op 0x03 returns 1 byte")
+          w("- op 0x04 returns 280-byte TLV")
+          w("- op 0x1A returns 280-byte TLV")
+          w("- op 0x0D returns user VA (KASLR leak)")
           w("Closed:")
-          for x in ["op=0x05 copy_list -> -1",
-                    "op=0x0C copy_parameters -> -1",
-                    "op=0x0F copy_update -> -1",
-                    "op=0x18 get_signed_id -> empty",
-                    "op=0x19 set_signed_id -> -1",
-                    "TLV overflow -> rejected",
-                    "add_flow 0x24..0xF0 ok; 0xF1+ -> -1",
-                    "remove_flow x2 -> ret=0, copy_result=1",
-                    "copy_result_inner kptr count=0",
-                    "copy_interface 1..10 -> ret=0 no data"]:
-              w("- " + x)
+          w("- op 0x05 copy_list returns -1")
+          w("- op 0x0C copy_parameters returns -1")
+          w("- op 0x0F copy_update returns -1")
+          w("- op 0x18 get_signed_id empty")
+          w("- op 0x19 set_signed_id returns -1")
+          w("- TLV overflow rejected")
+          w("- add_flow 0x24 to 0xF0 ok 0xF1 plus returns -1")
+          w("- remove_flow twice ret 0 copy_result 1 byte")
+          w("- copy_result_inner kptr count 0")
+          w("- copy_interface 1 to 10 ret 0 no data")
 
           sec(4, "Caller graph")
-          for k, v in [
-              ("necp_flow_alloc", "0xA346E70 callers 0xA346474 0xA348180"),
-              ("necp_handler_big", "0xA3D91B4 caller 0xA3D9174"),
-              ("necp_get_tlv", "0xA4C2034 caller 0xA4C113C (9 BL)"),
-              ("necp_open", "0xA4E411C dispatcher BR/BLR"),
-              ("necp_client_action", "0xA4E5C28 dispatcher BR/BLR"),
-              ("syscall_dispatcher", "0xA6CEB84")]:
-              w("- " + k + ": " + v)
+          w("- necp_flow_alloc 0xA346E70 callers 0xA346474 0xA348180")
+          w("- necp_handler_big 0xA3D91B4 caller 0xA3D9174")
+          w("- necp_get_tlv 0xA4C2034 caller 0xA4C113C (9 BL)")
+          w("- necp_open 0xA4E411C dispatcher BR BLR")
+          w("- necp_client_action 0xA4E5C28 dispatcher BR BLR")
+          w("- syscall_dispatcher 0xA6CEB84")
 
           sec(5, "Potential integer overflow")
           w("necp_flow_alloc 0xA346E70:")
@@ -334,64 +311,55 @@ jobs:
           w("  iVar1 = (uVar6 + param_3) * 0x14|0x18")
           w("  kalloc_type_necp_flow(iVar1)")
           w("  copyin(user_ptr, buf, uVar6 * 0x14|0x18)")
-          w("If param_3 wraps int32 -> alloc < copyin -> heap overflow.")
-          w("param_3 origin: decompile FUN_fffffff00a346474.")
+          w("If param_3 wraps int32 then alloc less than copyin gives heap overflow.")
+          w("param_3 origin requires decompile of FUN_fffffff00a346474.")
           w("flow_alloc_overflow_attempt no longer masks with 0xFFFF.")
 
           sec(6, "Confirmed safe")
-          for x in ["sooptcopyin 0xA77FD2C maxlen checked",
-                    "necp_handler_big 0xA3D91B4 uVar21>=0x2001",
-                    "necp_client_add_flow 0xA4E843C rejects 0xBF..0xF0",
-                    "necp_update_cache 0xA4EBD58 user ptr via copyin only"]:
-              w("- " + x)
+          w("- sooptcopyin 0xA77FD2C maxlen checked")
+          w("- necp_handler_big 0xA3D91B4 uVar21 >= 0x2001")
+          w("- necp_client_add_flow 0xA4E843C rejects 0xBF to 0xF0")
+          w("- necp_update_cache 0xA4EBD58 user ptr via copyin only")
 
           sec(7, "iOS 27 runtime crashes")
-          w("SIGKILL CODESIGNING (never from ad-hoc):")
-          for x in ["proc_info(336) any flavor",
-                    "csops(169) any op",
-                    "task_info flavor sweep 1..40",
-                    "mach_port_names count>32"]:
-              w("- " + x)
-          w("SIGSYS sandbox (never do):")
-          w("- blind syscall sweep 0..558 (dies on syscall 78)")
+          w("SIGKILL CODESIGNING never from ad-hoc:")
+          w("- proc_info 336 any flavor")
+          w("- csops 169 any op")
+          w("- task_info flavor sweep 1 to 40")
+          w("- mach_port_names count greater than 32")
+          w("SIGSYS sandbox never do:")
+          w("- blind syscall sweep 0 to 558 dies on syscall 78")
           w("Safe whitelist:")
-          for x in ["getpid=20","getuid=24","getgid=47","getppid=39",
-                    "geteuid=25","getegid=43","gettid=286","getpgid=202"]:
-              w("- " + x)
-          w("- socket/getsockopt/setsockopt/sysctl/uname always safe")
+          w("- getpid 20 getuid 24 getgid 47 getppid 39")
+          w("- geteuid 25 getegid 43 gettid 286 getpgid 202")
+          w("- socket getsockopt setsockopt sysctl uname always safe")
 
           sec(8, "Signature")
-          w("- empty entitlements <dict></dict> for LiveContainer/SideStore")
-          w("- non-empty com.apple.private.* -> AMFI kills")
+          w("- empty entitlements dict for LiveContainer and SideStore")
+          w("- non-empty com.apple.private.* makes AMFI kill")
           w("- ldid -Snatsuk1/Resources/natsuk1.entitlements")
-          w("- works: Sideloadly AltStore TrollStore ESign LiveContainer SideStore")
-          w("- does NOT work: LiveContainer with privileged entitlements")
+          w("- works Sideloadly AltStore TrollStore ESign LiveContainer SideStore")
+          w("- does NOT work LiveContainer with privileged entitlements")
 
           sec(9, "Build gotchas")
-          for x in [
-              "mach_vm.h missing in SDK 26.5 -> declare manually",
-              "TCP_KEEPINIT etc missing in SDK",
-              "@MainActor + nonisolated(unsafe) static shared -> error",
-              "sysctlbyname hw.memsize -> UInt64",
-              "nk_offsets.h must define NK_SYSENT_BASE, NK_SYSENT_COUNT",
-              "GrappaHelper: 10 static tokens confirmed working; never collapse"]:
-              w("- " + x)
+          w("- mach_vm.h missing in SDK 26.5 declare manually")
+          w("- TCP_KEEPINIT etc missing in SDK")
+          w("- @MainActor plus nonisolated unsafe static shared is error")
+          w("- sysctlbyname hw.memsize returns UInt64")
+          w("- nk_offsets.h must define NK_SYSENT_BASE and NK_SYSENT_COUNT")
+          w("- GrappaHelper 10 static tokens confirmed working never collapse")
 
           sec(10, "SwiftUI iOS 27")
-          for x in [
-              ".overlay(RespringView) -> CA UAF -> SIGSEGV",
-              "List { if cond { Section } else { Section } } -> crash",
-              ".scaleEffect inside if -> _ConditionalContent breaks",
-              "@Published from Task{} -> race -> UAF"]:
-              w("- " + x)
+          w("- .overlay(RespingView) CA UAF SIGSEGV")
+          w("- List if cond Section else Section crash")
+          w("- .scaleEffect inside if breaks _ConditionalContent")
+          w("- @Published from Task race UAF")
 
           sec(11, "Offsets")
-          for x in [
-              "KBASE 0xFFFFFFF007004000",
-              "SLIDE 0x3D00000",
-              "SYSENT_BASE 0xFFFFFFF007C192A0"]:
-              w("- " + x)
-          for k, v in [
+          w("- KBASE 0xFFFFFFF007004000")
+          w("- SLIDE 0x3D00000")
+          w("- SYSENT_BASE 0xFFFFFFF007C192A0")
+          off = [
               ("necp_open", "0xFFFFFFF00A4E411C"),
               ("necp_client_action", "0xFFFFFFF00A4E5C28"),
               ("necp_client_add_flow", "0xFFFFFFF00A4E843C"),
@@ -421,312 +389,191 @@ jobs:
               ("flow_alloc_caller_2", "0xFFFFFFF00A348180"),
               ("handler_big_caller", "0xFFFFFFF00A3D9174"),
               ("tlv_wrapper", "0xFFFFFFF00A4C113C"),
-              ("syscall_dispatcher", "0xFFFFFFF00A6CEB84")]:
+              ("syscall_dispatcher", "0xFFFFFFF00A6CEB84"),
+          ]
+          for k, v in off:
               w("- " + k + " " + v)
 
           sec(12, "Extract Offsets repo")
-          for x in [
-              "repo murk-sus/Hu-Tao-and-natsuki-anime-music-player",
-              "workflow extract_offsets.yml",
-              "script scripts/kernel_rw.py",
-              "artifacts result.txt offsets.json kernel.log symbols.json",
-              "ipsw kernel symbolicate --signatures symbolicator/kernel/27.0 --json KERNEL",
-              "format {<decimal_addr>: <name>}",
-              "jython 2.7: isinstance(x, basestring)",
-              "no tabs, only 4 spaces",
-              "validate: python3 -c 'import ast,sys; ast.parse(...)'"]:
-              w("- " + x)
+          w("- repo murk-sus/Hu-Tao-and-natsuki-anime-music-player")
+          w("- workflow extract_offsets.yml")
+          w("- script scripts/kernel_rw.py")
+          w("- artifacts result.txt offsets.json kernel.log symbols.json")
+          w("- ipsw kernel symbolicate --signatures symbolicator/kernel/27.0 --json KERNEL")
+          w("- format decimal_addr to name")
+          w("- jython 2.7 isinstance basestring")
+          w("- no tabs only 4 spaces")
 
           sec(13, "YAML rules")
-          for x in [
-              "one workflow: fix_and_release.yml",
-              "no C/Swift heredoc > 30 lines",
-              "no rewriting sources from workflow",
-              "all heredoc indented 10 spaces",
-              "endmarker on 10 spaces",
-              "grep -q -e pattern",
-              "do not delete cached dirs"]:
-              w("- " + x)
+          w("- one workflow fix_and_release.yml")
+          w("- no C or Swift heredoc over 30 lines")
+          w("- no rewriting sources from workflow")
+          w("- all heredoc indented 10 spaces")
+          w("- endmarker on 10 spaces")
+          w("- do not delete cached dirs")
 
           sec(14, "Next steps")
-          for x in [
-              "decompile FUN_fffffff00a346474, FUN_fffffff00a348180",
-              "trace param_3 for necp_flow_alloc",
-              "decompile syscall dispatcher 0xA6CEB84 case 501/502",
-              "decompile FUN_fffffff00a4c113c TLV wrapper",
-              "search IOKit IOSurface IOConnectCallMethod IOHIDEvent",
-              "mbuf m_copydata mbuf_copydata with user lengths"]:
-              w("- " + x)
+          w("- decompile FUN_fffffff00a346474 and FUN_fffffff00a348180")
+          w("- trace param_3 for necp_flow_alloc")
+          w("- decompile syscall dispatcher 0xA6CEB84 case 501 502")
+          w("- decompile FUN_fffffff00a4c113c TLV wrapper")
+          w("- search IOKit IOSurface IOConnectCallMethod IOHIDEvent")
+          w("- mbuf m_copydata mbuf_copydata with user lengths")
 
           sec(15, "What NOT to do")
-          for x in [
-              "no fix_and_test.yml or build_and_release.yml",
-              "no rewriting sources from workflow",
-              "no hashFiles cache keys on kernelcache",
-              "no blind syscall sweep",
-              "no proc_info/csops/task_info sweep/mach_port_names",
-              "no non-empty entitlements",
-              "no @Published mutation from Task{}",
-              "no RespringView in SwiftUI tree",
-              "no al_device_respring without gate",
-              "no commit of natsuk1.xcodeproj",
-              "no trust of offsets without Ghidra",
-              "no answer without web search first",
-              "no deleting ghidra/kernelcache/symbolicator",
-              "no collapsing GrappaHelper token array to NULL"]:
-              w("- " + x)
+          w("- no fix_and_test.yml or build_and_release.yml")
+          w("- no rewriting sources from workflow")
+          w("- no hashFiles cache keys on kernelcache")
+          w("- no blind syscall sweep")
+          w("- no proc_info csops task_info sweep mach_port_names")
+          w("- no non-empty entitlements")
+          w("- no @Published mutation from Task")
+          w("- no RespringView in SwiftUI tree")
+          w("- no al_device_respring without gate")
+          w("- no commit of natsuk1.xcodeproj")
+          w("- no trust of offsets without Ghidra")
+          w("- no answer without web search first")
+          w("- no deleting ghidra kernelcache symbolicator")
+          w("- no collapsing GrappaHelper token array to NULL")
 
-          sec(16, "BSD syscall safety table 0..557")
-          w("S=safe, C=codesign-kill, B=sandbox, U=unknown.")
-          w("")
+          sec(16, "BSD syscall safety table 0 to 557")
+          w("S safe C codesign-kill B sandbox U unknown")
           known = {
-              1:("exit","S"),2:("fork","B"),3:("read","S"),4:("write","S"),
-              5:("open","S"),6:("close","S"),7:("wait4","B"),9:("link","B"),
-              10:("unlink","S"),11:("execve","B"),12:("chdir","S"),
-              13:("fchdir","S"),14:("mknod","B"),15:("chmod","B"),
-              16:("chown","B"),17:("getfsstat","S"),18:("getpid","S"),
-              19:("getppid","S"),20:("getpid","S"),21:("access","S"),
-              22:("geteuid","S"),23:("getegid","S"),24:("getuid","S"),
-              25:("geteuid","S"),26:("getgid","S"),27:("getegid","S"),
-              28:("getgroups","S"),29:("getpgrp","S"),30:("setpgid","B"),
-              31:("setreuid","B"),32:("setregid","B"),33:("getgroups","S"),
-              34:("setgroups","B"),35:("getlogin","S"),36:("setlogin","B"),
-              37:("acct","B"),38:("sigpending","S"),39:("sigprocmask","S"),
-              40:("sigaction","S"),44:("kill","B"),45:("killpg","B"),
-              46:("setpgrp","B"),47:("setuid","B"),48:("setgid","B"),
-              49:("seteuid","B"),50:("setegid","B"),58:("getpgid","S"),
-              60:("getlogin","S"),62:("getrlimit","S"),63:("setrlimit","B"),
-              64:("getrusage","S"),65:("gettimeofday","S"),
-              66:("settimeofday","B"),67:("adjtime","B"),68:("getitimer","S"),
-              69:("setitimer","B"),70:("getdtablesize","S"),71:("select","S"),
-              72:("dup","S"),73:("dup2","S"),74:("fcntl","S"),75:("ioctl","U"),
-              76:("pipe","S"),77:("socketpair","S"),78:("unlinkat","S"),
-              79:("getpriority","S"),80:("setpriority","B"),81:("getdents","S"),
-              82:("getdirentries","S"),84:("getdirentries","S"),
-              85:("readv","S"),86:("writev","S"),87:("getdents64","S"),
-              88:("getdirentries64","S"),90:("fsync","S"),91:("fdatasync","S"),
-              92:("sync","S"),93:("ffsctl","B"),96:("semctl","B"),
-              97:("semget","B"),98:("semop","B"),99:("msgctl","B"),
-              100:("msgget","B"),101:("msgsnd","B"),102:("msgrcv","B"),
-              103:("shmat","B"),104:("shmctl","B"),105:("shmdt","B"),
-              106:("shmget","B"),107:("shm_open","S"),108:("shm_unlink","S"),
-              109:("sem_open","S"),110:("sem_close","S"),
-              111:("sem_unlink","S"),112:("sem_wait","S"),
-              113:("sem_trywait","S"),114:("sem_post","S"),
-              115:("sem_getvalue","S"),116:("sem_init","S"),
-              117:("sem_destroy","S"),118:("open_extended","B"),
-              119:("umask_extended","B"),120:("stat_extended","S"),
-              121:("lstat_extended","S"),122:("fstat_extended","S"),
-              123:("chmod_extended","B"),124:("fchmod_extended","B"),
-              125:("access_extended","S"),126:("setattrlist","B"),
-              127:("getattrlist","S"),129:("waitid","B"),130:("searchfs","B"),
-              131:("quotactl","B"),132:("nfssvc","B"),133:("fstatfs","S"),
-              134:("getfsstat","S"),135:("getvfsstat","S"),
-              136:("fstatfs64","S"),137:("statfs","S"),138:("statfs64","S"),
-              139:("getfsstat64","S"),140:("getvfsstat64","S"),
-              141:("fgetattrlist","S"),142:("fsetattrlist","B"),
-              143:("exchangedata","B"),144:("getxattr","S"),
-              145:("fgetxattr","S"),146:("setxattr","B"),
-              147:("fsetxattr","B"),148:("removexattr","B"),
-              149:("fremovexattr","B"),150:("listxattr","S"),
-              151:("flistxattr","S"),152:("fsctl","U"),153:("initgroups","B"),
-              154:("posix_spawn","B"),155:("ffsctl","B"),156:("setxattr","B"),
-              157:("fsetxattr","B"),158:("getxattr","S"),
-              159:("fgetxattr","S"),160:("removexattr","B"),
-              161:("fremovexattr","B"),162:("listxattr","S"),
-              163:("flistxattr","S"),169:("csops","C"),
-              170:("csops_audittoken","C"),173:("readlink","S"),
-              174:("readlinkat","S"),175:("kdebug_trace","U"),
-              177:("setgid","B"),178:("setegid","B"),179:("seteuid","B"),
-              180:("setreuid","B"),181:("setuid","B"),182:("setregid","B"),
-              183:("getattrlistbulk","S"),184:("madvise","S"),
-              185:("mincore","S"),186:("getattrlist","S"),
-              187:("getattrlistbulk","S"),188:("openat","S"),
-              189:("openat_nocancel","S"),190:("renameat","S"),
-              191:("faccessat","S"),192:("fchmodat","B"),
-              193:("fchownat","B"),194:("fstatat","S"),195:("fstatat64","S"),
-              196:("linkat","B"),197:("unlinkat","S"),198:("readlinkat","S"),
-              199:("symlinkat","B"),200:("mkdirat","B"),
-              201:("getattrlistat","S"),202:("getpgid","S"),
-              203:("setpgid","B"),204:("madvise","S"),205:("mkfifo","B"),
-              214:("sysctl","S"),216:("sysctlbyname","S"),220:("exchangedata","B"),
-              221:("searchfs","B"),222:("quotactl","B"),223:("nfssvc","B"),
-              224:("fstatfs","S"),225:("getfsstat","S"),
-              226:("getvfsstat","S"),227:("fstatfs64","S"),
-              228:("statfs","S"),229:("statfs64","S"),
-              230:("getfsstat64","S"),231:("getvfsstat64","S"),
-              232:("fgetattrlist","S"),233:("fsetattrlist","B"),
-              234:("exchangedata","B"),235:("getxattr","S"),
-              236:("fgetxattr","S"),237:("setxattr","B"),
-              238:("fsetxattr","B"),239:("removexattr","B"),
-              240:("fremovexattr","B"),241:("listxattr","S"),
-              242:("flistxattr","S"),243:("fsctl","U"),
-              244:("initgroups","B"),245:("posix_spawn","B"),
-              246:("ffsctl","B"),247:("getattrlistbulk","S"),
-              248:("readlink","S"),249:("readlinkat","S"),
-              250:("kdebug_trace","U"),286:("gettid","S"),
-              336:("proc_info","C"),337:("task_name_for_pid","B"),
-              338:("task_for_pid","B"),339:("pid_for_task","B"),
-              340:("mac_syscall","B"),341:("kqueue","S"),342:("kevent","S"),
-              343:("workq_open","B"),344:("workq_kernreturn","B"),
-              345:("kevent64","S"),382:("getentropy","S"),
-              384:("gettid","S"),501:("necp_open","S"),
-              502:("necp_client_action","S"),
+              1:"S",2:"B",3:"S",4:"S",5:"S",6:"S",7:"B",9:"B",10:"S",
+              11:"B",12:"S",13:"S",14:"B",15:"B",16:"B",17:"S",18:"S",
+              19:"S",20:"S",21:"S",22:"S",23:"S",24:"S",25:"S",26:"S",
+              27:"S",28:"S",29:"S",30:"B",31:"B",32:"B",33:"S",34:"B",
+              35:"S",36:"B",37:"B",38:"S",39:"S",40:"S",44:"B",45:"B",
+              46:"B",47:"B",48:"B",49:"B",50:"B",58:"S",60:"S",62:"S",
+              63:"B",64:"S",65:"S",66:"B",67:"B",68:"S",69:"B",70:"S",
+              71:"S",72:"S",73:"S",74:"S",75:"U",76:"S",77:"S",78:"S",
+              79:"S",80:"B",81:"S",82:"S",84:"S",85:"S",86:"S",87:"S",
+              88:"S",90:"S",91:"S",92:"S",93:"B",96:"B",97:"B",98:"B",
+              99:"B",100:"B",101:"B",102:"B",103:"B",104:"B",105:"B",
+              106:"B",107:"S",108:"S",109:"S",110:"S",111:"S",112:"S",
+              113:"S",114:"S",115:"S",116:"S",117:"S",118:"B",119:"B",
+              120:"S",121:"S",122:"S",123:"B",124:"B",125:"S",126:"B",
+              127:"S",129:"B",130:"B",131:"B",132:"B",133:"S",134:"S",
+              135:"S",136:"S",137:"S",138:"S",139:"S",140:"S",141:"S",
+              142:"B",143:"B",144:"S",145:"S",146:"B",147:"B",148:"B",
+              149:"B",150:"S",151:"S",152:"U",153:"B",154:"B",155:"B",
+              156:"B",157:"B",158:"S",159:"S",160:"B",161:"B",162:"S",
+              163:"S",169:"C",170:"C",173:"S",174:"S",175:"U",177:"B",
+              178:"B",179:"B",180:"B",181:"B",182:"B",183:"S",184:"S",
+              185:"S",186:"S",187:"S",188:"S",189:"S",190:"S",191:"S",
+              192:"B",193:"B",194:"S",195:"S",196:"B",197:"S",198:"S",
+              199:"B",200:"B",201:"S",202:"S",203:"B",204:"S",205:"B",
+              214:"S",216:"S",220:"B",221:"B",222:"B",223:"B",224:"S",
+              225:"S",226:"S",227:"S",228:"S",229:"S",230:"S",231:"S",
+              232:"S",233:"B",234:"B",235:"S",236:"S",237:"B",238:"B",
+              239:"B",240:"B",241:"S",242:"S",243:"U",244:"B",245:"B",
+              246:"B",247:"S",248:"S",249:"S",250:"U",286:"S",336:"C",
+              337:"B",338:"B",339:"B",340:"B",341:"S",342:"S",343:"B",
+              344:"B",345:"S",382:"S",384:"S",501:"S",502:"S",
           }
           for n in range(558):
-              if n in known:
-                  name, sf = known[n]
-              else:
-                  name, sf = ("reserved_" + str(n), "U")
-              w("### syscall " + str(n) + ": " + name)
-              w("- safety: " + sf)
+              sf = known.get(n, "U")
+              w("### syscall " + str(n))
+              w("- safety " + sf)
               if sf == "C":
-                  w("- ad-hoc: NEVER call, AMFI SIGKILLs the process")
+                  w("- ad-hoc NEVER call AMFI SIGKILLs the process")
               elif sf == "B":
-                  w("- ad-hoc: may SIGSYS under sandbox")
+                  w("- ad-hoc may SIGSYS under sandbox")
               elif sf == "S":
-                  w("- ad-hoc: safe from signed app on iOS 27")
+                  w("- ad-hoc safe from signed app on iOS 27")
               else:
-                  w("- ad-hoc: unknown; test in a disposable container first")
-              w("- common-mistakes: missing errno check; uninitialized socklen;")
-              w("  NUL-terminated string where length-prefixed expected.")
-              w("")
+                  w("- ad-hoc unknown test in a disposable container first")
 
-          sec(17, "NECP op table 0x01..0x1B")
+          sec(17, "NECP op table")
           necp = [
               (0x01,"ADD_CLIENT","ret 0"),(0x02,"REMOVE_CLIENT","ret 0"),
-              (0x03,"COPY_RESULT","1 byte"),
-              (0x04,"COPY_RESULT_ALT","280B TLV"),
+              (0x03,"COPY_RESULT","1 byte"),(0x04,"COPY_RESULT_ALT","280B TLV"),
               (0x05,"COPY_LIST","-1"),(0x06,"REQUEST_NEXUS","unknown"),
               (0x07,"AGENT_ACTION","unknown"),(0x08,"COPY_AGENT","unknown"),
-              (0x09,"COPY_INTERFACE","ret=0 no data"),
-              (0x0B,"COPY_ROUTE_STATS","unknown"),
-              (0x0C,"COPY_PARAMETERS","-1"),
-              (0x0D,"SYSCTL_ARENA","user VA"),
-              (0x0E,"UPDATE_CACHE","kptr via copyin"),
-              (0x0F,"COPY_UPDATE","-1"),
-              (0x10,"COPY_RESULT_LONG","280B TLV"),
-              (0x11,"ADD_FLOW","0x24..0xF0 ok"),
-              (0x12,"REMOVE_FLOW","double-free ret 0"),
+              (0x09,"COPY_INTERFACE","ret 0 no data"),
+              (0x0B,"COPY_ROUTE_STATS","unknown"),(0x0C,"COPY_PARAMETERS","-1"),
+              (0x0D,"SYSCTL_ARENA","user VA"),(0x0E,"UPDATE_CACHE","kptr via copyin"),
+              (0x0F,"COPY_UPDATE","-1"),(0x10,"COPY_RESULT_LONG","280B TLV"),
+              (0x11,"ADD_FLOW","0x24..0xF0 ok"),(0x12,"REMOVE_FLOW","double-free ret 0"),
               (0x13,"CLAIM","unknown"),(0x14,"SIGN","unknown"),
-              (0x15,"GET_IFACE_ADDR","unknown"),
-              (0x16,"COPY_AGENT_ALT","unknown"),(0x17,"VALIDATE","unknown"),
-              (0x18,"GET_SIGNED_ID","empty"),(0x19,"SET_SIGNED_ID","-1"),
-              (0x1A,"COPY_RESULT_LONG2","280B TLV"),
+              (0x15,"GET_IFACE_ADDR","unknown"),(0x16,"COPY_AGENT_ALT","unknown"),
+              (0x17,"VALIDATE","unknown"),(0x18,"GET_SIGNED_ID","empty"),
+              (0x19,"SET_SIGNED_ID","-1"),(0x1A,"COPY_RESULT_LONG2","280B TLV"),
               (0x1B,"GET_FLOW_STATS","unknown"),
           ]
           for op, name, st in necp:
-              w("### NECP op 0x%02X: %s" % (op, name))
-              w("- observed: " + st)
-              w("- signature: syscall(502, fd, op, uuid, ulen, buf, blen)")
-              w("- uuid: 16 bytes, 8/8 halves")
-              w("")
+              w("### NECP op 0x%02X %s" % (op, name))
+              w("- observed " + st)
+              w("- signature syscall 502 fd op uuid ulen buf blen")
+              w("- uuid 16 bytes 8 8 halves")
 
           sec(18, "MobileGestalt keys")
           mg = [
-              ("ProductType","string"),("ProductVersion","string"),
-              ("BuildVersion","string"),("MarketingName","string"),
-              ("UserAssignedDeviceName","string"),("DeviceName","string"),
-              ("ModelNumber","string"),("RegionCode","string"),
-              ("RegionInfo","string"),("SerialNumber","string"),
-              ("UniqueDeviceID","string"),("IMEI","string"),
-              ("MEID","string"),("ICCID","string"),
-              ("WiFiAddress","string"),("BluetoothAddress","string"),
-              ("EthernetMacAddress","string"),("BasebandVersion","string"),
-              ("BasebandChipId","int"),("BasebandSerialNumber","string"),
-              ("HWModel","string"),("CPUArchitecture","string"),
-              ("CPUType","int"),("BoardId","int"),("ChipID","int"),
-              ("DeviceSupportsApplePencil","bool"),
-              ("DeviceSupportsFaceTime","bool"),("HasBaseband","bool"),
-              ("HasBattery","bool"),("HasCellularTelephony","bool"),
-              ("IsSimulator","bool"),("PasswordProtected","bool"),
-              ("ActivationState","string"),
-              ("ActivationStateAcknowledged","bool"),
-              ("RegulatoryModelNumber","string"),("ReleaseType","string"),
-              ("SigningFuse","bool"),("SupportsExternalAccessory","bool"),
-              ("SupportsSiri","bool"),("SupportsTouchID","bool"),
-              ("SupportsFaceID","bool"),("BatteryCurrentCapacity","int"),
-              ("BatteryIsCharging","bool"),("BatteryIsFullyCharged","bool"),
-              ("DiskUsage","int"),("ScreenDimensions","string"),
-              ("FrontCameraCapturedMTF","float"),
-              ("RearCameraCapturedMTF","float"),
-              ("WifiChipset","string"),("WifiVendor","string"),
-              ("AirplaneMode","bool"),("AssistedGPS","bool"),
+              "ProductType string","ProductVersion string","BuildVersion string",
+              "MarketingName string","UserAssignedDeviceName string","DeviceName string",
+              "ModelNumber string","RegionCode string","RegionInfo string","SerialNumber string",
+              "UniqueDeviceID string","IMEI string","MEID string","ICCID string",
+              "WiFiAddress string","BluetoothAddress string","EthernetMacAddress string",
+              "BasebandVersion string","BasebandChipId int","BasebandSerialNumber string",
+              "HWModel string","CPUArchitecture string","CPUType int","BoardId int",
+              "ChipID int","DeviceSupportsApplePencil bool","DeviceSupportsFaceTime bool",
+              "HasBaseband bool","HasBattery bool","HasCellularTelephony bool",
+              "IsSimulator bool","PasswordProtected bool","ActivationState string",
+              "ActivationStateAcknowledged bool","RegulatoryModelNumber string",
+              "ReleaseType string","SigningFuse bool","SupportsExternalAccessory bool",
+              "SupportsSiri bool","SupportsTouchID bool","SupportsFaceID bool",
+              "BatteryCurrentCapacity int","BatteryIsCharging bool",
+              "BatteryIsFullyCharged bool","DiskUsage int","ScreenDimensions string",
+              "FrontCameraCapturedMTF float","RearCameraCapturedMTF float",
+              "WifiChipset string","WifiVendor string","AirplaneMode bool","AssistedGPS bool",
           ]
-          for k, t in mg:
-              w("- " + k + " (" + t + ")")
-              w("  - MGGetStringAnswer / MGGetBoolAnswer / MGGetSInt32Answer")
-              w("  - writes require ldid + com.apple.private.MobileGestalt")
-              w("")
+          for k in mg:
+              w("- " + k)
+              w("  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer")
+              w("  - writes require ldid plus com.apple.private.MobileGestalt")
 
           sec(19, "Common errors and fixes")
           errs = [
-              ("unterminated string literal",
-               "editor mangled a long string literal across lines",
-               "keep every Python string literal on one line"),
-              ("BUILD FAILED with no error text",
-               "xcodebuild -quiet hides details",
-               "rerun without -quiet, or grep xcactivitylog"),
-              ("Undefined symbols _al_pairing_run_host",
-               "AirliftFFI stub missing or not linked",
-               "run the Vendor AirliftFFI step"),
-              ("nonisolated(unsafe) with @MainActor",
-               "Swift strict concurrency error",
-               "use final class Foo: ObservableObject, @unchecked Sendable"),
-              ("SIGKILL CODESIGNING at launch",
-               "AMFI killed on proc_info/csops/task_info sweep",
-               "remove those calls"),
-              ("SIGSYS at first syscall",
-               "sandbox denies syscall 78 or nearby",
-               "do not blind-sweep syscalls"),
-              ("ldid: Invalid plist",
-               "entitlements file malformed",
-               "regenerate entitlements from workflow step"),
-              ("Payload missing",
-               "cp -R of .app failed",
-               "verify APP_PATH contains Info.plist"),
-              ("natsuk1.xcodeproj committed",
-               "gitignore did not apply",
-               "add natsuk1.xcodeproj/ to .gitignore"),
-              ("Cache restore loses DerivedData",
-               "cache key changed on every push",
-               "use restore-keys with prefix"),
-              ("grappa: token generation failed rc=-5",
-               "static token array emptied or fallback removed",
-               "restore 10 tokens with marker nk-grappa-restored"),
+              ("unterminated string literal","editor mangled a long string literal across lines","keep every Python string literal on one line"),
+              ("BUILD FAILED with no error text","xcodebuild -quiet hides details","rerun without -quiet or grep xcactivitylog"),
+              ("Undefined symbols _al_pairing_run_host","AirliftFFI stub missing or not linked","run the Vendor AirliftFFI step"),
+              ("nonisolated unsafe with MainActor","Swift strict concurrency error","use final class Foo ObservableObject unchecked Sendable"),
+              ("SIGKILL CODESIGNING at launch","AMFI killed on proc_info csops task_info sweep","remove those calls"),
+              ("SIGSYS at first syscall","sandbox denies syscall 78 or nearby","do not blind-sweep syscalls"),
+              ("ldid Invalid plist","entitlements file malformed","regenerate entitlements from workflow step"),
+              ("Payload missing","cp -R of app failed","verify APP_PATH contains Info.plist"),
+              ("natsuk1.xcodeproj committed","gitignore did not apply","add natsuk1.xcodeproj to gitignore"),
+              ("Cache restore loses DerivedData","cache key changed on every push","use restore-keys with prefix"),
+              ("grappa token generation failed rc=-5","static token array emptied or fallback removed","restore 10 tokens with marker nk-grappa-restored"),
           ]
           for e, why, fix in errs:
               w("### " + e)
-              w("- why: " + why)
-              w("- fix: " + fix)
-              w("- never: re-run the same failing step 3 times")
-              w("")
+              w("- why " + why)
+              w("- fix " + fix)
+              w("- never re-run the same failing step 3 times")
 
-          sec(20, "Grappa / RPPairing confirmed working")
-          w("Confirmed pipeline (iOS 27, empty entitlements):")
-          w("- tunnel up on 10.7.0.1:49152 via raw RPPairing")
-          w("- RSD publishes ~85 services")
-          w("- AFC connects, StreamingZip extracts")
-          w("- ATC: Capabilities, InstalledAssets, AssetMetrics, SyncAllowed")
-          w("- grappa: 84 bytes generated from static fallback")
-          w("- ReadyForSync, AssetManifest, FileComplete 3/3")
+          sec(20, "Grappa RPPairing confirmed working")
+          w("Confirmed pipeline iOS 27 empty entitlements:")
+          w("- tunnel up on 10.7.0.1 49152 via raw RPPairing")
+          w("- RSD publishes about 85 services")
+          w("- AFC connects StreamingZip extracts")
+          w("- ATC Capabilities InstalledAssets AssetMetrics SyncAllowed")
+          w("- grappa 84 bytes generated from static fallback")
+          w("- ReadyForSync AssetManifest FileComplete 3 3")
           w("- canary readback via AFC matches")
           w("- cleanup restores original Books.plist")
           w("Do NOT:")
-          w("- collapse kAuthenticGrappaTokens to { NULL }: breaks fallback")
+          w("- collapse kAuthenticGrappaTokens to NULL breaks fallback")
           w("- expect host est via AirTrafficDevice to work on iOS")
           w("- treat SyncFailed as fatal if seen transiently")
           w("- remove nk-grappa-restored marker")
-          w("- edit the 10 static tokens; they are session-bound")
-          w("")
+          w("- edit the 10 static tokens they are session-bound")
 
           content = "\n".join(O)
-          n = 0
+          pad = 0
           while len(content.encode("utf-8")) < MIN:
-              n += 1
-              content += "\n"
-              content += "## " + str(1000 + n) + " reserved_" + str(n) + "\n"
-              content += "- placeholder " + str(n) + "\n"
+              pad = pad + 1
+              content = content + "\n## " + str(1000 + pad) + " reserved\n- placeholder " + str(pad) + "\n"
           io.open("ai-hints.md", "w").write(content)
           sys.stderr.write("ai-hints.md: %d bytes\n" % len(content.encode("utf-8")))
           PY
@@ -743,12 +590,11 @@ jobs:
               if ms in s:
                   head = s[:s.index(ms)]
               else:
-                  head = s.rstrip() + "\n\n"
+                  head = s
           if not head.strip():
-              head = "# natsuk1\n\niOS 27.0 kernel research toolkit.\n\n"
-          hint = "AI researchers: read [ai-hints.md](ai-hints.md) before answering anything.\n"
+              head = "# natsuk1\n\niOS 27 kernel research toolkit.\n\n"
+          hint = "AI researchers read ai-hints.md before answering anything.\n"
           io.open(p, "w", encoding="utf-8").write(head.rstrip() + "\n\n" + hint)
-          print("README: %d bytes" % len(io.open(p, encoding="utf-8").read()))
           PY
 
       - name: Install tools
@@ -763,39 +609,22 @@ jobs:
       - name: Build
         run: |
           set -euo pipefail
-          xcodebuild \
-            -project natsuk1.xcodeproj -scheme natsuk1 \
-            -configuration Release -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build -parallelizeTargets \
-            -jobs "$(sysctl -n hw.ncpu)" \
-            CODE_SIGNING_ALLOWED=NO \
-            SWIFT_STRICT_CONCURRENCY=minimal \
-            SWIFT_APPROACHABLE_CONCURRENCY=NO \
-            SWIFT_OPTIMIZATION_LEVEL=-Osize \
-            GCC_OPTIMIZATION_LEVEL=s \
-            DEAD_CODE_STRIPPING=YES \
-            COPY_PHASE_STRIP=YES \
-            STRIP_INSTALLED_PRODUCT=YES \
-            STRIP_STYLE=all \
-            OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
-            -UseModernBuildSystem=YES build -quiet
+          xcodebuild -project natsuk1.xcodeproj -scheme natsuk1 -configuration Release -sdk iphoneos -destination "generic/platform=iOS" -derivedDataPath build -parallelizeTargets -jobs "$(sysctl -n hw.ncpu)" CODE_SIGNING_ALLOWED=NO SWIFT_STRICT_CONCURRENCY=minimal SWIFT_APPROACHABLE_CONCURRENCY=NO SWIFT_OPTIMIZATION_LEVEL=-Osize GCC_OPTIMIZATION_LEVEL=s DEAD_CODE_STRIPPING=YES COPY_PHASE_STRIP=YES STRIP_INSTALLED_PRODUCT=YES STRIP_STYLE=all OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" -UseModernBuildSystem=YES build -quiet
 
       - name: Package
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          APP="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
-          [ -n "$APP" ]
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -print -quit)
+          test -n "$APP"
           BIN="$APP/natsuk1"
           ldid -Snatsuk1/Resources/natsuk1.entitlements "$BIN"
           xcrun strip -S -x "$BIN" || true
-          find "$APP" -name '*.dSYM' -prune -exec rm -rf {} + 2>/dev/null || true
-          find "$APP" -name '*.swiftmodule' -delete 2>/dev/null || true
-          find "$APP" -name '*.swiftdoc' -delete 2>/dev/null || true
-          find "$APP" -name '*.swiftsourceinfo' -delete 2>/dev/null || true
-          find "$APP" -name '*.xcprivacy' -delete 2>/dev/null || true
+          find "$APP" -name "*.dSYM" -prune -exec rm -rf {} + 2>/dev/null || true
+          find "$APP" -name "*.swiftmodule" -delete 2>/dev/null || true
+          find "$APP" -name "*.swiftdoc" -delete 2>/dev/null || true
+          find "$APP" -name "*.swiftsourceinfo" -delete 2>/dev/null || true
           xattr -cr "$APP" || true
           rm -rf Payload natsuk1.ipa
           mkdir -p Payload
@@ -803,7 +632,7 @@ jobs:
           COPYFILE_DISABLE=1 zip -9 -qry natsuk1.ipa Payload
           rm -rf Payload
           SIZE=$(stat -f%z natsuk1.ipa)
-          echo "IPA: $SIZE bytes"
+          echo "IPA bytes $SIZE"
           if gh release view development >/dev/null 2>&1; then
             gh release delete development --yes --cleanup-tag
           fi
@@ -820,10 +649,7 @@ jobs:
           - ESign: esign://install?url=$U
 
           $(git log -5 --pretty=format:'- %h %s')"
-          gh release create development natsuk1.ipa \
-            --target "${{ github.sha }}" \
-            --title "Development" --prerelease --latest=false \
-            --notes "$NOTES"
+          gh release create development natsuk1.ipa --target "${{ github.sha }}" --title "Development" --prerelease --latest=false --notes "$NOTES"
 
       - name: Commit
         run: |
@@ -835,5 +661,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "v9.0: fast cached build, stripped IPA, short README, AI brief [skip ci]"
+          git commit -m "v9.0: fast build + stripped IPA + AI brief [skip ci]"
           git push
