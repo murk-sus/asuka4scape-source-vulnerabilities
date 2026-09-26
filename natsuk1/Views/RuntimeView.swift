@@ -20,7 +20,7 @@ struct RuntimeView: View {
 
     @ViewBuilder
     private func row(label: String, value: String) -> some View {
-        let isSet = value != "-" && value != "—" && !value.isEmpty
+        let isSet = value != "-" && value != "\u{2014}" && !value.isEmpty
         HStack {
             Text(label)
             Spacer()

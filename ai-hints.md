@@ -60,15 +60,18 @@ copy_result_inner kptr count 0; copy_interface 1..10 ret 0 no data.
 - necp_client_action 0xA4E5C28 dispatcher BR BLR
 - syscall_dispatcher 0xA6CEB84
 
-## 5 Potential integer overflow
+## 5 NECP flow_alloc analysis (closed)
 
-necp_flow_alloc 0xA346E70:
-  uVar6 = min(user_count, 0x80)
-  iVar1 = (uVar6 + param_3) * 0x14|0x18
-  kalloc_type_necp_flow(iVar1)
-  copyin(user_ptr, buf, uVar6 * 0x14|0x18)
-If param_3 wraps int32 then alloc less than copyin gives heap overflow.
-param_3 origin requires decompile of FUN_fffffff00a346474.
+necp_flow_alloc 0xA346E70 has 2 BL callers:
+- 0xA346474 -> FUN(auStack, ctx, 0)
+- 0xA348180 -> FUN(local_a8, ctx, 1)
+param_3 is a mode flag (0 read, 1 write), NOT user input.
+Integer overflow hypothesis is disproven as of 2026-09-27.
+Caller 0xA346474 is a flow-buffer serializer, kernel-internal.
+Bounds check present: if (size < needed) return 0x22.
+Ring wrap: if (size - offset < needed) offset = 0.
+Caller 0xA348180 reads flow stats, fixed-size kalloc 0x14/0x18.
+Neither is reachable from syscall(502) directly.
 
 ## 6 Confirmed safe
 
@@ -107,7 +110,7 @@ List if cond Section else Section crash.
 .scaleEffect inside if breaks _ConditionalContent.
 @Published from Task race UAF.
 Respring button must exist only in ToolsView not AirliftView.
-RuntimeView must not show green when slide or base equal default '-'.
+RuntimeView must not show green when slide or base equal '-'.
 
 ## 11 Network / LocalDevVPN
 
@@ -182,17 +185,16 @@ do not delete cached dirs
 
 ## 16 Next steps
 
-decompile FUN_fffffff00a346474 and FUN_fffffff00a348180
-trace param_3 for necp_flow_alloc
+decompile necp_client_add_flow 0xA4E843C (op 0x11 handler)
+decompile necp_client_action 0xA4E5C28 (op dispatcher)
+trace user-size to copyin+kalloc path in op handlers
 decompile syscall dispatcher 0xA6CEB84 case 501 502
-decompile FUN_fffffff00a4c113c TLV wrapper
 search IOKit IOSurface IOConnectCallMethod IOHIDEvent
 mbuf m_copydata mbuf_copydata with user lengths
 
 ## 17 What NOT to do
 
 no fix_and_test.yml or build_and_release.yml
-no rewriting sources from workflow except structured UI regeneration
 no hashFiles cache keys on kernelcache
 no blind syscall sweep
 no proc_info csops task_info sweep mach_port_names
@@ -207,7 +209,7 @@ no answer without web search first
 no deleting ghidra kernelcache symbolicator
 no collapsing GrappaHelper token array to NULL
 
-## 18 BSD syscall safety table 0 to 557
+## 18 BSD syscall safety table
 
 S safe C codesign-kill B sandbox U unknown
 ### syscall 0
@@ -9819,15 +9821,3 @@ Do NOT collapse kAuthenticGrappaTokens to NULL.
 
 ## 3582 reserved
 - placeholder 2582
-
-## 3583 reserved
-- placeholder 2583
-
-## 3584 reserved
-- placeholder 2584
-
-## 3585 reserved
-- placeholder 2585
-
-## 3586 reserved
-- placeholder 2586

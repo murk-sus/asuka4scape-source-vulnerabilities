@@ -67,7 +67,7 @@ struct AirliftView: View {
             HStack {
                 Text("Tunnel IP")
                 Spacer()
-                Text(tunnelIP ?? "—")
+                Text(tunnelIP ?? "\u{2014}")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(tunnelIP != nil ? .green : .secondary)
                     .shadow(color: tunnelIP != nil ? Color.green.opacity(0.55) : Color.clear, radius: 3)
@@ -75,7 +75,7 @@ struct AirliftView: View {
             HStack {
                 Text("Device IP")
                 Spacer()
-                Text(deviceIP ?? "—")
+                Text(deviceIP ?? "\u{2014}")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(deviceIP != nil ? .green : .secondary)
                     .shadow(color: deviceIP != nil ? Color.green.opacity(0.55) : Color.clear, radius: 3)
