@@ -7,9 +7,9 @@ struct AirliftView: View {
     @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()
     @State private var tunnelIP: String? = NetworkStatus.tunnelIP()
     @State private var deviceIP: String? = NetworkStatus.deviceIP()
-    @State private var tick: UInt64 = 0
+    @State private var copied = false
 
-    private let ticker = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
+    private let ticker = Timer.publish(every: 3.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         List {
@@ -27,14 +27,19 @@ struct AirliftView: View {
         .onAppear { refresh() }
         .onReceive(ticker) { _ in refresh() }
         .refreshable { refresh() }
-        .id(tick)
     }
 
     private func refresh() {
-        loopbackVPNUp = NetworkStatus.loopbackVPNUp()
-        tunnelIP = NetworkStatus.tunnelIP()
-        deviceIP = NetworkStatus.deviceIP()
-        tick &+= 1
+        DispatchQueue.global(qos: .utility).async {
+            let vpn = NetworkStatus.loopbackVPNUp()
+            let tun = NetworkStatus.tunnelIP()
+            let dev = NetworkStatus.deviceIP()
+            DispatchQueue.main.async {
+                if self.loopbackVPNUp != vpn { self.loopbackVPNUp = vpn }
+                if self.tunnelIP != tun { self.tunnelIP = tun }
+                if self.deviceIP != dev { self.deviceIP = dev }
+            }
+        }
     }
 
     @ViewBuilder
@@ -47,7 +52,7 @@ struct AirliftView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Loopback VPN is not active")
                             .font(.subheadline).fontWeight(.semibold)
-                        Text("Start LocalDevVPN (10.7.0.1 / 10.7.1.1)")
+                        Text("Start LocalDevVPN (10.7.0.x)")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -125,11 +130,19 @@ struct AirliftView: View {
         Section {
             if case .pairing = airlift.state {
                 Button(role: .destructive) { airlift.cancelPairing() } label: {
-                    Text("Cancel Pairing").frame(maxWidth: .infinity)
+                    HStack {
+                        Image(systemName: "xmark.circle")
+                        Text("Cancel Pairing")
+                    }
+                    .frame(maxWidth: .infinity)
                 }
             } else {
                 Button { airlift.runPairing() } label: {
-                    Text("Start Pairing").frame(maxWidth: .infinity)
+                    HStack {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                        Text("Start Pairing")
+                    }
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -195,22 +208,42 @@ struct AirliftView: View {
             }
             .disabled(airlift.state == .running || !loopbackVPNUp)
 
-            Button { airlift.respring() } label: {
+            Button(role: .destructive) {
+                airlift.cancelExploit()
+            } label: {
+                HStack {
+                    Image(systemName: "xmark.circle")
+                    Text("Cancel Exploit")
+                }
+            }
+            .disabled(airlift.state != .running)
+
+            Button { respring() } label: {
                 HStack {
                     Image(systemName: "arrow.clockwise")
                     Text("Respring")
                 }
             }
-            .disabled(airlift.state == .running)
         } header: {
             Label("Exploit", systemImage: "bolt.shield")
         }
 
         Section {
             Button(role: .destructive) { airlift.deletePairing() } label: {
-                Text("Delete Pairing").frame(maxWidth: .infinity)
+                HStack {
+                    Image(systemName: "trash")
+                    Text("Delete Pairing")
+                }
+                .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    private func respring() {
+        NotificationCenter.default.post(
+            name: Notification.Name("natsuk1.respring"),
+            object: nil
+        )
     }
 
     @ViewBuilder
@@ -221,6 +254,30 @@ struct AirliftView: View {
                         : airlift.exploitLog.joined(separator: "\n"))
         } header: {
             Label("Log", systemImage: "terminal")
+        }
+
+        Section {
+            Button {
+                UIPasteboard.general.string = airlift.exploitLog.joined(separator: "\n")
+                copied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    copied = false
+                }
+            } label: {
+                HStack {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    Text(copied ? "Copied!" : "Copy All")
+                }
+            }
+            .disabled(airlift.exploitLog.isEmpty)
+
+            Button(role: .destructive) { airlift.clearLog() } label: {
+                HStack {
+                    Image(systemName: "trash")
+                    Text("Clear")
+                }
+            }
+            .disabled(airlift.exploitLog.isEmpty)
         }
     }
 }

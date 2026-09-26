@@ -3,6 +3,7 @@ import UIKit
 
 struct OverviewView: View {
     @EnvironmentObject var state: AppState
+    @State private var copied = false
 
     var body: some View {
         NavigationStack {
@@ -12,12 +13,23 @@ struct OverviewView: View {
                         state.necp_run()
                     } label: {
                         HStack {
+                            Image(systemName: "bolt.fill")
                             Text("Run Exploit")
                             Spacer()
                             if state.running { ProgressView().scaleEffect(0.8) }
                         }
                     }
                     .disabled(state.running)
+
+                    Button(role: .destructive) {
+                        state.cancel()
+                    } label: {
+                        HStack {
+                            Image(systemName: "xmark.circle")
+                            Text("Cancel Exploit")
+                        }
+                    }
+                    .disabled(!state.running)
                 } header: {
                     Label("Exploit", systemImage: "cpu")
                 }
@@ -32,12 +44,27 @@ struct OverviewView: View {
                 }
 
                 Section {
-                    Button { UIPasteboard.general.string = state.log } label: {
-                        Text(state.t("Copy All", "Копировать всё"))
-                    }.disabled(state.log.isEmpty)
+                    Button {
+                        UIPasteboard.general.string = state.log
+                        copied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            copied = false
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            Text(copied ? "Copied!" : state.t("Copy All", "Копировать всё"))
+                        }
+                    }
+                    .disabled(state.log.isEmpty)
+
                     Button(role: .destructive) { state.clear() } label: {
-                        Text(state.t("Clear", "Очистить"))
-                    }.disabled(state.log.isEmpty)
+                        HStack {
+                            Image(systemName: "trash")
+                            Text(state.t("Clear", "Очистить"))
+                        }
+                    }
+                    .disabled(state.log.isEmpty)
                 }
             }
             .listStyle(.insetGrouped)

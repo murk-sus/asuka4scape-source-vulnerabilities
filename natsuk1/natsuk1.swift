@@ -89,6 +89,9 @@ struct RootView: View {
                         if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
                     }
                     /* natsuk1-no-crashui */
+                    .onReceive(NotificationCenter.default.publisher(for: Notification.Name("natsuk1.respring"))) { _ in
+                        state.show_respring = true /* natsuk1-respring-v1 */
+                    }
                     .onChange(of: scenePhase) { _, phase in
                         if phase == .background {
                             CrashLog.shared.markCleanShutdown()
@@ -217,4 +220,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
     func respring() { show_respring = true }
     func clear() { LockedBuffer.shared.clear(); log = "" }
+    func cancel() { /* natsuk1-cancel-v1 */
+        nk_necp_cancel()
+        append("[*] cancel requested")
+    }
 }
