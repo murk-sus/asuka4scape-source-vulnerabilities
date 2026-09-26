@@ -7,8 +7,6 @@ struct OverviewView: View {
     var body: some View {
         NavigationStack {
             List {
-                RuntimeView() /* natsuk1-crashlog-v1 */
-                    .environmentObject(state)
                 Section {
                     Button {
                         state.necp_run()
@@ -24,17 +22,8 @@ struct OverviewView: View {
                     Label("Kernel Read Write", systemImage: "cpu")
                 }
 
-                Section {
-                    HStack {
-                        Text(state.t("Status", "Статус"))
-                        Spacer()
-                        StatusDot(status: state.status)
-                    }
-                } header: {
-                    Label(state.t("Runtime", "Состояние"), systemImage: "waveform.path.ecg")
-                } footer: {
-                    Text(DeviceName.full()).font(.system(size: 12, design: .monospaced))
-                }
+                RuntimeView()
+                    .environmentObject(state)
 
                 Section {
                     LogTerminal(text: state.log.isEmpty ? "Awaiting execution." : state.log)
