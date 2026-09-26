@@ -10,7 +10,11 @@ struct OverviewView: View {
             List {
                 Section {
                     Button { state.necp_run() } label: {
-                        HStack {
+                        HStack(spacing: 12) {
+                            Image(systemName: "bolt.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(.blue)
+                                .frame(width: 22)
                             Text("Run Exploit")
                             Spacer()
                             if state.running { ProgressView().scaleEffect(0.8) }
@@ -19,7 +23,12 @@ struct OverviewView: View {
                     .disabled(state.running)
 
                     Button(role: .destructive) { state.cancel() } label: {
-                        Text("Cancel Exploit").frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(spacing: 12) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(width: 22)
+                            Text("Cancel Exploit")
+                        }
                     }
                     .disabled(!state.running)
                 } header: {
@@ -43,14 +52,23 @@ struct OverviewView: View {
                             copied = false
                         }
                     } label: {
-                        Text(copied ? "Copied!" : state.t("Copy All", "Копировать всё"))
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(spacing: 12) {
+                            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(copied ? .green : .blue)
+                                .frame(width: 22)
+                            Text(copied ? "Copied!" : state.t("Copy All", "Копировать всё"))
+                        }
                     }
                     .disabled(state.log.isEmpty)
 
                     Button(role: .destructive) { state.clear() } label: {
-                        Text(state.t("Clear", "Очистить"))
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(spacing: 12) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(width: 22)
+                            Text(state.t("Clear", "Очистить"))
+                        }
                     }
                     .disabled(state.log.isEmpty)
                 } header: {

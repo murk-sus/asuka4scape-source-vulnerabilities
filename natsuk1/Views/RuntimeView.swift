@@ -12,8 +12,7 @@ struct RuntimeView: View {
                 Text(state.slide)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(state.slide != "—" ? .green : .secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .lineLimit(1).truncationMode(.middle)
             }
             HStack {
                 Text("Base")
@@ -21,8 +20,7 @@ struct RuntimeView: View {
                 Text(state.base)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(state.base != "—" ? .green : .secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .lineLimit(1).truncationMode(.middle)
             }
             HStack {
                 Text("Status")
