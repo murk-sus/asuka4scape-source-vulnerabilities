@@ -1,0 +1,41 @@
+Ghidra analysis needed for necp_client_copy_result
+
+1. necp_client_copy_result (verified 0xFFFFFFF00A4EAC7C + slide)
+   - Open in Ghidra, decompile.
+   - Confirm it iterates client->flow_list.
+   - Locate the flow pointer (register x21 in our dump).
+   - Find every `ldr xN, [x21, #off]` that leads to `memcpy` or `copyout`.
+   - CRITICAL: check whether the second `add_flow` after double-free
+     causes the flow struct to be reinitialized. If yes, look for
+     any code path in copy_result that reads from flow BEFORE the
+     reinit step in add_flow.
+
+2. necp_client_add_flow (0xFFFFFFF00A4E843C)
+   - Find where the flow struct is allocated (kalloc size).
+   - Find where `assigned_results` and `assigned_results_length`
+     are written into the flow struct.
+   - If those fields are 0 and never set by user, the copy_result
+     kread path is dead.
+
+3. necp_client_remove_flow (0xFFFFFFF00A4E93C4)
+   - Find the refcount decrement.
+   - Confirm double-free is a real bug (we saw rm1=0 rm2=0).
+
+4. TLV parser (necp_get_tlv_at_offset or similar)
+   - Search symbol table for "tlv".
+   - Look for functions taking (buf, len, type, &out, &out_len).
+   - Check for uint32 overflow in length arithmetic.
+   - If found -> potential OOB read of 4GB.
+
+5. Other write primitives
+   - Search for `copyout` calls with user-controlled length in the
+     NECP syscall handlers.
+   - Look for `necp_set_tlv_at_offset`.
+   - Look for TLV type handling that copies user data to a
+     user-controlled offset in the flow struct.
+
+6. Alternative: socket / pipe
+   - `struct socket` allocation path: soalloc -> zone or kalloc?
+   - If kalloc, we can spray via socket(AF_INET, SOCK_STREAM).
+   - `sendmsg` with msg_control -> kalloc buffer.
+   - Check `kalloc.1024` callers in the source if available.

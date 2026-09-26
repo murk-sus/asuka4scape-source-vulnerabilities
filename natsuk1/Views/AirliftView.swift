@@ -85,7 +85,7 @@ struct AirliftView: View {
                     .foregroundStyle(.secondary)
             }
         } header: {
-            Text("Network")
+            Label("Network", systemImage: "network")
         }
     }
 
@@ -125,7 +125,7 @@ struct AirliftView: View {
                             in: RoundedRectangle(cornerRadius: 12))
             }
         } header: {
-            Text("Pairing")
+            Label("Pairing", systemImage: "link.circle")
         }
 
         Section {
@@ -182,7 +182,7 @@ struct AirliftView: View {
                     .textInputAutocapitalization(.never)
             }
         } header: {
-            Text("Pairing")
+            Label("Pairing", systemImage: "link.circle")
         }
 
         Section {
@@ -200,7 +200,7 @@ struct AirliftView: View {
                 Text("Respring").frame(maxWidth: .infinity, alignment: .leading)
             }
         } header: {
-            Text("Exploit")
+            Label("Exploit", systemImage: "bolt.shield")
         }
 
         Section {
@@ -224,7 +224,7 @@ struct AirliftView: View {
                         ? "No output yet."
                         : airlift.exploitLog.joined(separator: "\n"))
         } header: {
-            Text("Log")
+            Label("Log", systemImage: "terminal")
         }
     }
 
@@ -248,7 +248,7 @@ struct AirliftView: View {
             }
             .disabled(airlift.exploitLog.isEmpty)
         } header: {
-            Text("Log Actions")
+            Label("Log Actions", systemImage: "doc.on.clipboard")
         }
     }
 }

@@ -23,7 +23,7 @@ struct OverviewView: View {
                     }
                     .disabled(!state.running)
                 } header: {
-                    Text("Exploit")
+                    Label("Exploit", systemImage: "bolt.shield")
                 }
 
                 RuntimeView()
@@ -32,7 +32,7 @@ struct OverviewView: View {
                 Section {
                     LogTerminal(text: state.log.isEmpty ? "Awaiting execution." : state.log)
                 } header: {
-                    Text(state.t("Logs", "Логи"))
+                    Label(state.t("Logs", "Логи"), systemImage: "terminal")
                 }
 
                 Section {
@@ -54,7 +54,7 @@ struct OverviewView: View {
                     }
                     .disabled(state.log.isEmpty)
                 } header: {
-                    Text("Log Actions")
+                    Label("Log Actions", systemImage: "doc.on.clipboard")
                 }
             }
             .listStyle(.insetGrouped)

@@ -30,7 +30,7 @@ struct RuntimeView: View {
                 StatusDot(status: state.status)
             }
         } header: {
-            Text("Runtime")
+            Label("Runtime", systemImage: "waveform.path.ecg")
         }
     }
 }
