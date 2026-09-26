@@ -47,7 +47,7 @@
     "off_ncf_assigned_len": "0x70",
     "off_ncf_parent": "0x88",
     "off_ncf_refcnt": "0x58",
-    "off_ncf_struct_sz": "0x100",
+    "off_ncf_struct_sz": "0x400",
     "off_zone_data_kalloc": "0xFFFFFFF007C62E70",
     "off_zone_early_kalloc": "0xFFFFFFF007BBB170",
     "off_zone_kalloc_type_var": "0xFFFFFFF007BC2800",
