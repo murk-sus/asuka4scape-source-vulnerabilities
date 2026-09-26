@@ -17,21 +17,19 @@ struct PathAccessView: View {
     @State private var busy = false
 
     private let paths: [String] = [
-        "/usr/lib/libMobileGestalt.dylib",
-        "/usr/lib/libMobileActivation.dylib",
-        "/usr/lib/libmis.dylib",
-        "/usr/lib/libsandbox.1.dylib",
-        "/var/mobile/Library/Preferences/com.apple.MobileGestalt.plist",
-        "/var/mobile/Library/Preferences/.GlobalPreferences.plist",
-        "/var/mobile/Library/Preferences/com.apple.springboard.plist",
-        "/var/mobile/Library/Caches",
+        "/var/mobile",
+        "/var/mobile/Documents",
         "/var/mobile/Library",
+        "/var/mobile/Library/Preferences",
+        "/var/mobile/Library/Caches",
+        "/var/mobile/Library/SpringBoard",
+        "/var/mobile/Library/SMS",
+        "/var/mobile/Library/Safari",
+        "/var/mobile/Containers",
         "/var/mobile/Containers/Data/Application",
-        "/var/containers/Bundle/Application",
-        NSHomeDirectory(),
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path,
-        FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].path,
-        NSTemporaryDirectory(),
+        "/var/mobile/Containers/Shared/AppGroup",
+        "/var/tmp",
+        "/var/mobile/Media",
     ]
 
     var body: some View {
@@ -50,7 +48,6 @@ struct PathAccessView: View {
             } header: {
                 Label("Summary", systemImage: "chart.bar")
             }
-
             Section {
                 ForEach(results) { r in
                     VStack(alignment: .leading, spacing: 4) {

@@ -9,52 +9,60 @@ struct AirliftView: View {
     @State private var deviceIP: String? = NetworkStatus.deviceIP()
     @State private var copied = false
 
-    private let ticker = Timer.publish(every: 5.0, on: .main, in: .common).autoconnect()
+    private let ticker = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         List {
             Section {
-                HStack {
-                    Text("Status")
+                HStack(spacing: 16) {
+                    ZStack {
+                        Circle()
+                            .fill(loopbackVPNUp ? Color.green.opacity(0.15) : Color.orange.opacity(0.15))
+                            .frame(width: 72, height: 72)
+                        Image(systemName: loopbackVPNUp ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
+                            .font(.system(size: 32, weight: .semibold))
+                            .foregroundStyle(loopbackVPNUp ? .green : .orange)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("LocalDevVPN")
+                            .font(.headline)
+                        Text(loopbackVPNUp ? "Connected" : "Not connected")
+                            .font(.subheadline)
+                            .foregroundStyle(loopbackVPNUp ? .green : .orange)
+                        if let t = tunnelIP {
+                            Text("Tunnel \(t)")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     Spacer()
-                    Text(loopbackVPNUp ? "active" : "not active")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(loopbackVPNUp ? .green : .orange)
                 }
-                if let t = tunnelIP {
-                    HStack {
-                        Text("Tunnel")
-                        Spacer()
-                        Text(t).font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if let d = deviceIP {
-                    HStack {
-                        Text("Device")
-                        Spacer()
-                        Text(d).font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if !loopbackVPNUp {
-                    Text("Start LocalDevVPN with interface 10.7.0.x")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                .padding(.vertical, 8)
             } header: {
-                Label("Network", systemImage: "network")
+                Label("Current status", systemImage: "shield.lefthalf.filled")
             }
 
             Section {
                 HStack {
-                    Text("State")
+                    Text("Tunnel IP")
                     Spacer()
-                    Text(pairingStatusText)
+                    Text(tunnelIP ?? "—")
                         .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(pairingStatusColor)
+                        .foregroundStyle(.secondary)
                 }
-                if isPairing {
+                HStack {
+                    Text("Device IP")
+                    Spacer()
+                    Text(deviceIP ?? "—")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Label("Session details", systemImage: "network")
+            }
+
+            Section {
+                if case .pairing = airlift.state {
                     HStack(spacing: 8) {
                         ProgressView()
                         Text(airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus)
@@ -76,23 +84,18 @@ struct AirliftView: View {
                         .buttonStyle(.borderedProminent).tint(.orange)
                     }
                     .padding(12)
-                    .background(Color.orange.opacity(0.12),
-                                in: RoundedRectangle(cornerRadius: 12))
+                    .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
                 }
-            } header: {
-                Label("Pairing", systemImage: "link.circle")
-            }
-
-            Section {
                 Button(role: .destructive) { airlift.cancelPairing() } label: {
                     Text("Cancel Pairing")
                 }
                 .disabled(!isPairing)
-
                 Button { airlift.runPairing() } label: {
                     Text("Start Pairing")
                 }
                 .disabled(isPairing)
+            } header: {
+                Label("Pairing", systemImage: "link.circle")
             }
 
             Section {
@@ -115,15 +118,10 @@ struct AirliftView: View {
                     Text("Run Exploit")
                 }
                 .disabled(airlift.state == .running || !loopbackVPNUp || !airlift.hasPairing())
-
                 Button(role: .destructive) { airlift.cancelExploit() } label: {
                     Text("Cancel Exploit")
                 }
                 .disabled(airlift.state != .running)
-
-                Button { respring() } label: {
-                    Text("Respring")
-                }
             } header: {
                 Label("Exploit", systemImage: "cpu")
             }
@@ -147,14 +145,11 @@ struct AirliftView: View {
                 Button {
                     UIPasteboard.general.string = airlift.exploitLog.joined(separator: "\n")
                     copied = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        copied = false
-                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
                 } label: {
                     Text(copied ? "Copied!" : "Copy All")
                 }
                 .disabled(airlift.exploitLog.isEmpty)
-
                 Button(role: .destructive) { airlift.clearLog() } label: {
                     Text("Clear")
                 }
@@ -172,47 +167,16 @@ struct AirliftView: View {
     }
 
     private func refresh() {
-        DispatchQueue.global(qos: .utility).async {
-            let vpn = NetworkStatus.loopbackVPNUp()
-            let tun = NetworkStatus.tunnelIP()
-            let dev = NetworkStatus.deviceIP()
-            DispatchQueue.main.async {
-                if self.loopbackVPNUp != vpn { self.loopbackVPNUp = vpn }
-                if self.tunnelIP != tun { self.tunnelIP = tun }
-                if self.deviceIP != dev { self.deviceIP = dev }
-            }
-        }
+        let vpn = NetworkStatus.loopbackVPNUp()
+        let tun = NetworkStatus.tunnelIP()
+        let dev = NetworkStatus.deviceIP()
+        if loopbackVPNUp != vpn { loopbackVPNUp = vpn }
+        if tunnelIP != tun { tunnelIP = tun }
+        if deviceIP != dev { deviceIP = dev }
     }
 
     private var isPairing: Bool {
         if case .pairing = airlift.state { return true }
         return false
-    }
-
-    private var pairingStatusText: String {
-        switch airlift.state {
-        case .pairing: return "pairing"
-        case .ready:   return "paired"
-        case .running: return "running"
-        case .done(let ok, _): return ok ? "done" : "failed"
-        default:       return "idle"
-        }
-    }
-
-    private var pairingStatusColor: Color {
-        switch airlift.state {
-        case .pairing: return .orange
-        case .ready:   return .green
-        case .running: return .orange
-        case .done(let ok, _): return ok ? .green : .red
-        default:       return .secondary
-        }
-    }
-
-    private func respring() {
-        NotificationCenter.default.post(
-            name: Notification.Name("natsuk1.respring"),
-            object: nil
-        )
     }
 }

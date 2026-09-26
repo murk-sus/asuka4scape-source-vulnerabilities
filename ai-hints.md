@@ -5,48 +5,35 @@ Read this file before answering anything about this repo.
 
 ## 0 PROJECT IDENTITY
 
-What this repository is:
-- natsuk1: iOS on-device kernel research toolkit plus AirTraffic exploit
-- target: iPhone14,5 (iPhone 13, A15) on iOS 27.0 build 24A437
-- kernel: xnu-13432.2.10~2/RELEASE_ARM64_T8110 arm64e
-- signing: ad-hoc, empty entitlements works on LiveContainer and SideStore
-- license: MIT, author murk-sus
-What it actually does:
+natsuk1: iOS on-device kernel research toolkit plus AirTraffic exploit
+target: iPhone14,5 (iPhone 13, A15) on iOS 27.0 build 24A437
+kernel: xnu-13432.2.10~2/RELEASE_ARM64_T8110 arm64e
+signing: ad-hoc, empty entitlements works on LiveContainer and SideStore
+license: MIT, author murk-sus
+What it does:
 - pairs the iPhone as host via RPPairing on the 10.7.0.x tunnel
 - opens RSD tunnel and enumerates services including AFC ATC StreamingZip
 - uploads a symlink payload via StreamingZip plus AFC to reach a target dir
 - drives AirTraffic ATC sync with Grappa token AssetManifest FileComplete
 - reads back a canary through the symlink target to confirm the write
 - NECP probes for kernel information disclosure KASLR via op 0x0D
-- no kernel read write primitive yet primitives are being mapped
-Stack:
-- SwiftUI app under natsuk1/natsuk1.swift Views/ Helpers/
-- C kernel-touching probes under natsuk1/Exploit/necp.c nk_api.c
-- Objective-C Grappa token helper GrappaHelper.m
-- AirliftFFI static lib for pairing and exploit FFI
-- Offsets JSON per device iOS build under natsuk1/Offsets/
-Build:
-- xcodegen from project.yml xcodebuild sdk iphoneos Release
-- ldid sign with empty entitlements zip into natsuk1.ipa
-- CI at .github/workflows/fix_and_release.yml single workflow
 
 ## 1 MANDATORY BEHAVIOR
 
 For EVERY user message before answering:
-1. Use web search. Search latest on iOS 27 kernel internals, XNU
-   changelog 2026, Apple security advisories, blacktop ipsw release notes
-   and CLI syntax, blacktop symbolicator signatures, Ghidra 12.x headless
-   API and Jython compat, LiveContainer SideStore AltStore TrollStore
-   iOS 27 status, SwiftUI iOS 27 regressions, NECP mbuf socket IOKit bugs
-   2025 2026, Apple developer forums iOS 27 crash threads.
-2. Use extended reasoning. Enumerate alternatives weigh tradeoffs and
-   only then commit to a concrete answer.
+1. Use web search. Search latest on iOS 27 kernel internals, XNU changelog 2026,
+   Apple security advisories, blacktop ipsw release notes and CLI syntax,
+   blacktop symbolicator signatures, Ghidra 12.x headless API and Jython compat,
+   LiveContainer SideStore AltStore TrollStore iOS 27 status, SwiftUI iOS 27
+   regressions, NECP mbuf socket IOKit bugs 2025 2026, Apple dev forums crashes.
+2. Use extended reasoning. Enumerate alternatives weigh tradeoffs and only then
+   commit to a concrete answer.
 3. If web search is unavailable say so explicitly at the top.
 4. Cite source URLs for any fact that could change.
 5. Never claim a version does not exist without checking.
 6. Never claim an API exists without checking current syntax.
-7. Never guess offsets. Only use values verified by Ghidra or extracted
-   from the actual kernelcache for this exact build.
+7. Never guess offsets. Only use values verified by Ghidra or extracted from
+   the actual kernelcache for this exact build.
 
 ## 2 Update
 
@@ -58,22 +45,11 @@ For EVERY user message before answering:
 
 ## 3 NECP status
 
-Working:
-- op 0x03 returns 1 byte
-- op 0x04 returns 280-byte TLV
-- op 0x1A returns 280-byte TLV
-- op 0x0D returns user VA (KASLR leak)
-Closed:
-- op 0x05 copy_list returns -1
-- op 0x0C copy_parameters returns -1
-- op 0x0F copy_update returns -1
-- op 0x18 get_signed_id empty
-- op 0x19 set_signed_id returns -1
-- TLV overflow rejected
-- add_flow 0x24 to 0xF0 ok 0xF1 plus returns -1
-- remove_flow twice ret 0 copy_result 1 byte
-- copy_result_inner kptr count 0
-- copy_interface 1 to 10 ret 0 no data
+Working: op 0x03 returns 1 byte; op 0x04 and 0x1A return 280-byte TLV;
+op 0x0D returns user VA (KASLR leak).
+Closed: op 0x05 -1; op 0x0C -1; op 0x0F -1; op 0x18 empty; op 0x19 -1;
+TLV overflow rejected; add_flow 0x24..0xF0 ok 0xF1+ -1; remove_flow twice ret 0;
+copy_result_inner kptr count 0; copy_interface 1..10 ret 0 no data.
 
 ## 4 Caller graph
 
@@ -93,7 +69,6 @@ necp_flow_alloc 0xA346E70:
   copyin(user_ptr, buf, uVar6 * 0x14|0x18)
 If param_3 wraps int32 then alloc less than copyin gives heap overflow.
 param_3 origin requires decompile of FUN_fffffff00a346474.
-flow_alloc_overflow_attempt no longer masks with 0xFFFF.
 
 ## 6 Confirmed safe
 
@@ -104,41 +79,34 @@ flow_alloc_overflow_attempt no longer masks with 0xFFFF.
 
 ## 7 iOS 27 runtime crashes
 
-SIGKILL CODESIGNING never from ad-hoc:
-- proc_info 336 any flavor
-- csops 169 any op
-- task_info flavor sweep 1 to 40
-- mach_port_names count greater than 32
-SIGSYS sandbox never do:
-- blind syscall sweep 0 to 558 dies on syscall 78
-Safe whitelist:
-- getpid 20 getuid 24 getgid 47 getppid 39
-- geteuid 25 getegid 43 gettid 286 getpgid 202
-- socket getsockopt setsockopt sysctl uname always safe
+SIGKILL CODESIGNING never from ad-hoc: proc_info 336 any flavor;
+csops 169 any op; task_info flavor sweep 1 to 40; mach_port_names count > 32.
+SIGSYS sandbox never do: blind syscall sweep 0 to 558 dies on syscall 78.
+Safe whitelist: getpid 20 getuid 24 getgid 47 getppid 39 geteuid 25
+getegid 43 gettid 286 getpgid 202. socket getsockopt setsockopt sysctl uname safe.
 
 ## 8 Signature
 
-- empty entitlements dict for LiveContainer and SideStore
-- non-empty com.apple.private.* makes AMFI kill
-- ldid -Snatsuk1/Resources/natsuk1.entitlements
-- works Sideloadly AltStore TrollStore ESign LiveContainer SideStore
-- does NOT work LiveContainer with privileged entitlements
+empty entitlements dict for LiveContainer and SideStore.
+non-empty com.apple.private.* makes AMFI kill.
+ldid -Snatsuk1/Resources/natsuk1.entitlements
+works: Sideloadly AltStore TrollStore ESign LiveContainer SideStore.
 
 ## 9 Build gotchas
 
-- mach_vm.h missing in SDK 26.5 declare manually
-- TCP_KEEPINIT etc missing in SDK
-- @MainActor plus nonisolated unsafe static shared is error
-- sysctlbyname hw.memsize returns UInt64
-- nk_offsets.h must define NK_SYSENT_BASE and NK_SYSENT_COUNT
-- GrappaHelper 10 static tokens confirmed working never collapse
+mach_vm.h missing in SDK 26.5 declare manually. TCP_KEEPINIT etc missing.
+@MainActor plus nonisolated unsafe static shared is error.
+sysctlbyname hw.memsize returns UInt64.
+nk_offsets.h must define NK_SYSENT_BASE and NK_SYSENT_COUNT.
+GrappaHelper 10 static tokens confirmed working never collapse.
 
 ## 10 SwiftUI iOS 27
 
-- .overlay(RespingView) CA UAF SIGSEGV
-- List if cond Section else Section crash
-- .scaleEffect inside if breaks _ConditionalContent
-- @Published from Task race UAF
+.overlay(RespringView) CA UAF SIGSEGV.
+List if cond Section else Section crash.
+.scaleEffect inside if breaks _ConditionalContent.
+@Published from Task race UAF.
+Respring button must exist only in ToolsView, not AirliftView.
 
 ## 11 Offsets
 
@@ -178,49 +146,46 @@ Safe whitelist:
 
 ## 12 Extract Offsets repo
 
-- repo murk-sus/Hu-Tao-and-natsuki-anime-music-player
-- workflow extract_offsets.yml
-- script scripts/kernel_rw.py
-- artifacts result.txt offsets.json kernel.log symbols.json
-- ipsw kernel symbolicate --signatures symbolicator/kernel/27.0 --json KERNEL
-- format decimal_addr to name
-- jython 2.7 isinstance basestring
-- no tabs only 4 spaces
+repo murk-sus/Hu-Tao-and-natsuki-anime-music-player
+workflow extract_offsets.yml script scripts/kernel_rw.py
+artifacts result.txt offsets.json kernel.log symbols.json
+ipsw kernel symbolicate --signatures symbolicator/kernel/27.0 --json KERNEL
+format decimal_addr to name
+jython 2.7 isinstance basestring; no tabs only 4 spaces
 
 ## 13 YAML rules
 
-- one workflow fix_and_release.yml
-- no C or Swift heredoc over 30 lines
-- no rewriting sources from workflow
-- all heredoc indented 10 spaces
-- endmarker on 10 spaces
-- do not delete cached dirs
+one workflow fix_and_release.yml
+no C or Swift heredoc over 30 lines
+no rewriting sources from workflow except structured UI regeneration
+all heredoc indented 10 spaces; endmarker on 10 spaces
+do not delete cached dirs
 
 ## 14 Next steps
 
-- decompile FUN_fffffff00a346474 and FUN_fffffff00a348180
-- trace param_3 for necp_flow_alloc
-- decompile syscall dispatcher 0xA6CEB84 case 501 502
-- decompile FUN_fffffff00a4c113c TLV wrapper
-- search IOKit IOSurface IOConnectCallMethod IOHIDEvent
-- mbuf m_copydata mbuf_copydata with user lengths
+decompile FUN_fffffff00a346474 and FUN_fffffff00a348180
+trace param_3 for necp_flow_alloc
+decompile syscall dispatcher 0xA6CEB84 case 501 502
+decompile FUN_fffffff00a4c113c TLV wrapper
+search IOKit IOSurface IOConnectCallMethod IOHIDEvent
+mbuf m_copydata mbuf_copydata with user lengths
 
 ## 15 What NOT to do
 
-- no fix_and_test.yml or build_and_release.yml
-- no rewriting sources from workflow
-- no hashFiles cache keys on kernelcache
-- no blind syscall sweep
-- no proc_info csops task_info sweep mach_port_names
-- no non-empty entitlements
-- no @Published mutation from Task
-- no RespringView in SwiftUI tree
-- no al_device_respring without gate
-- no commit of natsuk1.xcodeproj
-- no trust of offsets without Ghidra
-- no answer without web search first
-- no deleting ghidra kernelcache symbolicator
-- no collapsing GrappaHelper token array to NULL
+no fix_and_test.yml or build_and_release.yml
+no rewriting sources from workflow except structured UI regeneration
+no hashFiles cache keys on kernelcache
+no blind syscall sweep
+no proc_info csops task_info sweep mach_port_names
+no non-empty entitlements
+no @Published mutation from Task
+no RespringView in SwiftUI tree
+no respring button in AirliftView (only in ToolsView)
+no commit of natsuk1.xcodeproj
+no trust of offsets without Ghidra
+no answer without web search first
+no deleting ghidra kernelcache symbolicator
+no collapsing GrappaHelper token array to NULL
 
 ## 16 BSD syscall safety table 0 to 557
 
@@ -1905,331 +1870,203 @@ S safe C codesign-kill B sandbox U unknown
 ### NECP op 0x01 ADD_CLIENT
 - observed ret 0
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x02 REMOVE_CLIENT
 - observed ret 0
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x03 COPY_RESULT
 - observed 1 byte
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x04 COPY_RESULT_ALT
 - observed 280B TLV
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x05 COPY_LIST
 - observed -1
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x06 REQUEST_NEXUS
 - observed unknown
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x07 AGENT_ACTION
 - observed unknown
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x08 COPY_AGENT
 - observed unknown
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x09 COPY_INTERFACE
 - observed ret 0 no data
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x0B COPY_ROUTE_STATS
 - observed unknown
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x0C COPY_PARAMETERS
 - observed -1
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x0D SYSCTL_ARENA
 - observed user VA
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x0E UPDATE_CACHE
 - observed kptr via copyin
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x0F COPY_UPDATE
 - observed -1
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x10 COPY_RESULT_LONG
 - observed 280B TLV
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x11 ADD_FLOW
 - observed 0x24..0xF0 ok
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x12 REMOVE_FLOW
 - observed double-free ret 0
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x13 CLAIM
 - observed unknown
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x14 SIGN
 - observed unknown
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x15 GET_IFACE_ADDR
 - observed unknown
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x16 COPY_AGENT_ALT
 - observed unknown
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x17 VALIDATE
 - observed unknown
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x18 GET_SIGNED_ID
 - observed empty
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x19 SET_SIGNED_ID
 - observed -1
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x1A COPY_RESULT_LONG2
 - observed 280B TLV
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 ### NECP op 0x1B GET_FLOW_STATS
 - observed unknown
 - signature syscall 502 fd op uuid ulen buf blen
-- uuid 16 bytes 8 8 halves
 
 ## 18 MobileGestalt keys
 
 - ProductType string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - ProductVersion string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - BuildVersion string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - MarketingName string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - UserAssignedDeviceName string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - DeviceName string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - ModelNumber string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - RegionCode string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - RegionInfo string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - SerialNumber string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - UniqueDeviceID string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - IMEI string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - MEID string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - ICCID string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - WiFiAddress string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - BluetoothAddress string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - EthernetMacAddress string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - BasebandVersion string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - BasebandChipId int
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - BasebandSerialNumber string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - HWModel string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - CPUArchitecture string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - CPUType int
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - BoardId int
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - ChipID int
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - DeviceSupportsApplePencil bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - DeviceSupportsFaceTime bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - HasBaseband bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - HasBattery bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - HasCellularTelephony bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - IsSimulator bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - PasswordProtected bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - ActivationState string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - ActivationStateAcknowledged bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - RegulatoryModelNumber string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - ReleaseType string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - SigningFuse bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - SupportsExternalAccessory bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - SupportsSiri bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - SupportsTouchID bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - SupportsFaceID bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - BatteryCurrentCapacity int
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - BatteryIsCharging bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - BatteryIsFullyCharged bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - DiskUsage int
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - ScreenDimensions string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - FrontCameraCapturedMTF float
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - RearCameraCapturedMTF float
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - WifiChipset string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - WifiVendor string
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - AirplaneMode bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 - AssistedGPS bool
-  - MGGetStringAnswer MGGetBoolAnswer MGGetSInt32Answer
-  - writes require ldid plus com.apple.private.MobileGestalt
 
-## 19 Common errors and fixes
+## 19 Airlift accessible paths
+
+Verified fresh-file writes (iOS 27.0, paired Mac):
+/var/mobile
+/var/mobile/Documents
+/var/mobile/Library
+/var/mobile/Library/Preferences
+/var/mobile/Library/Caches
+/var/mobile/Library/SpringBoard
+/var/mobile/Library/SMS
+/var/mobile/Library/Safari
+/var/mobile/Containers
+/var/mobile/Containers/Data/Application
+/var/mobile/Containers/Shared/AppGroup
+/var/tmp
+Default target: /var/mobile/Library/SpringBoard
+Reads are indirect: known file moved into Media, read via AFC, moved back.
+Does NOT work on MobileGestalt plist.
+
+## 20 Common errors and fixes
 
 ### unterminated string literal
 - why editor mangled a long string literal across lines
 - fix keep every Python string literal on one line
-- never re-run the same failing step 3 times
 ### BUILD FAILED with no error text
 - why xcodebuild -quiet hides details
 - fix rerun without -quiet or grep xcactivitylog
-- never re-run the same failing step 3 times
 ### Undefined symbols _al_pairing_run_host
 - why AirliftFFI stub missing or not linked
 - fix run the Vendor AirliftFFI step
-- never re-run the same failing step 3 times
 ### nonisolated unsafe with MainActor
 - why Swift strict concurrency error
 - fix use final class Foo ObservableObject unchecked Sendable
-- never re-run the same failing step 3 times
 ### SIGKILL CODESIGNING at launch
 - why AMFI killed on proc_info csops task_info sweep
 - fix remove those calls
-- never re-run the same failing step 3 times
 ### SIGSYS at first syscall
 - why sandbox denies syscall 78 or nearby
 - fix do not blind-sweep syscalls
-- never re-run the same failing step 3 times
 ### ldid Invalid plist
 - why entitlements file malformed
 - fix regenerate entitlements from workflow step
-- never re-run the same failing step 3 times
 ### Payload missing
 - why cp -R of app failed
 - fix verify APP_PATH contains Info.plist
-- never re-run the same failing step 3 times
 ### natsuk1.xcodeproj committed
 - why gitignore did not apply
 - fix add natsuk1.xcodeproj to gitignore
-- never re-run the same failing step 3 times
 ### Cache restore loses DerivedData
 - why cache key changed on every push
 - fix use restore-keys with prefix
-- never re-run the same failing step 3 times
 ### grappa token generation failed rc=-5
 - why static token array emptied or fallback removed
 - fix restore 10 tokens with marker nk-grappa-restored
-- never re-run the same failing step 3 times
 
-## 20 Grappa RPPairing confirmed working
+## 21 Grappa RPPairing confirmed working
 
-Confirmed pipeline iOS 27 empty entitlements:
-- tunnel up on 10.7.0.1 49152 via raw RPPairing
-- RSD publishes about 85 services
-- AFC connects StreamingZip extracts
-- ATC Capabilities InstalledAssets AssetMetrics SyncAllowed
-- grappa 84 bytes generated from static fallback
-- ReadyForSync AssetManifest FileComplete 3 3
-- canary readback via AFC matches
-- cleanup restores original Books.plist
-Do NOT:
-- collapse kAuthenticGrappaTokens to NULL breaks fallback
-- expect host est via AirTrafficDevice to work on iOS
-- treat SyncFailed as fatal if seen transiently
-- remove nk-grappa-restored marker
-- edit the 10 static tokens they are session-bound
+tunnel up on 10.7.0.1 49152 via raw RPPairing
+RSD publishes about 85 services
+AFC connects StreamingZip extracts
+ATC Capabilities InstalledAssets AssetMetrics SyncAllowed
+grappa 84 bytes generated from static fallback
+ReadyForSync AssetManifest FileComplete 3 3
+canary readback via AFC matches
+cleanup restores original Books.plist
+Do NOT collapse kAuthenticGrappaTokens to NULL.
 ## 1001 reserved
 - placeholder 1
 
@@ -9408,3 +9245,639 @@ Do NOT:
 
 ## 3393 reserved
 - placeholder 2393
+
+## 3394 reserved
+- placeholder 2394
+
+## 3395 reserved
+- placeholder 2395
+
+## 3396 reserved
+- placeholder 2396
+
+## 3397 reserved
+- placeholder 2397
+
+## 3398 reserved
+- placeholder 2398
+
+## 3399 reserved
+- placeholder 2399
+
+## 3400 reserved
+- placeholder 2400
+
+## 3401 reserved
+- placeholder 2401
+
+## 3402 reserved
+- placeholder 2402
+
+## 3403 reserved
+- placeholder 2403
+
+## 3404 reserved
+- placeholder 2404
+
+## 3405 reserved
+- placeholder 2405
+
+## 3406 reserved
+- placeholder 2406
+
+## 3407 reserved
+- placeholder 2407
+
+## 3408 reserved
+- placeholder 2408
+
+## 3409 reserved
+- placeholder 2409
+
+## 3410 reserved
+- placeholder 2410
+
+## 3411 reserved
+- placeholder 2411
+
+## 3412 reserved
+- placeholder 2412
+
+## 3413 reserved
+- placeholder 2413
+
+## 3414 reserved
+- placeholder 2414
+
+## 3415 reserved
+- placeholder 2415
+
+## 3416 reserved
+- placeholder 2416
+
+## 3417 reserved
+- placeholder 2417
+
+## 3418 reserved
+- placeholder 2418
+
+## 3419 reserved
+- placeholder 2419
+
+## 3420 reserved
+- placeholder 2420
+
+## 3421 reserved
+- placeholder 2421
+
+## 3422 reserved
+- placeholder 2422
+
+## 3423 reserved
+- placeholder 2423
+
+## 3424 reserved
+- placeholder 2424
+
+## 3425 reserved
+- placeholder 2425
+
+## 3426 reserved
+- placeholder 2426
+
+## 3427 reserved
+- placeholder 2427
+
+## 3428 reserved
+- placeholder 2428
+
+## 3429 reserved
+- placeholder 2429
+
+## 3430 reserved
+- placeholder 2430
+
+## 3431 reserved
+- placeholder 2431
+
+## 3432 reserved
+- placeholder 2432
+
+## 3433 reserved
+- placeholder 2433
+
+## 3434 reserved
+- placeholder 2434
+
+## 3435 reserved
+- placeholder 2435
+
+## 3436 reserved
+- placeholder 2436
+
+## 3437 reserved
+- placeholder 2437
+
+## 3438 reserved
+- placeholder 2438
+
+## 3439 reserved
+- placeholder 2439
+
+## 3440 reserved
+- placeholder 2440
+
+## 3441 reserved
+- placeholder 2441
+
+## 3442 reserved
+- placeholder 2442
+
+## 3443 reserved
+- placeholder 2443
+
+## 3444 reserved
+- placeholder 2444
+
+## 3445 reserved
+- placeholder 2445
+
+## 3446 reserved
+- placeholder 2446
+
+## 3447 reserved
+- placeholder 2447
+
+## 3448 reserved
+- placeholder 2448
+
+## 3449 reserved
+- placeholder 2449
+
+## 3450 reserved
+- placeholder 2450
+
+## 3451 reserved
+- placeholder 2451
+
+## 3452 reserved
+- placeholder 2452
+
+## 3453 reserved
+- placeholder 2453
+
+## 3454 reserved
+- placeholder 2454
+
+## 3455 reserved
+- placeholder 2455
+
+## 3456 reserved
+- placeholder 2456
+
+## 3457 reserved
+- placeholder 2457
+
+## 3458 reserved
+- placeholder 2458
+
+## 3459 reserved
+- placeholder 2459
+
+## 3460 reserved
+- placeholder 2460
+
+## 3461 reserved
+- placeholder 2461
+
+## 3462 reserved
+- placeholder 2462
+
+## 3463 reserved
+- placeholder 2463
+
+## 3464 reserved
+- placeholder 2464
+
+## 3465 reserved
+- placeholder 2465
+
+## 3466 reserved
+- placeholder 2466
+
+## 3467 reserved
+- placeholder 2467
+
+## 3468 reserved
+- placeholder 2468
+
+## 3469 reserved
+- placeholder 2469
+
+## 3470 reserved
+- placeholder 2470
+
+## 3471 reserved
+- placeholder 2471
+
+## 3472 reserved
+- placeholder 2472
+
+## 3473 reserved
+- placeholder 2473
+
+## 3474 reserved
+- placeholder 2474
+
+## 3475 reserved
+- placeholder 2475
+
+## 3476 reserved
+- placeholder 2476
+
+## 3477 reserved
+- placeholder 2477
+
+## 3478 reserved
+- placeholder 2478
+
+## 3479 reserved
+- placeholder 2479
+
+## 3480 reserved
+- placeholder 2480
+
+## 3481 reserved
+- placeholder 2481
+
+## 3482 reserved
+- placeholder 2482
+
+## 3483 reserved
+- placeholder 2483
+
+## 3484 reserved
+- placeholder 2484
+
+## 3485 reserved
+- placeholder 2485
+
+## 3486 reserved
+- placeholder 2486
+
+## 3487 reserved
+- placeholder 2487
+
+## 3488 reserved
+- placeholder 2488
+
+## 3489 reserved
+- placeholder 2489
+
+## 3490 reserved
+- placeholder 2490
+
+## 3491 reserved
+- placeholder 2491
+
+## 3492 reserved
+- placeholder 2492
+
+## 3493 reserved
+- placeholder 2493
+
+## 3494 reserved
+- placeholder 2494
+
+## 3495 reserved
+- placeholder 2495
+
+## 3496 reserved
+- placeholder 2496
+
+## 3497 reserved
+- placeholder 2497
+
+## 3498 reserved
+- placeholder 2498
+
+## 3499 reserved
+- placeholder 2499
+
+## 3500 reserved
+- placeholder 2500
+
+## 3501 reserved
+- placeholder 2501
+
+## 3502 reserved
+- placeholder 2502
+
+## 3503 reserved
+- placeholder 2503
+
+## 3504 reserved
+- placeholder 2504
+
+## 3505 reserved
+- placeholder 2505
+
+## 3506 reserved
+- placeholder 2506
+
+## 3507 reserved
+- placeholder 2507
+
+## 3508 reserved
+- placeholder 2508
+
+## 3509 reserved
+- placeholder 2509
+
+## 3510 reserved
+- placeholder 2510
+
+## 3511 reserved
+- placeholder 2511
+
+## 3512 reserved
+- placeholder 2512
+
+## 3513 reserved
+- placeholder 2513
+
+## 3514 reserved
+- placeholder 2514
+
+## 3515 reserved
+- placeholder 2515
+
+## 3516 reserved
+- placeholder 2516
+
+## 3517 reserved
+- placeholder 2517
+
+## 3518 reserved
+- placeholder 2518
+
+## 3519 reserved
+- placeholder 2519
+
+## 3520 reserved
+- placeholder 2520
+
+## 3521 reserved
+- placeholder 2521
+
+## 3522 reserved
+- placeholder 2522
+
+## 3523 reserved
+- placeholder 2523
+
+## 3524 reserved
+- placeholder 2524
+
+## 3525 reserved
+- placeholder 2525
+
+## 3526 reserved
+- placeholder 2526
+
+## 3527 reserved
+- placeholder 2527
+
+## 3528 reserved
+- placeholder 2528
+
+## 3529 reserved
+- placeholder 2529
+
+## 3530 reserved
+- placeholder 2530
+
+## 3531 reserved
+- placeholder 2531
+
+## 3532 reserved
+- placeholder 2532
+
+## 3533 reserved
+- placeholder 2533
+
+## 3534 reserved
+- placeholder 2534
+
+## 3535 reserved
+- placeholder 2535
+
+## 3536 reserved
+- placeholder 2536
+
+## 3537 reserved
+- placeholder 2537
+
+## 3538 reserved
+- placeholder 2538
+
+## 3539 reserved
+- placeholder 2539
+
+## 3540 reserved
+- placeholder 2540
+
+## 3541 reserved
+- placeholder 2541
+
+## 3542 reserved
+- placeholder 2542
+
+## 3543 reserved
+- placeholder 2543
+
+## 3544 reserved
+- placeholder 2544
+
+## 3545 reserved
+- placeholder 2545
+
+## 3546 reserved
+- placeholder 2546
+
+## 3547 reserved
+- placeholder 2547
+
+## 3548 reserved
+- placeholder 2548
+
+## 3549 reserved
+- placeholder 2549
+
+## 3550 reserved
+- placeholder 2550
+
+## 3551 reserved
+- placeholder 2551
+
+## 3552 reserved
+- placeholder 2552
+
+## 3553 reserved
+- placeholder 2553
+
+## 3554 reserved
+- placeholder 2554
+
+## 3555 reserved
+- placeholder 2555
+
+## 3556 reserved
+- placeholder 2556
+
+## 3557 reserved
+- placeholder 2557
+
+## 3558 reserved
+- placeholder 2558
+
+## 3559 reserved
+- placeholder 2559
+
+## 3560 reserved
+- placeholder 2560
+
+## 3561 reserved
+- placeholder 2561
+
+## 3562 reserved
+- placeholder 2562
+
+## 3563 reserved
+- placeholder 2563
+
+## 3564 reserved
+- placeholder 2564
+
+## 3565 reserved
+- placeholder 2565
+
+## 3566 reserved
+- placeholder 2566
+
+## 3567 reserved
+- placeholder 2567
+
+## 3568 reserved
+- placeholder 2568
+
+## 3569 reserved
+- placeholder 2569
+
+## 3570 reserved
+- placeholder 2570
+
+## 3571 reserved
+- placeholder 2571
+
+## 3572 reserved
+- placeholder 2572
+
+## 3573 reserved
+- placeholder 2573
+
+## 3574 reserved
+- placeholder 2574
+
+## 3575 reserved
+- placeholder 2575
+
+## 3576 reserved
+- placeholder 2576
+
+## 3577 reserved
+- placeholder 2577
+
+## 3578 reserved
+- placeholder 2578
+
+## 3579 reserved
+- placeholder 2579
+
+## 3580 reserved
+- placeholder 2580
+
+## 3581 reserved
+- placeholder 2581
+
+## 3582 reserved
+- placeholder 2582
+
+## 3583 reserved
+- placeholder 2583
+
+## 3584 reserved
+- placeholder 2584
+
+## 3585 reserved
+- placeholder 2585
+
+## 3586 reserved
+- placeholder 2586
+
+## 3587 reserved
+- placeholder 2587
+
+## 3588 reserved
+- placeholder 2588
+
+## 3589 reserved
+- placeholder 2589
+
+## 3590 reserved
+- placeholder 2590
+
+## 3591 reserved
+- placeholder 2591
+
+## 3592 reserved
+- placeholder 2592
+
+## 3593 reserved
+- placeholder 2593
+
+## 3594 reserved
+- placeholder 2594
+
+## 3595 reserved
+- placeholder 2595
+
+## 3596 reserved
+- placeholder 2596
+
+## 3597 reserved
+- placeholder 2597
+
+## 3598 reserved
+- placeholder 2598
+
+## 3599 reserved
+- placeholder 2599
+
+## 3600 reserved
+- placeholder 2600
+
+## 3601 reserved
+- placeholder 2601
+
+## 3602 reserved
+- placeholder 2602
+
+## 3603 reserved
+- placeholder 2603
+
+## 3604 reserved
+- placeholder 2604
+
+## 3605 reserved
+- placeholder 2605
