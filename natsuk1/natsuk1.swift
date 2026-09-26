@@ -91,26 +91,27 @@ struct RootView: View {
     }
 }
 
-final class AppState: ObservableObject, @unchecked Sendable {
+@MainActor
+final class AppState: ObservableObject {
     @Published var slide: String = "—"
     @Published var base: String = "—"
     @Published var previousCrash: String? = nil
     @Published var showCrashLog: Bool = false
 
-    func parseLogLine(_ line: String) {
+    nonisolated func parseLogLine(_ line: String) {
         if let v = Self.extractHex(line, keys: ["slide=0x", "SLIDE = 0x", "slide = 0x"]) {
-            if self.slide != v {
-                DispatchQueue.main.async { self.slide = v }
+            Task { @MainActor in
+                if AppState.shared.slide != v { AppState.shared.slide = v }
             }
         }
         if let v = Self.extractHex(line, keys: ["base=0x", "BASE = 0x", "base = 0x"]) {
-            if self.base != v {
-                DispatchQueue.main.async { self.base = v }
+            Task { @MainActor in
+                if AppState.shared.base != v { AppState.shared.base = v }
             }
         }
     }
 
-    private static func extractHex(_ s: String, keys: [String]) -> String? {
+    nonisolated private static func extractHex(_ s: String, keys: [String]) -> String? {
         for k in keys {
             if let r = s.range(of: k) {
                 var hex = ""
@@ -122,7 +123,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
         return nil
     }
-    nonisolated(unsafe) static let shared = AppState()
+    static let shared = AppState()
     enum Status {
         case idle, running, ok, failed
         var color: Color {
@@ -139,25 +140,24 @@ final class AppState: ObservableObject, @unchecked Sendable {
     @Published var running: Bool = false
     @Published var show_respring: Bool = false
     @Published var lang: String { didSet { UserDefaults.standard.set(lang, forKey: "lang") } }
+    private var flusher: Timer?
 
-    private init() {
+    init() {
         self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
         startFlusher()
     }
     func t(_ en: String, _ ru: String) -> String { lang == "ru" ? ru : en }
 
     private func startFlusher() {
-        Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(300))
-                guard let self else { return }
-                let chunk = LockedBuffer.shared.drain()
-                guard !chunk.isEmpty else { continue }
-                var newLog = self.log
-                newLog += chunk
-                if newLog.count > 30000 { newLog = String(newLog.suffix(20000)) }
-                self.log = newLog
-            }
+        flusher?.invalidate()
+        flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let chunk = LockedBuffer.shared.drain()
+            guard !chunk.isEmpty else { return }
+            var newLog = self.log
+            newLog += chunk
+            if newLog.count > 30000 { newLog = String(newLog.suffix(20000)) }
+            self.log = newLog
         }
     }
     func append(_ s: String) { LockedBuffer.shared.append(s) }
@@ -184,14 +184,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
     func respring() {
-        DispatchQueue.main.async {
-            guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                  let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first,
-                  let root = window.rootViewController else { return }
-            let host = UIHostingController(rootView: RespringView().ignoresSafeArea())
-            host.modalPresentationStyle = .fullScreen
-            root.present(host, animated: false)
-        }
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first,
+              let root = window.rootViewController else { return }
+        let host = UIHostingController(rootView: RespringView().ignoresSafeArea())
+        host.modalPresentationStyle = .fullScreen
+        root.present(host, animated: false)
     }
     func clear() { LockedBuffer.shared.clear(); log = "" }
     func cancel() {

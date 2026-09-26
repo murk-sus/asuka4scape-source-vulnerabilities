@@ -12,17 +12,8 @@ struct PathAccessView: View {
         let writable: Bool
         let size: Int64?
     }
-    struct LibResult: Identifiable {
-        let id = UUID()
-        let name: String
-        let path: String
-        let loaded: Bool
-        let symbols: [String]
-        let foundSymbols: [String]
-    }
 
     @State private var results: [PathResult] = []
-    @State private var libs: [LibResult] = []
     @State private var busy = false
 
     private let paths: [String] = [
@@ -43,21 +34,12 @@ struct PathAccessView: View {
         NSTemporaryDirectory(),
     ]
 
-    private let libsToProbe: [(name: String, path: String, symbols: [String])] = [
-        ("MobileGestalt", "/usr/lib/libMobileGestalt.dylib",
-         ["MGCopyAnswer", "MGGetBoolAnswer", "MGGetSInt32Answer"]),
-        ("MobileActivation", "/usr/lib/libMobileActivation.dylib", []),
-        ("libmis", "/usr/lib/libmis.dylib", []),
-        ("libsandbox", "/usr/lib/libsandbox.1.dylib", []),
-    ]
-
     var body: some View {
         List {
             Section {
                 HStack { Text("Paths"); Spacer(); Text("\(results.filter { $0.exists }.count)/\(results.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
                 HStack { Text("Readable"); Spacer(); Text("\(results.filter { $0.readable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
                 HStack { Text("Writable"); Spacer(); Text("\(results.filter { $0.writable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
-                HStack { Text("Libraries"); Spacer(); Text("\(libs.filter { $0.loaded }.count)/\(libs.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
                 Button { scan() } label: {
                     HStack {
                         Text(busy ? "Scanning..." : "Run Scan")
@@ -67,25 +49,6 @@ struct PathAccessView: View {
                 }.disabled(busy)
             } header: {
                 Label("Summary", systemImage: "chart.bar")
-            }
-
-            Section {
-                ForEach(libs) { r in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
-                            Text(r.name).font(.system(size: 12, weight: .semibold))
-                            badge(r.loaded ? "loaded" : "no", color: r.loaded ? .green : .red)
-                        }
-                        Text(r.path).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).lineLimit(2)
-                        HStack(spacing: 4) {
-                            ForEach(r.symbols, id: \.self) { sym in
-                                badge(sym, color: r.foundSymbols.contains(sym) ? .green : .gray)
-                            }
-                        }
-                    }
-                }
-            } header: {
-                Label("Libraries", systemImage: "books.vertical")
             }
 
             Section {
@@ -109,17 +72,6 @@ struct PathAccessView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Path Access")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    var text = ""
-                    for r in libs { text += "\(r.name) loaded=\(r.loaded)\n" }
-                    for r in results { text += "\(r.path) exists=\(r.exists) r=\(r.readable) w=\(r.writable)\n" }
-                    UIPasteboard.general.string = text
-                } label: { Image(systemName: "square.and.arrow.up") }
-                .disabled(results.isEmpty && libs.isEmpty)
-            }
-        }
         .onAppear { if results.isEmpty { scan() } }
     }
 
@@ -133,7 +85,6 @@ struct PathAccessView: View {
     private func scan() {
         busy = true
         let pathList = paths
-        let libList = libsToProbe
         DispatchQueue.global(qos: .userInitiated).async {
             let fm = FileManager.default
             var outPaths: [PathResult] = []
@@ -149,19 +100,8 @@ struct PathAccessView: View {
                 outPaths.append(PathResult(path: p, exists: exists, isDirectory: isDir.boolValue,
                                            readable: readable, writable: writable, size: size))
             }
-            var outLibs: [LibResult] = []
-            for entry in libList {
-                let handle = dlopen(entry.path, RTLD_NOW)
-                var found: [String] = []
-                if handle != nil {
-                    for sym in entry.symbols { if dlsym(handle, sym) != nil { found.append(sym) } }
-                    dlclose(handle)
-                }
-                outLibs.append(LibResult(name: entry.name, path: entry.path, loaded: handle != nil,
-                                         symbols: entry.symbols, foundSymbols: found))
-            }
             DispatchQueue.main.async {
-                self.results = outPaths; self.libs = outLibs; self.busy = false
+                self.results = outPaths; self.busy = false
             }
         }
     }
