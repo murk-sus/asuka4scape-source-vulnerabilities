@@ -94,7 +94,7 @@ jobs:
           }
           CEOF
 
-          cat > /tmp/nk/kread.c <<'CEOF'
+          cat > /tmp/nk/dump.c <<'CEOF'
           static void dump_buf_words(const char *tag, const uint8_t *p, int n, int maxw) {
               char line[512];
               int off = 0;
@@ -106,7 +106,9 @@ jobs:
               }
               log_info(tag, "%s", line);
           }
+          CEOF
 
+          cat > /tmp/nk/kread.c <<'CEOF'
           static int kread_raw(uint64_t target_kaddr, uint32_t read_len) {
               uint8_t fake[NCF_STRUCT_SZ];
               memset(fake, 0, sizeof(fake));
@@ -278,13 +280,14 @@ jobs:
 
           spray_port = rd("spray_port.c")
           spray_fn   = rd("spray_fn.c")
+          dump       = rd("dump.c")
           kread      = rd("kread.c")
           calib      = rd("calib.c")
           run        = rd("run.c")
 
           RE_PORT    = r"static mach_port_t port_new\(void\) \{.*?\n\}\n"
           RE_SPRAY   = r"static void ool_spray\(mach_port_t port, const void \*data, size_t sz, int n\) \{.*?\n\}\n"
-          RE_KREAD   = r"static int kread_raw\(uint64_t [a-z_]+ ?, uint32_t [a-z_]+\)? \{.*?\n\}\n"
+          RE_KREAD   = r"static int kread_raw\(uint64_t \w+, uint32_t \w+\) \{.*?\n\}\n"
           RE_CALIB   = r"static int calibrate_kread\(void\) \{.*?\n\}\n"
           RE_COMBINED = r"static volatile int g_busy = 0;.*?int nk_necp_run\(void\) \{.*?\n\}\n"
           RE_SINGLE   = r"int nk_necp_run\(void\) \{.*?\n\}\n"
@@ -300,19 +303,27 @@ jobs:
                   print("ERROR: baseline pattern '%s' not found" % name)
                   sys.exit(1)
 
-          if not (re.search(RE_COMBINED, s, flags=re.DOTALL)
-                  or re.search(RE_SINGLE, s, flags=re.DOTALL)):
+          has_combined = bool(re.search(RE_COMBINED, s, flags=re.DOTALL))
+          has_single   = bool(re.search(RE_SINGLE, s, flags=re.DOTALL))
+          if not (has_combined or has_single):
               print("ERROR: nk_necp_run baseline not found")
               sys.exit(1)
 
           orig = s
+
+          if "static void dump_buf_words" not in s:
+              m = re.search(RE_KREAD, s, flags=re.DOTALL)
+              if not m:
+                  print("ERROR: cannot inject dump, kread_raw anchor missing")
+                  sys.exit(1)
+              s = s[:m.start()] + dump + "\n\n" + s[m.start():]
 
           s = re.sub(RE_PORT,  spray_port + "\n\n", s, count=1, flags=re.DOTALL)
           s = re.sub(RE_SPRAY, spray_fn   + "\n\n", s, count=1, flags=re.DOTALL)
           s = re.sub(RE_KREAD, kread      + "\n\n", s, count=1, flags=re.DOTALL)
           s = re.sub(RE_CALIB, calib      + "\n\n", s, count=1, flags=re.DOTALL)
 
-          if re.search(RE_COMBINED, s, flags=re.DOTALL):
+          if has_combined:
               s = re.sub(RE_COMBINED, run + "\n", s, count=1, flags=re.DOTALL)
           else:
               s = re.sub(RE_SINGLE, run + "\n", s, count=1, flags=re.DOTALL)
@@ -470,6 +481,9 @@ jobs:
           test "$(grep -c 'static void ool_spray(mach_port_t' "$F")" = "1"
           test "$(grep -c 'static void ool_drain(mach_port_t' "$F")" = "1"
           test "$(grep -c 'static int ool_spray_count(mach_port_t' "$F")" = "1"
+          test "$(grep -c 'static void dump_buf_words(const char' "$F")" = "1"
+          test "$(grep -c 'static int kread_raw(uint64_t' "$F")" = "1"
+          test "$(grep -c 'static int calibrate_kread(void)' "$F")" = "1"
           python3 - <<'PYEOF'
           import json
           d = json.load(open("natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"))
@@ -528,7 +542,7 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "kread v5: port qlimit + send timeout + preflight checks"
+            --notes "kread v5: qlimit + send timeout + preflight checks"
 
       - name: Commit
         run: |
