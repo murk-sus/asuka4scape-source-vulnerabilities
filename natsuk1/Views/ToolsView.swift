@@ -7,30 +7,52 @@ struct ToolsView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }
-                    NavigationLink { OffsetsView().environmentObject(offsets) } label: { Text("Offsets") }
-                } header: {
-                    Label("Exploit", systemImage: "memorychip")
+            SimpleList {
+                SimpleSection("Exploit", systemImage: "memorychip") {
+                    NavigationLink { AirliftView().environmentObject(airlift) } label: {
+                        navRow("Airlift")
+                    }
+                    Divider()
+                    NavigationLink { OffsetsView().environmentObject(offsets) } label: {
+                        navRow("Offsets")
+                    }
                 }
 
-                Section {
-                    NavigationLink { DeviceInfoView() } label: { Text("Device Info") }
-                    Button { state.respring() } label: { Text("Respring") }
-                } header: {
-                    Label("Device", systemImage: "gearshape.2")
+                SimpleSection("Device", systemImage: "gearshape.2") {
+                    NavigationLink { DeviceInfoView() } label: {
+                        navRow("Device Info")
+                    }
+                    Divider()
+                    Button { state.respring() } label: {
+                        HStack {
+                            Text("Respring")
+                            Spacer()
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                    }
                 }
 
-                Section {
-                    NavigationLink { PathAccessView() } label: { Text("Path Access") }
-                } header: {
-                    Label("Diagnostics", systemImage: "chart.xyaxis.line")
+                SimpleSection("Diagnostics", systemImage: "chart.xyaxis.line") {
+                    NavigationLink { PathAccessView() } label: {
+                        navRow("Path Access")
+                    }
                 }
             }
-            .listStyle(.insetGrouped)
             .navigationTitle("Tools")
             .navigationBarTitleDisplayMode(.large)
         }
+    }
+
+    private func navRow(_ title: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 }

@@ -25,8 +25,8 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
+            SimpleList {
+                SimpleSection("App", systemImage: "exclamationmark.circle") {
                     HStack(spacing: 14) {
                         Group {
                             if let icon = appIcon {
@@ -45,37 +45,60 @@ struct SettingsView: View {
                             Text(appName).font(.title3).fontWeight(.semibold)
                             Text("Version \(version)").font(.subheadline).foregroundStyle(.secondary)
                         }
+                        Spacer()
                     }
-                    NavigationLink { AboutView().environmentObject(state) } label: { Text("About") }
-                } header: {
-                    Label("App", systemImage: "exclamationmark.circle")
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+
+                    Divider()
+
+                    NavigationLink { AboutView().environmentObject(state) } label: {
+                        HStack {
+                            Text("About")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                    }
                 }
 
-                Section {
+                SimpleSection("Background Keep-Alive", systemImage: "moon.stars") {
                     Toggle(isOn: $keep_alive_audio) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Silent Audio")
-                            Text("Keeps the app running in the background.").font(.caption).foregroundStyle(.secondary)
+                            Text("Keeps the app running in the background.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+
+                    Divider()
+
                     Toggle(isOn: $keep_alive_location) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Background Location")
-                            Text("Low-accuracy location keeps the app alive.").font(.caption).foregroundStyle(.secondary)
+                            Text("Low-accuracy location keeps the app alive.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                } header: {
-                    Label("Background Keep-Alive", systemImage: "moon.stars")
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                 }
 
-                Section {
+                SimpleSection("Options", systemImage: "slider.horizontal.3") {
                     Toggle("Auto Run on Launch", isOn: $auto_run)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                    Divider()
                     Toggle("Verbose Output", isOn: $verbose)
-                } header: {
-                    Label("Options", systemImage: "slider.horizontal.3")
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
                 }
             }
-            .listStyle(.insetGrouped)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
         }

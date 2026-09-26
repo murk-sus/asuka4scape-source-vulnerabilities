@@ -7,35 +7,71 @@ struct OverviewView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
+            SimpleList {
+                SimpleSection("Exploit", systemImage: "cpu") {
                     Button { state.necp_run() } label: {
                         HStack {
                             Text("Run Exploit")
                             Spacer()
                             ProgressView().opacity(state.running ? 1 : 0)
                         }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
                     }
                     .disabled(state.running)
 
+                    Divider()
+
                     Button(role: .destructive) { state.cancel() } label: {
-                        Text("Cancel Exploit").frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Cancel Exploit")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
                     }
                     .disabled(!state.running)
-                } header: {
-                    Label("Exploit", systemImage: "cpu")
                 }
 
-                RuntimeView()
-                    .environmentObject(state)
+                SimpleSection("Runtime", systemImage: "waveform.path.ecg") {
+                    HStack {
+                        Text("Slide")
+                        Spacer()
+                        Text(state.slide)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(state.slide != "—" ? .green : .secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
 
-                Section {
+                    Divider()
+
+                    HStack {
+                        Text("Base")
+                        Spacer()
+                        Text(state.base)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(state.base != "—" ? .green : .secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+
+                    Divider()
+
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        StatusDot(status: state.status)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                }
+
+                SimpleSection(state.t("Logs", "Логи"), systemImage: "terminal") {
                     LogTerminal(text: state.log.isEmpty ? "Awaiting execution." : state.log)
-                } header: {
-                    Label(state.t("Logs", "Логи"), systemImage: "terminal")
                 }
 
-                Section {
+                SimpleSection("Log Actions", systemImage: "document.on.document") {
                     Button {
                         UIPasteboard.general.string = state.log
                         copied = true
@@ -45,19 +81,22 @@ struct OverviewView: View {
                     } label: {
                         Text(copied ? "Copied!" : state.t("Copy All", "Копировать всё"))
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
                     }
                     .disabled(state.log.isEmpty)
+
+                    Divider()
 
                     Button(role: .destructive) { state.clear() } label: {
                         Text(state.t("Clear", "Очистить"))
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
                     }
                     .disabled(state.log.isEmpty)
-                } header: {
-                    Label("Log Actions", systemImage: "document.on.document")
                 }
             }
-            .listStyle(.insetGrouped)
             .navigationTitle("natsuk1")
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -93,6 +132,7 @@ struct LogTerminal: View {
                 .multilineTextAlignment(.leading)
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
         }
         .frame(minHeight: 200, maxHeight: 400)
     }

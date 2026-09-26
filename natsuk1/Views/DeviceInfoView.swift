@@ -3,30 +3,35 @@ import UIKit
 
 struct DeviceInfoView: View {
     var body: some View {
-        List {
-            Section {
+        SimpleList {
+            SimpleSection("Hardware", systemImage: "cpu") {
                 row("Model", DeviceName.friendly())
+                Divider()
                 row("Identifier", machineID())
+                Divider()
                 row("Chip", DeviceName.chip())
-            } header: { Label("Hardware", systemImage: "cpu") }
+            }
 
-            Section {
+            SimpleSection("Software", systemImage: "gear") {
                 row("iOS", sysctlString("kern.osproductversion"))
+                Divider()
                 row("Build", sysctlString("kern.osversion"))
+                Divider()
                 row("Architecture", arch())
-            } header: { Label("Software", systemImage: "gear") }
+            }
 
-            Section {
+            SimpleSection("Resources", systemImage: "memorychip") {
                 row("RAM", ram())
+                Divider()
                 row("Uptime", uptime())
-            } header: { Label("Resources", systemImage: "memorychip") }
+            }
 
-            Section {
+            SimpleSection("Locale", systemImage: "globe") {
                 row("Locale", localeShort())
+                Divider()
                 row("Region", regionShort())
-            } header: { Label("Locale", systemImage: "globe") }
+            }
         }
-        .listStyle(.insetGrouped)
         .navigationTitle("Device")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -38,6 +43,8 @@ struct DeviceInfoView: View {
             Text(value).font(.system(.body, design: .monospaced)).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.middle)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
     private func machineID() -> String {
         var sysinfo = utsname(); uname(&sysinfo)
