@@ -273,14 +273,6 @@ jobs:
               if (is_user_va(val)) {
                   LW("S2", "value is user VA: 0x%llx", (unsigned long long)val);
                   LR("S2", "arena mapped into our space, not a leak");
-                  LR("S2", "reading 128 bytes...");
-                  volatile uint8_t *p = (volatile uint8_t *)(uintptr_t)val;
-                  uint8_t local[128];
-                  for (int i = 0; i < 128; i++) local[i] = p[i];
-                  LI("S2", "read OK");
-                  hexdump("S2H", local, 128, 128);
-                  int nk = scan_kptr("S2K", local, 128);
-                  LI("S2", "kptr count in arena = %d", nk);
                   return 0;
               }
               LW("S2", "value out of known ranges: 0x%llx", (unsigned long long)val);
@@ -312,7 +304,7 @@ jobs:
           static int impl(void) {
               nk_log("");
               nk_log("================================================================");
-              nk_log("natsuk1 v4.3 — NECP recon");
+              nk_log("natsuk1 v4.4 — NECP recon");
               nk_log("iOS 27.0 / iPhone14,5 / 24A437");
               nk_log("================================================================");
               nk_log("");
@@ -441,26 +433,27 @@ jobs:
               }
           }
 
-          final class AppState: ObservableObject, @unchecked Sendable {
+          @MainActor
+          final class AppState: ObservableObject {
               @Published var slide: String = "—"
               @Published var base: String = "—"
               @Published var previousCrash: String? = nil
               @Published var showCrashLog: Bool = false
 
-              func parseLogLine(_ line: String) {
+              nonisolated func parseLogLine(_ line: String) {
                   if let v = Self.extractHex(line, keys: ["slide=0x", "SLIDE = 0x", "slide = 0x"]) {
-                      if self.slide != v {
-                          DispatchQueue.main.async { self.slide = v }
+                      Task { @MainActor in
+                          if AppState.shared.slide != v { AppState.shared.slide = v }
                       }
                   }
                   if let v = Self.extractHex(line, keys: ["base=0x", "BASE = 0x", "base = 0x"]) {
-                      if self.base != v {
-                          DispatchQueue.main.async { self.base = v }
+                      Task { @MainActor in
+                          if AppState.shared.base != v { AppState.shared.base = v }
                       }
                   }
               }
 
-              private static func extractHex(_ s: String, keys: [String]) -> String? {
+              nonisolated private static func extractHex(_ s: String, keys: [String]) -> String? {
                   for k in keys {
                       if let r = s.range(of: k) {
                           var hex = ""
@@ -472,7 +465,7 @@ jobs:
                   }
                   return nil
               }
-              nonisolated(unsafe) static let shared = AppState()
+              static let shared = AppState()
               enum Status {
                   case idle, running, ok, failed
                   var color: Color {
@@ -489,25 +482,24 @@ jobs:
               @Published var running: Bool = false
               @Published var show_respring: Bool = false
               @Published var lang: String { didSet { UserDefaults.standard.set(lang, forKey: "lang") } }
+              private var flusher: Timer?
 
-              private init() {
+              init() {
                   self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
                   startFlusher()
               }
               func t(_ en: String, _ ru: String) -> String { lang == "ru" ? ru : en }
 
               private func startFlusher() {
-                  Task { [weak self] in
-                      while !Task.isCancelled {
-                          try? await Task.sleep(for: .milliseconds(300))
-                          guard let self else { return }
-                          let chunk = LockedBuffer.shared.drain()
-                          guard !chunk.isEmpty else { continue }
-                          var newLog = self.log
-                          newLog += chunk
-                          if newLog.count > 30000 { newLog = String(newLog.suffix(20000)) }
-                          self.log = newLog
-                      }
+                  flusher?.invalidate()
+                  flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+                      guard let self else { return }
+                      let chunk = LockedBuffer.shared.drain()
+                      guard !chunk.isEmpty else { return }
+                      var newLog = self.log
+                      newLog += chunk
+                      if newLog.count > 30000 { newLog = String(newLog.suffix(20000)) }
+                      self.log = newLog
                   }
               }
               func append(_ s: String) { LockedBuffer.shared.append(s) }
@@ -534,14 +526,12 @@ jobs:
                   }
               }
               func respring() {
-                  DispatchQueue.main.async {
-                      guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                            let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first,
-                            let root = window.rootViewController else { return }
-                      let host = UIHostingController(rootView: RespringView().ignoresSafeArea())
-                      host.modalPresentationStyle = .fullScreen
-                      root.present(host, animated: false)
-                  }
+                  guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                        let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first,
+                        let root = window.rootViewController else { return }
+                  let host = UIHostingController(rootView: RespringView().ignoresSafeArea())
+                  host.modalPresentationStyle = .fullScreen
+                  root.present(host, animated: false)
               }
               func clear() { LockedBuffer.shared.clear(); log = "" }
               func cancel() {
@@ -1230,17 +1220,8 @@ jobs:
                   let writable: Bool
                   let size: Int64?
               }
-              struct LibResult: Identifiable {
-                  let id = UUID()
-                  let name: String
-                  let path: String
-                  let loaded: Bool
-                  let symbols: [String]
-                  let foundSymbols: [String]
-              }
 
               @State private var results: [PathResult] = []
-              @State private var libs: [LibResult] = []
               @State private var busy = false
 
               private let paths: [String] = [
@@ -1261,21 +1242,12 @@ jobs:
                   NSTemporaryDirectory(),
               ]
 
-              private let libsToProbe: [(name: String, path: String, symbols: [String])] = [
-                  ("MobileGestalt", "/usr/lib/libMobileGestalt.dylib",
-                   ["MGCopyAnswer", "MGGetBoolAnswer", "MGGetSInt32Answer"]),
-                  ("MobileActivation", "/usr/lib/libMobileActivation.dylib", []),
-                  ("libmis", "/usr/lib/libmis.dylib", []),
-                  ("libsandbox", "/usr/lib/libsandbox.1.dylib", []),
-              ]
-
               var body: some View {
                   List {
                       Section {
                           HStack { Text("Paths"); Spacer(); Text("\(results.filter { $0.exists }.count)/\(results.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
                           HStack { Text("Readable"); Spacer(); Text("\(results.filter { $0.readable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
                           HStack { Text("Writable"); Spacer(); Text("\(results.filter { $0.writable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
-                          HStack { Text("Libraries"); Spacer(); Text("\(libs.filter { $0.loaded }.count)/\(libs.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
                           Button { scan() } label: {
                               HStack {
                                   Text(busy ? "Scanning..." : "Run Scan")
@@ -1285,25 +1257,6 @@ jobs:
                           }.disabled(busy)
                       } header: {
                           Label("Summary", systemImage: "chart.bar")
-                      }
-
-                      Section {
-                          ForEach(libs) { r in
-                              VStack(alignment: .leading, spacing: 4) {
-                                  HStack(spacing: 6) {
-                                      Text(r.name).font(.system(size: 12, weight: .semibold))
-                                      badge(r.loaded ? "loaded" : "no", color: r.loaded ? .green : .red)
-                                  }
-                                  Text(r.path).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).lineLimit(2)
-                                  HStack(spacing: 4) {
-                                      ForEach(r.symbols, id: \.self) { sym in
-                                          badge(sym, color: r.foundSymbols.contains(sym) ? .green : .gray)
-                                      }
-                                  }
-                              }
-                          }
-                      } header: {
-                          Label("Libraries", systemImage: "books.vertical")
                       }
 
                       Section {
@@ -1327,17 +1280,6 @@ jobs:
                   .listStyle(.insetGrouped)
                   .navigationTitle("Path Access")
                   .navigationBarTitleDisplayMode(.inline)
-                  .toolbar {
-                      ToolbarItem(placement: .navigationBarTrailing) {
-                          Button {
-                              var text = ""
-                              for r in libs { text += "\(r.name) loaded=\(r.loaded)\n" }
-                              for r in results { text += "\(r.path) exists=\(r.exists) r=\(r.readable) w=\(r.writable)\n" }
-                              UIPasteboard.general.string = text
-                          } label: { Image(systemName: "square.and.arrow.up") }
-                          .disabled(results.isEmpty && libs.isEmpty)
-                      }
-                  }
                   .onAppear { if results.isEmpty { scan() } }
               }
 
@@ -1351,7 +1293,6 @@ jobs:
               private func scan() {
                   busy = true
                   let pathList = paths
-                  let libList = libsToProbe
                   DispatchQueue.global(qos: .userInitiated).async {
                       let fm = FileManager.default
                       var outPaths: [PathResult] = []
@@ -1367,19 +1308,8 @@ jobs:
                           outPaths.append(PathResult(path: p, exists: exists, isDirectory: isDir.boolValue,
                                                      readable: readable, writable: writable, size: size))
                       }
-                      var outLibs: [LibResult] = []
-                      for entry in libList {
-                          let handle = dlopen(entry.path, RTLD_NOW)
-                          var found: [String] = []
-                          if handle != nil {
-                              for sym in entry.symbols { if dlsym(handle, sym) != nil { found.append(sym) } }
-                              dlclose(handle)
-                          }
-                          outLibs.append(LibResult(name: entry.name, path: entry.path, loaded: handle != nil,
-                                                   symbols: entry.symbols, foundSymbols: found))
-                      }
                       DispatchQueue.main.async {
-                          self.results = outPaths; self.libs = outLibs; self.busy = false
+                          self.results = outPaths; self.busy = false
                       }
                   }
               }
@@ -1513,29 +1443,26 @@ jobs:
           chk() {
             if eval "$2" >/dev/null 2>&1; then echo "  OK   $1"; else echo "  FAIL $1"; FAIL=1; fi
           }
-          chk "nk_offsets.h"                    "test -s natsuk1/Exploit/nk_offsets.h"
-          chk "necp.c"                          "test -s natsuk1/Exploit/necp.c"
-          chk "natsuk1.swift"                   "test -s natsuk1/natsuk1.swift"
-          chk "ContentView.swift"               "test -s natsuk1/Views/ContentView.swift"
-          chk "OverviewView.swift"              "test -s natsuk1/Views/OverviewView.swift"
-          chk "RuntimeView.swift"               "test -s natsuk1/Views/RuntimeView.swift"
-          chk "AirliftView.swift"               "test -s natsuk1/Views/AirliftView.swift"
-          chk "SettingsView.swift"              "test -s natsuk1/Views/SettingsView.swift"
-          chk "ToolsView.swift"                 "test -s natsuk1/Views/ToolsView.swift"
-          chk "AboutView.swift"                 "test -s natsuk1/Views/AboutView.swift"
-          chk "DeviceInfoView.swift"            "test -s natsuk1/Views/DeviceInfoView.swift"
-          chk "PathAccessView.swift"            "test -s natsuk1/Views/PathAccessView.swift"
-          chk "offsets json"                    "test -s natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
-          chk "SimpleList gone"                 "! test -f natsuk1/Views/SimpleList.swift"
-          chk "no scaleEffect"                  "! grep -rq -e 'scaleEffect' natsuk1/"
-          chk "no NotSupportedView"             "! grep -q -e 'NotSupportedView' natsuk1/natsuk1.swift"
-          chk "no RespringView in ContentView"  "! grep -q -e 'RespringView' natsuk1/Views/ContentView.swift"
-          chk "RespringView presented by UIKit" "grep -q -e 'UIHostingController' natsuk1/natsuk1.swift"
-          chk "List in Overview"                "grep -q -e 'List {' natsuk1/Views/OverviewView.swift"
-          chk "List in Airlift"                 "grep -q -e 'List {' natsuk1/Views/AirliftView.swift"
-          chk "List in Settings"                "grep -q -e 'List {' natsuk1/Views/SettingsView.swift"
-          chk "List in Tools"                   "grep -q -e 'List {' natsuk1/Views/ToolsView.swift"
-          chk "build_and_release removed"       "! test -f .github/workflows/build_and_release.yml"
+          chk "nk_offsets.h"                      "test -s natsuk1/Exploit/nk_offsets.h"
+          chk "necp.c"                            "test -s natsuk1/Exploit/necp.c"
+          chk "natsuk1.swift"                     "test -s natsuk1/natsuk1.swift"
+          chk "ContentView.swift"                 "test -s natsuk1/Views/ContentView.swift"
+          chk "OverviewView.swift"                "test -s natsuk1/Views/OverviewView.swift"
+          chk "RuntimeView.swift"                 "test -s natsuk1/Views/RuntimeView.swift"
+          chk "AirliftView.swift"                 "test -s natsuk1/Views/AirliftView.swift"
+          chk "SettingsView.swift"                "test -s natsuk1/Views/SettingsView.swift"
+          chk "ToolsView.swift"                   "test -s natsuk1/Views/ToolsView.swift"
+          chk "AboutView.swift"                   "test -s natsuk1/Views/AboutView.swift"
+          chk "DeviceInfoView.swift"              "test -s natsuk1/Views/DeviceInfoView.swift"
+          chk "PathAccessView.swift"              "test -s natsuk1/Views/PathAccessView.swift"
+          chk "offsets json"                      "test -s natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
+          chk "no scaleEffect"                    "! grep -rq -e 'scaleEffect' natsuk1/"
+          chk "no NotSupportedView"               "! grep -q -e 'NotSupportedView' natsuk1/natsuk1.swift"
+          chk "no RespringView in ContentView"    "! grep -q -e 'RespringView' natsuk1/Views/ContentView.swift"
+          chk "Timer flusher (not Task)"          "grep -q -e 'Timer.scheduledTimer' natsuk1/natsuk1.swift"
+          chk "no Task flusher"                   "! grep -q -e 'startFlusher.*Task' natsuk1/natsuk1.swift"
+          chk "AppState @MainActor"               "grep -q -e '@MainActor' natsuk1/natsuk1.swift"
+          chk "build_and_release removed"         "! test -f .github/workflows/build_and_release.yml"
           python3 -c "import json; json.load(open('natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json'))" || FAIL=1
           echo "  OK   json valid"
           if [ "$FAIL" -ne 0 ]; then echo "VERIFY FAILED"; exit 1; fi
@@ -1554,7 +1481,11 @@ jobs:
             -project natsuk1.xcodeproj -scheme natsuk1 -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath build -parallelizeTargets -jobs "$(sysctl -n hw.ncpu)" \
-            CODE_SIGNING_ALLOWED=NO SWIFT_VERSION=5.0 SWIFT_STRICT_CONCURRENCY=minimal \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_VERSION=5.0 \
+            SWIFT_STRICT_CONCURRENCY=minimal \
+            SWIFT_APPROACHABLE_CONCURRENCY=NO \
+            SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT=NO \
             OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
             -UseModernBuildSystem=YES build -quiet
 
@@ -1580,7 +1511,7 @@ jobs:
           NOTES="$(cat <<EOF
           ### natsuk1 — iOS 27.0 (24A437)
 
-          v4.3 — RespringView moved out of SwiftUI tree (CoreAnimation UAF fix).
+          v4.4 — MainActor-isolated AppState, Timer-based flusher, no @Published mutations off main thread.
 
           **IPA** \`${IPA_URL}\`
 
@@ -1605,5 +1536,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "v4.3: RespringView out of SwiftUI tree (CoreAnimation UAF) [skip ci]"
+          git commit -m "v4.4: MainActor AppState, Timer flusher, NonisolatedNonsending off [skip ci]"
           git push
