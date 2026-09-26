@@ -13,7 +13,7 @@ struct OverviewView: View {
                         HStack {
                             Text("Run Exploit")
                             Spacer()
-                            if state.running { ProgressView().scaleEffect(0.8) }
+                            ProgressView().opacity(state.running ? 1 : 0)
                         }
                     }
                     .disabled(state.running)
@@ -67,12 +67,12 @@ struct OverviewView: View {
 struct StatusDot: View {
     let status: AppState.Status
     @State private var pulse = false
+
     var body: some View {
         Image(systemName: "circle.fill")
             .font(.system(size: 14))
             .foregroundStyle(status.color)
             .shadow(color: status.color.opacity(0.85), radius: pulse ? 8 : 4)
-            .scaleEffect(pulse ? 1.2 : 1.0)
             .animation(
                 status == .running
                     ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)

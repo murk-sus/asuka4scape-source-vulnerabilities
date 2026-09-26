@@ -101,7 +101,7 @@ struct AirliftView: View {
             }
             if case .pairing = airlift.state {
                 HStack(spacing: 8) {
-                    ProgressView().scaleEffect(0.85)
+                    ProgressView()
                     Text(airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus)
                         .font(.subheadline).foregroundStyle(.secondary)
                 }

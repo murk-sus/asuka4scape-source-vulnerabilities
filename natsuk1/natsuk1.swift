@@ -24,7 +24,7 @@ private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line i
     let _line = String(decoding: bytes, as: UTF8.self)
     LockedBuffer.shared.append(_line)
     CrashLog.shared.writeLine(_line)
-    AppState.shared.parseLogLine(_line) /* natsuk1-crashlog-v1 */
+    AppState.shared.parseLogLine(_line)
 }
 
 private func osVersionString() -> String {
@@ -33,9 +33,6 @@ private func osVersionString() -> String {
 }
 private func appVersionString() -> String {
     Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-}
-private var isSupportedIOS: Bool {
-    ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
 }
 
 @main
@@ -59,76 +56,44 @@ struct RootView: View {
     }
 
     var body: some View {
-        Group {
-            if isSupportedIOS {
-                ContentView()
-                    .environmentObject(state)
-                    .environmentObject(offsets)
-                    .environmentObject(airlift)
-                    .onAppear {
-                        CrashLog.shared.install()
-                        if let prev = CrashLog.shared.recoverPreviousSession(), !prev.isEmpty {
-                            AppState.shared.previousCrash = prev
-                        }
-                        nk_set_log(cCallback)
-                        if state.log.isEmpty {
-                            state.append("[*] natsuk1 v\(appVersionString())")
-                            state.append("[*] iOS \(osVersionString()) / arm64e")
-                            state.append("")
-                        }
-                        if keep_alive_audio { KeepAlive.shared.startAudio() }
-                        if keep_alive_location { KeepAlive.shared.startLocation() }
-                        if auto_run {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { state.run() }
-                        }
-                    }
-                    .onChange(of: keep_alive_audio) { _, v in
-                        if v { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
-                    }
-                    .onChange(of: keep_alive_location) { _, v in
-                        if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
-                    }
-                    /* natsuk1-no-crashui */
-                    .onReceive(NotificationCenter.default.publisher(for: Notification.Name("natsuk1.respring"))) { _ in
-                        state.show_respring = true /* natsuk1-respring-v1 */
-                    }
-                    .onChange(of: scenePhase) { _, phase in
-                        if phase == .background {
-                            CrashLog.shared.markCleanShutdown()
-                        }
-                    }
-                    .overlay {
-                        if state.show_respring {
-                            RespringView().brightness(-1.0).ignoresSafeArea()
-                        }
-                    }
-            } else {
-                NotSupportedView(version: osVersionString())
+        ContentView()
+            .environmentObject(state)
+            .environmentObject(offsets)
+            .environmentObject(airlift)
+            .onAppear {
+                CrashLog.shared.install()
+                if let prev = CrashLog.shared.recoverPreviousSession(), !prev.isEmpty {
+                    AppState.shared.previousCrash = prev
+                }
+                nk_set_log(cCallback)
+                if state.log.isEmpty {
+                    state.append("[*] natsuk1 v\(appVersionString())")
+                    state.append("[*] iOS \(osVersionString()) / arm64e")
+                    state.append("")
+                }
+                if keep_alive_audio { KeepAlive.shared.startAudio() }
+                if keep_alive_location { KeepAlive.shared.startLocation() }
+                if auto_run {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { state.run() }
+                }
             }
-        }
-    }
-}
-
-struct NotSupportedView: View {
-    let version: String
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 48)).foregroundStyle(.orange)
-            Text("Not supported for iOS \(version)")
-                .font(.title3).fontWeight(.semibold).multilineTextAlignment(.center)
-            Text("natsuk1 runs on iOS 27 only.")
-                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-        }
-        .padding(40)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+            .onChange(of: keep_alive_audio) { _, v in
+                if v { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
+            }
+            .onChange(of: keep_alive_location) { _, v in
+                if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background {
+                    CrashLog.shared.markCleanShutdown()
+                }
+            }
     }
 }
 
 final class AppState: ObservableObject, @unchecked Sendable {
-    @Published var slide: String = "\u{2014}"
-    @Published var base: String = "\u{2014}"
+    @Published var slide: String = "—"
+    @Published var base: String = "—"
     @Published var previousCrash: String? = nil
     @Published var showCrashLog: Bool = false
 
@@ -220,7 +185,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
     func respring() { show_respring = true }
     func clear() { LockedBuffer.shared.clear(); log = "" }
-    func cancel() { /* natsuk1-cancel-v1 */
+    func cancel() {
         nk_necp_cancel()
         append("[*] cancel requested")
     }
