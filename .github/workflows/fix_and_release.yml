@@ -143,7 +143,7 @@ jobs:
           }
           static int step_necp_recap(void) {
               nk_log("");
-              LI("B1", "NECP recap");
+              LI("B1", "NECP recap op 0x03/0x04/0x10/0x1A");
               int fd = nfd();
               if (fd < 0) { LE("B1", "open errno=%d", errno); return -1; }
               uint8_t cu[16]; memset(cu, 0, sizeof(cu));
@@ -167,28 +167,25 @@ jobs:
               close(fd);
               return 0;
           }
-          static int is_dangerous(int n) {
-              return n == 0 || n == 1 || n == 2 || n == 7 || n == 59 || n == 198;
-          }
-          static int step_syscall_sweep(void) {
+          static int step_safe_syscalls(void) {
               nk_log("");
-              LI("C1", "syscall sweep 0..558");
-              int enosys = 0, eperm = 0, einval = 0, other = 0;
-              for (int n = 0; n <= 558; n++) {
-                  if (is_dangerous(n)) { continue; }
+              LI("C1", "safe syscall whitelist (read-only)");
+              struct { int nr; const char *name; } list[] = {
+                  {20,  "getpid"},
+                  {24,  "getuid"},
+                  {47,  "getgid"},
+                  {39,  "getppid"},
+                  {25,  "geteuid"},
+                  {43,  "getegid"},
+                  {286, "gettid"},
+                  {202, "getpgid"},
+              };
+              for (size_t i = 0; i < sizeof(list)/sizeof(list[0]); i++) {
                   errno = 0;
-                  long r = syscall(n, 0, 0, 0, 0, 0, 0, 0, 0);
+                  long r = syscall(list[i].nr, 0, 0, 0, 0, 0, 0, 0, 0);
                   int e = errno;
-                  if (r == -1 && e == 78) { enosys++; }
-                  else if (r == -1 && e == 1) { eperm++; }
-                  else if (r == -1 && e == 22) { einval++; }
-                  else {
-                      other++;
-                      LI("C1", "syscall %d -> r=%ld errno=%d", n, r, e);
-                  }
+                  LI("C1", "syscall %d (%s) r=%ld errno=%d", list[i].nr, list[i].name, r, e);
               }
-              LI("C2", "ENOSYS=%d EPERM=%d EINVAL=%d OTHER=%d",
-                 enosys, eperm, einval, other);
               return 0;
           }
           static void sweep_getsockopt(int level, const char *name, int maxopt) {
@@ -211,23 +208,18 @@ jobs:
           }
           static int step_getsockopt_sweep(void) {
               nk_log("");
-              LI("D1", "getsockopt sweep SOL_SOCKET=0xffff");
+              LI("D1", "getsockopt sweeps");
               sweep_getsockopt(0xffff, "SOL_SOCKET", 300);
-              LI("D2", "getsockopt sweep IPPROTO_IP=0");
               sweep_getsockopt(0, "IPPROTO_IP", 300);
-              LI("D3", "getsockopt sweep IPPROTO_TCP=6");
               sweep_getsockopt(6, "IPPROTO_TCP", 300);
-              LI("D4", "getsockopt sweep IPPROTO_IPV6=41");
               sweep_getsockopt(41, "IPPROTO_IPV6", 200);
-              LI("D5", "getsockopt sweep IPPROTO_ICMP=1");
               sweep_getsockopt(1, "IPPROTO_ICMP", 200);
-              LI("D6", "getsockopt sweep IPPROTO_UDP=17");
               sweep_getsockopt(17, "IPPROTO_UDP", 200);
               return 0;
           }
           static int step_setsockopt(void) {
               nk_log("");
-              LI("D7", "setsockopt probes (round-trip)");
+              LI("D7", "setsockopt probes");
               int levels[] = {0xffff, 0, 6, 41, 1, 17};
               const char *names[] = {"SOL_SOCKET","IPPROTO_IP","IPPROTO_TCP","IPPROTO_IPV6","IPPROTO_ICMP","IPPROTO_UDP"};
               for (size_t li = 0; li < sizeof(levels)/sizeof(levels[0]); li++) {
@@ -306,21 +298,70 @@ jobs:
               }
               return 0;
           }
+          static int step_mach_ports(void) {
+              nk_log("");
+              LI("DB", "mach_port_names of self task");
+              mach_port_t task = mach_task_self();
+              mach_port_name_t *names = NULL;
+              mach_msg_type_number_t names_cnt = 0;
+              mach_port_type_t *types = NULL;
+              mach_msg_type_number_t types_cnt = 0;
+              kern_return_t kr = mach_port_names(task, &names, &names_cnt, &types, &types_cnt);
+              LI("DB", "mach_port_names kr=%d count=%u", kr, names_cnt);
+              if (kr == KERN_SUCCESS && names_cnt > 0) {
+                  int shown = names_cnt > 32 ? 32 : names_cnt;
+                  for (int i = 0; i < shown; i++) {
+                      LI("DB", "port[%d] name=0x%x type=0x%x", i, names[i], types[i]);
+                  }
+              }
+              return 0;
+          }
+          static int step_mach_vm_region(void) {
+              nk_log("");
+              LI("DC", "mach_vm_region scan 0x100000000-0x110000000");
+              mach_port_t task = mach_task_self();
+              vm_address_t addr = 0x100000000ULL;
+              vm_address_t limit = 0x110000000ULL;
+              int n = 0;
+              while (addr < limit && n < 200) {
+                  vm_size_t size = 0;
+                  vm_region_basic_info_data_64_t info;
+                  mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+                  mach_port_t obj = MACH_PORT_NULL;
+                  kern_return_t kr = vm_region_64(task, &addr, &size,
+                                                  VM_REGION_BASIC_INFO_64,
+                                                  (vm_region_info_t)&info, &cnt, &obj);
+                  if (kr != KERN_SUCCESS) break;
+                  if (n < 40) {
+                      LI("DC", "0x%llx-0x%llx size=0x%llx prot=%d",
+                         (unsigned long long)addr,
+                         (unsigned long long)(addr + size),
+                         (unsigned long long)size, info.protection);
+                  }
+                  addr += size;
+                  n++;
+                  if (size == 0) break;
+              }
+              LI("DC", "total regions=%d", n);
+              return 0;
+          }
           static int impl(void) {
               nk_log("");
               nk_log("================================================================");
-              nk_log("natsuk1 v7.0 - FINAL RECON");
+              nk_log("natsuk1 v7.1 - RECON (safe, no blind syscall sweep)");
               nk_log("iOS 27.0 / iPhone14,5 / 24A437");
               nk_log("================================================================");
               nk_log("");
               step_sysinfo();
               step_necp_recap();
-              step_syscall_sweep();
+              step_safe_syscalls();
               step_getsockopt_sweep();
               step_setsockopt();
               step_proc_info();
               step_csops();
               step_task_info();
+              step_mach_ports();
+              step_mach_vm_region();
               nk_log("");
               nk_log("======== done ========");
               return 0;
@@ -374,7 +415,7 @@ jobs:
           fi
           REPO="${{ github.repository }}"
           IPA_URL="https://github.com/${REPO}/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v7.0 final recon
+          NOTES="natsuk1 v7.1
 
           IPA: ${IPA_URL}
 
