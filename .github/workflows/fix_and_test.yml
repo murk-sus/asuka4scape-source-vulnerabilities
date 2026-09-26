@@ -425,9 +425,9 @@ jobs:
               private var pairingSection: some View {
                   Section {
                       HStack(spacing: 8) {
-                          Image(systemName: airlift.hasPairing() ? "link.circle.fill" : "link.badge.plus")
-                              .foregroundStyle(airlift.hasPairing() ? .green : .orange)
-                          Text(airlift.hasPairing() ? "Paired" : "Not paired").font(.subheadline.bold())
+                          Image(systemName: "link.badge.plus")
+                              .foregroundStyle(.orange)
+                          Text("Not paired").font(.subheadline.bold())
                       }
                       if case .pairing = airlift.state {
                           HStack(spacing: 8) {
@@ -499,8 +499,7 @@ jobs:
                       }
                       .disabled(airlift.state == .running)
                   } header: {
-                      Label("Exploit", systemImage: "bolt.sh/AirliftView.swift
-          grep -q 'Loopback VPN isield")
+                      Label("Exploit", systemImage: "bolt.shield")
                   }
 
                   Section {
@@ -514,14 +513,28 @@ jobs:
         run: |
           set -euo pipefail
           F=natsuk1/Exploit/necp.c
+          N=natsuk1/Helpers/NetworkStatus.swift
+          A=natsuk1/Views/AirliftView.swift
+
           test "$(grep -c 'NCF_ASN 0x20' "$F")" = "1"
           test "$(grep -c 'natsuk1-kread-v13' "$F")" = "1"
           test "$(grep -c 'SPRAY_PORTS 64' "$F")" = "1"
-          grep -q 'MACH_SEND_TIMEOUT' "$F"
-          grep -q 'static int spray_send' "$F"
-          grep -q 'loopbackVPNUp' natsuk1/Helpers/NetworkStatus.swift
-          grep -q '10.7.0.' natsuk1/Helpers/NetworkStatus.swift
-          grep -q 'link.circle' natsuk1/Views not active' natsuk1/Views/AirliftView.swift
+          grep -q -e MACH_SEND_TIMEOUT "$F"
+          grep -q -e "static int spray_send" "$F"
+          grep -q -e "static void spray_drain" "$F"
+
+          grep -q -e loopbackVPNUp "$N"
+          grep -q -e 10.7.0. "$N"
+          grep -q -e isTunnelInterface "$N"
+
+          grep -q -e "link.circle" "$A"
+          grep -q -e "Loopback VPN is not active" "$A"
+          grep -q -e "wifi.exclamationmark" "$A"
+          grep -q -e "bolt.shield" "$A"
+          grep -q -e "arrow.clockwise" "$A"
+          grep -q -e "hasPairing()" "$A"
+          grep -q -e "exploitSection" "$A"
+
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
             -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$F"
