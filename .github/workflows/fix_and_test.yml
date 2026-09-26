@@ -1,4 +1,4 @@
-name: 2 · Crash Log + Runtime
+name: 1 · Fix and Test
 
 on:
   push:
@@ -9,14 +9,14 @@ permissions:
   contents: write
 
 concurrency:
-  group: crashlog-${{ github.ref }}
+  group: fix-test-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   XCODE_VERSION: "26.5"
 
 jobs:
-  patch:
+  fix-and-test:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
@@ -28,17 +28,17 @@ jobs:
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
+      - name: Remove competing workflow
+        run: |
+          rm -f .github/workflows/natsuk1.yml
+          rm -f .github/workflows/main.yml
+
       - name: Write CrashLog.swift
         run: |
           cat > natsuk1/Helpers/CrashLog.swift <<'SWIFT'
           import Foundation
           import UIKit
 
-          /// Persistent crash-safe logger.
-          ///  - Writes every line to Documents/natsuk1-live.log (survives crash)
-          ///  - Installs NSException + BSD signal handlers
-          ///  - On next launch recoverPreviousSession() returns the previous session
-          ///    text if the last line was not [SHUTDOWN]
           final class CrashLog: @unchecked Sendable {
               nonisolated(unsafe) static let shared = CrashLog()
 
@@ -113,9 +113,6 @@ jobs:
                   }
               }
 
-              /// Mark the current session as cleanly finished.
-              /// Called when scenePhase goes to .background so that
-              /// next launch will NOT be treated as a crash.
               func markCleanShutdown() {
                   queue.async { [weak self] in
                       guard let self else { return }
@@ -199,21 +196,19 @@ jobs:
                   } header: {
                       Label("Runtime", systemImage: "waveform.path.ecg")
                   } footer: {
-                      Group {
-                          if let crash = state.previousCrash, !crash.isEmpty {
-                              Button {
-                                  state.showCrashLog = true
-                              } label: {
-                                  HStack(spacing: 6) {
-                                      Image(systemName: "exclamationmark.triangle.fill")
-                                          .foregroundStyle(.orange)
-                                      Text("Previous session crashed — tap to view")
-                                          .font(.footnote)
-                                      Spacer()
-                                      Image(systemName: "chevron.right")
-                                          .font(.caption)
-                                          .foregroundStyle(.tertiary)
-                                  }
+                      if let crash = state.previousCrash, !crash.isEmpty {
+                          Button {
+                              state.showCrashLog = true
+                          } label: {
+                              HStack(spacing: 6) {
+                                  Image(systemName: "exclamationmark.triangle.fill")
+                                      .foregroundStyle(.orange)
+                                  Text("Previous session crashed — tap to view")
+                                      .font(.footnote)
+                                  Spacer()
+                                  Image(systemName: "chevron.right")
+                                      .font(.caption)
+                                      .foregroundStyle(.tertiary)
                               }
                           }
                       }
@@ -288,32 +283,37 @@ jobs:
               s = f.read()
 
           if "natsuk1-crashlog-v1" in s:
-              print("already patched")
+              print("already patched, skipping")
               sys.exit(0)
 
-          orig = s
-
-          # 1. cCallback: mirror to CrashLog + parse slide/base
-          old_cb = 'LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))'
-          new_cb = ('let _line = String(decoding: bytes, as: UTF8.self)\n'
-                    '    LockedBuffer.shared.append(_line)\n'
-                    '    CrashLog.shared.writeLine(_line)\n'
-                    '    AppState.shared.parseLogLine(_line) /* natsuk1-crashlog-v1 */')
-          if old_cb not in s:
-              print("ERROR: cCallback marker not found")
+          # --- 1. cCallback -> mirror to CrashLog + parse ---
+          anchor = 'LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))'
+          i = s.find(anchor)
+          if i < 0:
+              print("FAIL step1: cCallback anchor missing")
               sys.exit(1)
-          s = s.replace(old_cb, new_cb, 1)
+          ls = s.rfind('\n', 0, i) + 1
+          indent = s[ls:i]
+          new_block = (indent + 'let _line = String(decoding: bytes, as: UTF8.self)\n'
+                       + indent + 'LockedBuffer.shared.append(_line)\n'
+                       + indent + 'CrashLog.shared.writeLine(_line)\n'
+                       + indent + 'AppState.shared.parseLogLine(_line) /* natsuk1-crashlog-v1 */')
+          s = s[:ls] + new_block + s[i + len(anchor):]
+          print("step1 OK (cCallback)")
 
-          # 2. AppState: add @Published + parseLogLine
-          state_marker = 'final class AppState: ObservableObject, @unchecked Sendable {'
-          if state_marker not in s:
-              print("ERROR: AppState marker not found")
+          # --- 2. AppState fields + parseLogLine ---
+          anchor2 = 'final class AppState: ObservableObject, @unchecked Sendable {'
+          i2 = s.find(anchor2)
+          if i2 < 0:
+              print("FAIL step2: AppState marker missing")
               sys.exit(1)
-
-          add_fields = '''
-
-              @Published var slide: String = "—"
-              @Published var base: String = "—"
+          eol = s.find('\n', i2)
+          if eol < 0:
+              print("FAIL step2: no EOL after AppState marker")
+              sys.exit(1)
+          add = '''
+              @Published var slide: String = "\\u{2014}"
+              @Published var base: String = "\\u{2014}"
               @Published var previousCrash: String? = nil
               @Published var showCrashLog: Bool = false
 
@@ -341,80 +341,79 @@ jobs:
                       }
                   }
                   return nil
-              }
-          '''
-          s = s.replace(state_marker, state_marker + add_fields, 1)
+              }'''
+          s = s[:eol] + add + s[eol:]
+          print("step2 OK (AppState)")
 
-          # 3. onAppear: install CrashLog + recover
-          hook = '.onAppear {\n                        nk_set_log(cCallback)'
-          if hook not in s:
-              print("ERROR: onAppear hook not found")
+          # --- 3. onAppear: install + recovery before nk_set_log ---
+          anchor3 = 'nk_set_log(cCallback)'
+          i3 = s.find(anchor3)
+          if i3 < 0:
+              print("FAIL step3: nk_set_log(cCallback) missing")
               sys.exit(1)
-          new_hook = ('.onAppear {\n'
-                      '                        CrashLog.shared.install()\n'
-                      '                        if let prev = CrashLog.shared.recoverPreviousSession(),\n'
-                      '                           !prev.isEmpty {\n'
-                      '                            AppState.shared.previousCrash = prev\n'
-                      '                        }\n'
-                      '                        nk_set_log(cCallback)')
-          s = s.replace(hook, new_hook, 1)
+          ls3 = s.rfind('\n', 0, i3) + 1
+          ind3 = s[ls3:i3]
+          ins3 = (ind3 + 'CrashLog.shared.install()\n'
+                  + ind3 + 'if let prev = CrashLog.shared.recoverPreviousSession(), !prev.isEmpty {\n'
+                  + ind3 + '    AppState.shared.previousCrash = prev\n'
+                  + ind3 + '}\n')
+          s = s[:ls3] + ins3 + s[ls3:]
+          print("step3 OK (onAppear)")
 
-          # 4. .sheet for CrashLogView — attach right after .overlay {}
-          overlay_old = ('.overlay {\n'
-                         '                        if state.show_respring {\n'
-                         '                            RespringView().brightness(-1.0).ignoresSafeArea()\n'
-                         '                        }\n'
-                         '                    }')
-          overlay_new = overlay_old + ('\n'
-                         '                    .sheet(isPresented: $state.showCrashLog) {\n'
-                         '                        CrashLogView().environmentObject(state)\n'
-                         '                    }\n'
-                         '                    .onChange(of: scenePhase) { _, phase in\n'
-                         '                        if phase == .background {\n'
-                         '                            CrashLog.shared.markCleanShutdown()\n'
-                         '                        }\n'
-                         '                    }')
-          if overlay_old not in s:
-              print("ERROR: overlay marker not found")
-              sys.exit(1)
-          s = s.replace(overlay_old, overlay_new, 1)
-
-          # 5. scenePhase env
-          phase_marker = '@Environment(\\.scenePhase) private var scenePhase'
-          if phase_marker not in s:
-              # Inject into RootView
-              root_marker = 'struct RootView: View {'
-              if root_marker not in s:
-                  print("ERROR: RootView marker not found")
+          # --- 4. scenePhase env in RootView ---
+          if 'private var scenePhase' not in s:
+              anchor4 = '@AppStorage("keep_alive_location") private var keep_alive_location = false'
+              i4 = s.find(anchor4)
+              if i4 < 0:
+                  print("FAIL step4: keep_alive_location anchor missing")
                   sys.exit(1)
-              s = s.replace(root_marker,
-                            root_marker + '\n    @Environment(\\.scenePhase) private var scenePhase',
-                            1)
+              eol4 = s.find('\n', i4)
+              if eol4 < 0:
+                  print("FAIL step4: no EOL")
+                  sys.exit(1)
+              add4 = '\n    @Environment(\\.scenePhase) private var scenePhase'
+              s = s[:eol4] + add4 + s[eol4:]
+              print("step4 OK (scenePhase env)")
+          else:
+              print("step4 SKIP (scenePhase already present)")
 
-          if s == orig:
-              print("ERROR: no changes to natsuk1.swift")
+          # --- 5. insert .sheet + .onChange(scenePhase) before .overlay ---
+          anchor5 = '.overlay {'
+          i5 = s.find(anchor5)
+          if i5 < 0:
+              print("FAIL step5: .overlay { missing")
               sys.exit(1)
-          if "natsuk1-crashlog-v1" not in s:
-              print("ERROR: marker missing")
-              sys.exit(1)
+          ls5 = s.rfind('\n', 0, i5) + 1
+          ind5 = s[ls5:i5]
+          ins5 = (ind5 + '.sheet(isPresented: $state.showCrashLog) {\n'
+                  + ind5 + '    CrashLogView().environmentObject(state)\n'
+                  + ind5 + '}\n'
+                  + ind5 + '.onChange(of: scenePhase) { _, phase in\n'
+                  + ind5 + '    if phase == .background {\n'
+                  + ind5 + '        CrashLog.shared.markCleanShutdown()\n'
+                  + ind5 + '    }\n'
+                  + ind5 + '}\n')
+          s = s[:ls5] + ins5 + s[ls5:]
+          print("step5 OK (sheet + onChange)")
 
-          for want in [
-              "CrashLog.shared.install()",
-              "CrashLog.shared.recoverPreviousSession()",
-              "CrashLog.shared.writeLine(_line)",
-              "CrashLog.shared.markCleanShutdown()",
-              "parseLogLine(_line)",
-              "previousCrash: String?",
-              "showCrashLog: Bool",
-              "private var scenePhase",
+          # --- sanity ---
+          if s.count("natsuk1-crashlog-v1") != 1:
+              print("FAIL: marker count = %d" % s.count("natsuk1-crashlog-v1"))
+              sys.exit(1)
+          for want, label in [
+              ("CrashLog.shared.install()", "install call"),
+              ("recoverPreviousSession()", "recovery call"),
+              ("markCleanShutdown()", "markCleanShutdown call"),
+              ("parseLogLine(_line)", "parseLogLine call"),
+              ("showCrashLog", "showCrashLog prop"),
           ]:
               if want not in s:
-                  print("ERROR: missing %s" % want)
+                  print("FAIL: %s missing" % label)
                   sys.exit(1)
 
           with open(P, "w") as f:
               f.write(s)
-          print("natsuk1.swift patched")
+          print("natsuk1.swift patched OK")
           PYEOF
 
       - name: Patch OverviewView.swift
@@ -428,52 +427,76 @@ jobs:
               s = f.read()
 
           if "natsuk1-crashlog-v1" in s:
-              print("already patched")
+              print("already patched, skipping")
               sys.exit(0)
 
-          orig = s
-          lm = s.find("List {")
-          if lm < 0:
-              print("ERROR: List { not found in OverviewView")
+          anchor = 'List {'
+          i = s.find(anchor)
+          if i < 0:
+              print("FAIL: List { missing in OverviewView")
               sys.exit(1)
-          ins = lm + len("List {") + 1
-          insert = ('\n                RuntimeView()'
-                    ' /* natsuk1-crashlog-v1 */'
-                    '\n                    .environmentObject(state)\n')
-          s = s[:ins] + insert + s[ins:]
-
-          if s == orig:
-              print("ERROR: no changes to OverviewView.swift")
-              sys.exit(1)
+          ls = s.rfind('\n', 0, i) + 1
+          indent = s[ls:i]
+          body_indent = indent + '    '
+          ins = (indent + 'List {\n'
+                 + body_indent + 'RuntimeView() /* natsuk1-crashlog-v1 */\n'
+                 + body_indent + '    .environmentObject(state)')
+          s = s[:ls] + ins + s[i + len(anchor):]
           if s.count("natsuk1-crashlog-v1") != 1:
-              print("ERROR: marker count != 1")
+              print("FAIL: marker count = %d" % s.count("natsuk1-crashlog-v1"))
               sys.exit(1)
           if "RuntimeView()" not in s:
-              print("ERROR: RuntimeView not inserted")
+              print("FAIL: RuntimeView not inserted")
               sys.exit(1)
-
           with open(P, "w") as f:
               f.write(s)
-          print("OverviewView.swift patched")
+          print("OverviewView.swift patched OK")
           PYEOF
 
       - name: Verify
         run: |
-          set -euo pipefail
-          test -f natsuk1/Helpers/CrashLog.swift
-          test -f natsuk1/Views/RuntimeView.swift
-          test -f natsuk1/Views/CrashLogView.swift
-          test "$(grep -c 'natsuk1-crashlog-v1' natsuk1/natsuk1.swift)" = "1"
-          test "$(grep -c 'natsuk1-crashlog-v1' natsuk1/Views/OverviewView.swift)" = "1"
-          grep -q 'CrashLog.shared.install()' natsuk1/natsuk1.swift
-          grep -q 'recoverPreviousSession' natsuk1/natsuk1.swift
-          grep -q 'markCleanShutdown' natsuk1/natsuk1.swift
-          grep -q 'parseLogLine' natsuk1/natsuk1.swift
-          grep -q 'RuntimeView()' natsuk1/Views/OverviewView.swift
-          grep -q 'CrashLogView' natsuk1/Views/CrashLogView.swift
-          grep -q 'NSSetUncaughtExceptionHandler' natsuk1/Helpers/CrashLog.swift
-          grep -q 'signal(SIGSEGV' natsuk1/Helpers/CrashLog.swift
-          echo "verify OK"
+          set +e
+          fail=0
+          check() {
+            local name="$1"
+            shift
+            if "$@"; then
+              echo "  OK  $name"
+            else
+              echo "  FAIL $name"
+              fail=1
+            fi
+          }
+          echo "--- file presence ---"
+          check "CrashLog.swift" test -f natsuk1/Helpers/CrashLog.swift
+          check "RuntimeView.swift" test -f natsuk1/Views/RuntimeView.swift
+          check "CrashLogView.swift" test -f natsuk1/Views/CrashLogView.swift
+
+          echo "--- marker counts ---"
+          echo "  natsuk1.swift marker: $(grep -c 'natsuk1-crashlog-v1' natsuk1/natsuk1.swift)"
+          echo "  OverviewView.swift marker: $(grep -c 'natsuk1-crashlog-v1' natsuk1/Views/OverviewView.swift)"
+
+          echo "--- natsuk1.swift hooks ---"
+          check "install()" grep -q 'CrashLog.shared.install()' natsuk1/natsuk1.swift
+          check "recoverPreviousSession" grep -q 'recoverPreviousSession' natsuk1/natsuk1.swift
+          check "markCleanShutdown" grep -q 'markCleanShutdown' natsuk1/natsuk1.swift
+          check "parseLogLine" grep -q 'parseLogLine' natsuk1/natsuk1.swift
+          check "scenePhase env" grep -q 'private var scenePhase' natsuk1/natsuk1.swift
+          check "sheet CrashLogView" grep -q 'CrashLogView().environmentObject' natsuk1/natsuk1.swift
+
+          echo "--- OverviewView ---"
+          check "RuntimeView()" grep -q 'RuntimeView()' natsuk1/Views/OverviewView.swift
+
+          echo "--- CrashLog internals ---"
+          check "NSSetUncaughtExceptionHandler" grep -q 'NSSetUncaughtExceptionHandler' natsuk1/Helpers/CrashLog.swift
+          check "signal SIGSEGV" grep -q 'SIGSEGV' natsuk1/Helpers/CrashLog.swift
+          check "SHUTDOWN marker" grep -q 'SHUTDOWN' natsuk1/Helpers/CrashLog.swift
+
+          if [ "$fail" -ne 0 ]; then
+            echo "VERIFY FAILED"
+            exit 1
+          fi
+          echo "VERIFY OK"
 
       - name: Install tools
         run: brew install xcodegen ldid || true
