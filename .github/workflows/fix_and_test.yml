@@ -30,37 +30,70 @@ jobs:
           rm -f .github/workflows/natsuk1.yml
           rm -f .github/workflows/main.yml
 
-      - name: Bump NCF_STRUCT_SZ to 0x400
+      - name: Patch necp.c
         run: |
           set -euo pipefail
-          F=natsuk1/Exploit/necp.c
-          python3 - <<'PYEOF'
+          mkdir -p /tmp/nk
+
+          cat > /tmp/nk/patch.py <<'PYEOF'
           import sys
-          F = "natsuk1/Exploit/necp.c"
-          with open(F) as f:
-              s = f.read()
-          if "natsuk1-kread-v7" in s:
+
+          PATH = "natsuk1/Exploit/necp.c"
+          MARKER_NEW = "natsuk1-kread-v7"
+
+          with open(PATH) as f:
+              lines = f.readlines()
+
+          full = "".join(lines)
+          if MARKER_NEW in full:
               print("already v7")
               sys.exit(0)
-          orig = s
-          s = s.replace("#define NCF_STRUCT_SZ 256",
-                        "#define NCF_STRUCT_SZ 0x400")
-          s = s.replace("#define NCF_STRUCT_SZ 0x100",
-                        "#define NCF_STRUCT_SZ 0x400")
-          s = s.replace("natsuk1-kread-v6", "natsuk1-kread-v7")
-          if s == orig:
-              print("ERROR: NCF_STRUCT_SZ define not found")
+
+          # 1. NCF_STRUCT_SZ -> 0x400 (line-based, ignores whitespace)
+          sz_hits = 0
+          for i, line in enumerate(lines):
+              if line.startswith("#define NCF_STRUCT_SZ"):
+                  lines[i] = "#define NCF_STRUCT_SZ 0x400\n"
+                  sz_hits += 1
+
+          if sz_hits != 1:
+              print("ERROR: #define NCF_STRUCT_SZ found %d times (want 1)" % sz_hits)
               sys.exit(1)
-          if "natsuk1-kread-v7" not in s:
+
+          # 2. bump marker (any previous version)
+          s = "".join(lines)
+          for old in ("natsuk1-kread-v6", "natsuk1-kread-v5",
+                      "natsuk1-kread-v4", "natsuk1-kread-v3",
+                      "natsuk1-kread-v2"):
+              s = s.replace(old, MARKER_NEW)
+          s = s.replace("=== natsuk1 v1.6 (natsuk1-kread-v7) ===",
+                        "=== natsuk1 v1.7 (natsuk1-kread-v7) ===")
+          s = s.replace("=== natsuk1 v1.6 (natsuk1-kread-v6) ===",
+                        "=== natsuk1 v1.7 (natsuk1-kread-v7) ===")
+
+          # 3. widen buffer dump from 16 to 32 words
+          s = s.replace("int nw = ret / 8; if (nw > 16) nw = 16;\n                  dump_buf_words(\"RAW\", g_res_buf, nw, 16);",
+                        "int nw = ret / 8; if (nw > 32) nw = 32;\n                  dump_buf_words(\"RAW\", g_res_buf, nw, 32);")
+          s = s.replace("int nw = r / 8; if (nw > 16) nw = 16;\n                      dump_buf_words(\"CAL\", g_res_buf, nw, 16);",
+                        "int nw = r / 8; if (nw > 32) nw = 32;\n                      dump_buf_words(\"CAL\", g_res_buf, nw, 32);")
+
+          # 4. sanity
+          if MARKER_NEW not in s:
               print("ERROR: marker not bumped")
               sys.exit(1)
           if "#define NCF_STRUCT_SZ 0x400" not in s:
-              print("ERROR: define not set to 0x400")
+              print("ERROR: NCF_STRUCT_SZ not 0x400")
               sys.exit(1)
-          with open(F, "w") as f:
+          if s.count("#define NCF_STRUCT_SZ 0x400") != 1:
+              print("ERROR: NCF_STRUCT_SZ 0x400 appears != 1 time")
+              sys.exit(1)
+
+          with open(PATH, "w") as f:
               f.write(s)
-          print("necp.c v7: NCF_STRUCT_SZ=0x400")
+          print("necp.c v7 patched (NCF_STRUCT_SZ=0x400, marker=v7)")
           PYEOF
+
+          python3 /tmp/nk/patch.py
 
       - name: Write Offsets JSON
         run: |
@@ -170,8 +203,9 @@ jobs:
           F=natsuk1/Exploit/necp.c
           grep -q "natsuk1-kread-v7" "$F"
           grep -q "#define NCF_STRUCT_SZ 0x400" "$F"
-          ! grep -q "#define NCF_STRUCT_SZ 256" "$F"
-          ! grep -q "#define NCF_STRUCT_SZ 0x100" "$F"
+          test "$(grep -c '#define NCF_STRUCT_SZ' "$F")" = "1"
+          ! grep -q "natsuk1-kread-v6" "$F"
+          ! grep -q "natsuk1-kread-v5" "$F"
           grep -q "nks1_spray_t" "$F"
           grep -q "dump_buf_words" "$F"
           test "$(grep -c 'static volatile int g_busy = 0;' "$F")" = "1"
