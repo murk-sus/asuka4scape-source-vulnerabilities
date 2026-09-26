@@ -120,6 +120,10 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
     }
 
     func respring() {
+        guard UserDefaults.standard.bool(forKey: "allow_device_respring") else {
+            appendLog("[respring] blocked by rule 14")
+            return
+        }
         let pairingPath = pairingFilePath()
         let bridge = AirliftBridge.shared
         guard FileManager.default.fileExists(atPath: pairingPath) else {

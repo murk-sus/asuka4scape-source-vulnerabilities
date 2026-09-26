@@ -66,6 +66,7 @@ final class OffsetsStore: ObservableObject, @unchecked Sendable {
         let name = parts.first ?? entry.file
         let ext  = parts.count > 1 ? parts[1] : "json"
         return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")
+                ?? Bundle.main.url(forResource: name, withExtension: ext)
     }
 
     @Published var values: [String: String] = [:]

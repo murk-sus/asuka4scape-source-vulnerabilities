@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @AppStorage("auto_run") private var auto_run: Bool = false
     @AppStorage("verbose") private var verbose: Bool = true
+    @AppStorage("allow_device_respring") private var r: Bool = false
     @AppStorage("keep_alive_audio") private var keep_alive_audio: Bool = false
     @AppStorage("keep_alive_location") private var keep_alive_location: Bool = false
 
@@ -71,6 +72,7 @@ struct SettingsView: View {
                 Section {
                     Toggle("Auto Run on Launch", isOn: $auto_run)
                     Toggle("Verbose Output", isOn: $verbose)
+                    Toggle("Allow device respring", isOn: $r)
                 } header: {
                     Label("Options", systemImage: "slider.horizontal.3")
                 }
