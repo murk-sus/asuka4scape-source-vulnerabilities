@@ -74,49 +74,59 @@ MIT — see [LICENSE](LICENSE).
 
 ## 🤖 AUTO-GENERATED RESEARCH RULES
 
-Этот блок обновляется workflow при каждом push.
-**Читать первым делом. Не нарушать.**
+Обновляется workflow при каждом push. **Читать первым делом.**
 
 ### Обновлено
 - date: 2026-09-26
 - device: iPhone14,5 / iOS 27.0 / 24A437
-- necp_status: **closed** (исчерпан)
+- necp_status: **закрыт**
+- signature_status: **ad-hoc, без привилегированных entitlements**
 
-### 1. NECP — статус "ЗАКРЫТ"
+### 1. NECP — ЗАКРЫТ
 
-Проверено всё:
-- `op=0x03/0x04/0x10/0x1A` возвращают **ровно 310 байт** TLV
-- `op=0x0D` (sysctl_arena) → user VA, RO, kernel-wide singleton,
-  первые 256 байт одинаковые у всех клиентов, `vm_protect(RW_COPY)`
-  даёт COW-копию — **ядро наших записей не видит**
-- `op=0x05 copy_list` → ret=-1
-- `op=0x0C copy_parameters` → ret=-1
-- `op=0x0F copy_update` → ret=-1
-- `op=0x18/0x19` signed_id → пусто / -1
-- TLV overflow (`len=0xffffffff`) → kernel отклоняет
-- double-free `remove_flow x2` → ret=0, но `copy_result` = 1 байт
-- kptr count во всех dump'ах = 0
+**Только `op=0x04` возвращает полный TLV (280-310 байт).**
+- `op=0x03` → 1 байт (пустой header)
+- `op=0x04` → 280-310 байт (полная структура)
+- `op=0x10` → 0
+- `op=0x1A` → 0
 
-**Вывод:** NECP — обычный userspace API. Примитивов нет.
+TLV содержит client_id (0x07), uuid (0x01), interfaces (0x06),
+flags, route stats — но kptr'ов нет.
+
+Проверено и закрыто:
+- `op=0x05 copy_list` → -1
+- `op=0x0C copy_parameters` → -1
+- `op=0x0D sysctl_arena` → user VA RO, COW, не kernel
+- `op=0x0F copy_update` → -1
+- `op=0x13 claim` → -1
+- `op=0x15/0x18/0x19/0x1B` → пусто/-1
+- TLV overflow → kernel отклоняет
+- double-free → flow обнуляется, UAF нет
+- `add_flow` размер 0x24..0xF0, 0xF1+ → -1
+
+**Вывод:** NECP — userspace API без примитивов. Больше не крутить.
 
 ### 2. iOS 27 sandbox — критично
 
-- **`SIGKILL - CODESIGNING` = AMFI убивает ad-hoc приложение на iOS 27**
-  при вызове определённых syscall'ов:
-  - `proc_info(336)` — flavors 1..20
-  - `csops(169)` — ops 0..15
-  - `task_info` — flavors 1..40
-  - `mach_port_names` — при большом count
-- **Не вызывать их из ad-hoc подписанного приложения.**
-- **Blind syscall sweep 0..558** убивает через `SIGSYS` на `syscall(78)`.
-  Whitelist: `getpid(20)`, `getuid(24)`, `getgid(47)`, `getppid(39)`,
-  `geteuid(25)`, `getegid(43)`, `gettid(286)`, `getpgid(202)`.
-- `socket()`, `getsockopt()`, `setsockopt()`, `sysctl`, `uname` — **безопасны**.
+- **Blind syscall sweep 0..558** → `SIGSYS` на syscall(78).
+  Whitelist только: getpid(20), getuid(24), getgid(47), getppid(39),
+  geteuid(25), getegid(43), gettid(286), getpgid(202).
+- **`proc_info(336)`, `csops(169)`, `task_info` flavor sweep,
+  `mach_port_names`** → `SIGKILL - CODESIGNING` от AMFI на ad-hoc.
+  Не вызывать.
 
-### 3. Сборка — грабли
+### 3. Подпись — для работы в LiveContainer
 
-- `#include <mach/mach_vm.h>` → **`error: mach_vm.h unsupported`** в iPhoneOS SDK 26.5.
-  Объявлять extern вручную:
+**Привилегированные entitlements (например `com.apple.private.skip-library-validation`)
+в ad-hoc подписи дают `SIGKILL - CODESIGNING` при запуске из LC.**
+
+Решение: **пустой `natsuk1.entitlements`** (`<dict></dict>`).
+`ldid -S` без аргумента. Работает и в LC и через sideload.
+
+### 4. Сборка — грабли
+
+- `#include <mach/mach_vm.h>` → **`error: mach_vm.h unsupported`** в iPhoneOS SDK.
+  Extern вручную:
   ```c
   extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t,
       mach_vm_size_t, mach_vm_address_t, mach_vm_size_t*);
@@ -125,26 +135,28 @@ MIT — see [LICENSE](LICENSE).
   extern kern_return_t mach_vm_protect(vm_map_t, mach_vm_address_t,
       mach_vm_size_t, boolean_t, vm_prot_t);
   ```
-- `TCP_KEEPINIT`, `TCP_FASTOPEN_KEY`, `SO_REUSEPORT_LF`, `SO_NO_CHECK` — **не в SDK**.
-  Sweep только по числам.
-- `@MainActor` + `nonisolated(unsafe) static let shared = Foo()` → ошибка компиляции.
+- `TCP_KEEPINIT`, `TCP_FASTOPEN_KEY`, `SO_REUSEPORT_LF` — **не в SDK**.
+  Sweep только числами.
+- `@MainActor` + `nonisolated(unsafe) static let shared = Foo()` → ошибка.
   Использовать `final class Foo: ObservableObject, @unchecked Sendable`,
-  `nonisolated(unsafe) static let shared = Foo()`, `private init()`.
+  `nonisolated(unsafe) static let shared`, `private init()`.
+- `sysctlbyname("hw.memsize")` возвращает UInt64, не строку.
+  Читать через `uint64_t out`, не `char val[]`.
 
-### 4. SwiftUI iOS 27 — что роняет
+### 5. SwiftUI iOS 27
 
-- `.overlay(RespringView())` — **никогда**. WKWebView спамит GPU → CA UAF → SIGSEGV.
-- `List { if cond { Section } else { Section } }` в корне → падает.
+- `.overlay(RespringView())` — **никогда**. WKWebView спамит GPU → CA UAF.
+- `List { if ... } else { ... } }` в корне → падает `optionalSelectionContainer`.
 - `.scaleEffect()` внутри `if` → `_ConditionalContent` ломается.
-- Мутации `@Published` из `Task { }` → race → UAF. Только `Timer`.
+- Мутации `@Published` из `Task {}` → race → UAF. Только `Timer`.
 
-### 5. LiveContainer
+### 6. Установка — и LC и sideload
 
-`SIGKILL - CODESIGNING` = LC ломает подпись embedded .app на iOS 27.
-**Ставить IPA напрямую** через Sideloadly / AltStore / TrollStore / ESign.
-Не через LiveContainer.
+- **Sideloadly / AltStore / TrollStore / ESign** — работают всегда.
+- **LiveContainer** — работает если entitlements пустые (см. §3).
+  Ставить IPA, не .app.
 
-### 6. Оффсеты (iOS 27.0 / 24A437)
+### 7. Оффсеты (iOS 27.0 / 24A437)
 
 ```
 necp_open                      0xFFFFFFF00A4E411C
@@ -165,43 +177,41 @@ kalloc_type_necp_flow          0xFFFFFFF007C62E68
 ```
 KBASE = `0xFFFFFFF007004000`, slide = `0x3D00000`.
 
-### 7. Ghidra / CI
+### 8. Ghidra / CI
 
-- Jython 2.7: только 4 пробела. Валидация через `ast.parse`.
+- Jython 2.7: только 4 пробела. Валидация `python3 -c "import ast,sys; ast.parse(...)"`.
 - Warm = `-process -noanalysis` (1-3 мин). Cold = `-import` (24-90 мин).
-- Ключи кэша — статические с версией. **Никогда** `hashFiles`.
+- Ключи кэша статические: `ghidra-project-24A437-v4`. **Никогда** `hashFiles`.
 - Символизация: `ipsw kernel symbolicate --signatures symbolicator/kernel/27.0/kexts`.
-- Kernelcache iOS 27 — **уже Mach-O**. Не декомпрессировать.
+- Kernelcache iOS 27 — уже Mach-O. Не декомпрессировать.
 
-### 8. YAML
+### 9. YAML
 
-- **Не пихать C/Swift код в heredoc длиннее 30 строк**. Любая строка с неправильным
-  отступом ломает весь YAML.
-- Все строки heredoc на 10 пробелах от начала файла.
+- Один workflow: `fix_and_release.yml`.
+- C/Swift код длиннее 30 строк — в `reference/`, не в heredoc.
+- Heredoc-строки на 10 пробелах от начала файла.
 - `set +e` + `FAIL=1`, `grep -q -e "pattern"`.
-- Один workflow — `fix_and_release.yml`.
 
-### 9. Что дальше
+### 10. Что дальше
 
-1. **mbuf / socket** — `sendmsg` + `msg_control`, `setsockopt(IPPROTO_*)`, mbuf UAF.
+1. **mbuf / socket** — `sendmsg` + `msg_control`, неинициализированные mbuf.
 2. **IOKit** — `IOSurface`, `IOConnectCallMethod`, `IOHIDEvent`.
 3. **Ghidra** — `sbappendcontrol`, `m_copydata`, `sock_getsockopt`.
 
 После 2-3 попыток — менять подход.
 
-### 10. Что НЕ делать
+### 11. Что НЕ делать
 
-- Не создавать `fixPublished_and_test.yml` / `build_and_release.yml`.
+- Не создавать `fix_and_test.yml` / `build_and_release.yml`.
 - Не пихать C/Swift в heredoc.
-- Не использовать `hashFiles('kernelcache/**')`.
+- Не использовать `hashFiles('kernelcache/**')` в кэшах.
 - Не делать blind syscall sweep.
-- **Не вызывать `proc_info(336)`, `csops(169)`, `task_info` flavor sweep,
-  `mach_port_names` из ad-hoc приложения — SIGKILL CODESIGNING.**
-- Не мутировать `@` из `Task {}`.
+- Не вызывать `proc_info(336)`, `csops(169)`, `task_info` sweep, `mach_port_names`.
+- Не ставить привилегированные entitlements.
+- Не мутировать `@Published` из `Task {}`.
 - Не класть `RespringView` в дерево SwiftUI.
 - Не вызывать `al_device_respring`.
 - Не коммитить `natsuk1.xcodeproj`.
-- Не забывать `import Combine`.
 - Не доверять оффсетам без Ghidra.
 
 <!-- AUTO-RULES-END -->
