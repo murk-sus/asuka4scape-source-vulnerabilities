@@ -6,22 +6,8 @@ struct RuntimeView: View {
 
     var body: some View {
         Section {
-            HStack {
-                Text("Slide")
-                Spacer()
-                Text(state.slide)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(state.slide != "—" ? .green : .secondary)
-                    .lineLimit(1).truncationMode(.middle)
-            }
-            HStack {
-                Text("Base")
-                Spacer()
-                Text(state.base)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(state.base != "—" ? .green : .secondary)
-                    .lineLimit(1).truncationMode(.middle)
-            }
+            row(label: "Slide", value: state.slide)
+            row(label: "Base", value: state.base)
             HStack {
                 Text("Status")
                 Spacer()
@@ -29,6 +15,21 @@ struct RuntimeView: View {
             }
         } header: {
             Label("Runtime", systemImage: "waveform.path.ecg")
+        }
+    }
+
+    @ViewBuilder
+    private func row(label: String, value: String) -> some View {
+        let isSet = value != "-" && value != "—" && !value.isEmpty
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(isSet ? Color.green : Color.secondary)
+                .shadow(color: isSet ? Color.green.opacity(0.65) : Color.clear, radius: 4)
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
     }
 }

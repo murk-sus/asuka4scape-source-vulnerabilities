@@ -106,9 +106,28 @@ GrappaHelper 10 static tokens confirmed working never collapse.
 List if cond Section else Section crash.
 .scaleEffect inside if breaks _ConditionalContent.
 @Published from Task race UAF.
-Respring button must exist only in ToolsView, not AirliftView.
+Respring button must exist only in ToolsView not AirliftView.
+RuntimeView must not show green when slide or base equal default '-'.
 
-## 11 Offsets
+## 11 Network / LocalDevVPN
+
+LocalDevVPN creates a utun interface with local IP 10.7.0.1 and peer 10.7.1.1.
+tunnelIP must return the peer (ifa_dstaddr) not the interface address.
+deviceIP must return the interface address (ifa_addr).
+Both are point-to-point so getifaddrs exposes peer via ifa_dstaddr.
+Status card in AirliftView refreshes every 0.5 seconds via Timer.publish.
+loopbackVPNUp is true only when at least one utun pair exists in 10.7 range.
+
+## 12 Airlift accessible paths
+
+/var/mobile and /var/mobile/Documents are writable.
+/var/mobile/Library and subdirectories Preferences Caches SpringBoard SMS Safari.
+/var/mobile/Containers and Data/Application and Shared/AppGroup.
+/var/tmp and /var/mobile/Media.
+Default target /var/mobile/Library/SpringBoard.
+Reads are indirect via Media round-trip; MobileGestalt plist is not writable.
+
+## 13 Offsets
 
 - KBASE 0xFFFFFFF007004000
 - SLIDE 0x3D00000
@@ -144,7 +163,7 @@ Respring button must exist only in ToolsView, not AirliftView.
 - tlv_wrapper 0xFFFFFFF00A4C113C
 - syscall_dispatcher 0xFFFFFFF00A6CEB84
 
-## 12 Extract Offsets repo
+## 14 Extract Offsets repo
 
 repo murk-sus/Hu-Tao-and-natsuki-anime-music-player
 workflow extract_offsets.yml script scripts/kernel_rw.py
@@ -153,15 +172,15 @@ ipsw kernel symbolicate --signatures symbolicator/kernel/27.0 --json KERNEL
 format decimal_addr to name
 jython 2.7 isinstance basestring; no tabs only 4 spaces
 
-## 13 YAML rules
+## 15 YAML rules
 
 one workflow fix_and_release.yml
 no C or Swift heredoc over 30 lines
-no rewriting sources from workflow except structured UI regeneration
+structured UI regeneration is allowed under Generate UI sources step
 all heredoc indented 10 spaces; endmarker on 10 spaces
 do not delete cached dirs
 
-## 14 Next steps
+## 16 Next steps
 
 decompile FUN_fffffff00a346474 and FUN_fffffff00a348180
 trace param_3 for necp_flow_alloc
@@ -170,7 +189,7 @@ decompile FUN_fffffff00a4c113c TLV wrapper
 search IOKit IOSurface IOConnectCallMethod IOHIDEvent
 mbuf m_copydata mbuf_copydata with user lengths
 
-## 15 What NOT to do
+## 17 What NOT to do
 
 no fix_and_test.yml or build_and_release.yml
 no rewriting sources from workflow except structured UI regeneration
@@ -181,13 +200,14 @@ no non-empty entitlements
 no @Published mutation from Task
 no RespringView in SwiftUI tree
 no respring button in AirliftView (only in ToolsView)
+no green glow for slide or base until set
 no commit of natsuk1.xcodeproj
 no trust of offsets without Ghidra
 no answer without web search first
 no deleting ghidra kernelcache symbolicator
 no collapsing GrappaHelper token array to NULL
 
-## 16 BSD syscall safety table 0 to 557
+## 18 BSD syscall safety table 0 to 557
 
 S safe C codesign-kill B sandbox U unknown
 ### syscall 0
@@ -1865,7 +1885,7 @@ S safe C codesign-kill B sandbox U unknown
 - safety U
 - ad-hoc unknown test in a disposable container first
 
-## 17 NECP op table
+## 19 NECP op table
 
 ### NECP op 0x01 ADD_CLIENT
 - observed ret 0
@@ -1946,7 +1966,7 @@ S safe C codesign-kill B sandbox U unknown
 - observed unknown
 - signature syscall 502 fd op uuid ulen buf blen
 
-## 18 MobileGestalt keys
+## 20 MobileGestalt keys
 
 - ProductType string
 - ProductVersion string
@@ -2001,26 +2021,7 @@ S safe C codesign-kill B sandbox U unknown
 - AirplaneMode bool
 - AssistedGPS bool
 
-## 19 Airlift accessible paths
-
-Verified fresh-file writes (iOS 27.0, paired Mac):
-/var/mobile
-/var/mobile/Documents
-/var/mobile/Library
-/var/mobile/Library/Preferences
-/var/mobile/Library/Caches
-/var/mobile/Library/SpringBoard
-/var/mobile/Library/SMS
-/var/mobile/Library/Safari
-/var/mobile/Containers
-/var/mobile/Containers/Data/Application
-/var/mobile/Containers/Shared/AppGroup
-/var/tmp
-Default target: /var/mobile/Library/SpringBoard
-Reads are indirect: known file moved into Media, read via AFC, moved back.
-Does NOT work on MobileGestalt plist.
-
-## 20 Common errors and fixes
+## 21 Common errors and fixes
 
 ### unterminated string literal
 - why editor mangled a long string literal across lines
@@ -2055,8 +2056,14 @@ Does NOT work on MobileGestalt plist.
 ### grappa token generation failed rc=-5
 - why static token array emptied or fallback removed
 - fix restore 10 tokens with marker nk-grappa-restored
+### tunnel IP shows 10.7.1.1 for both fields
+- why ifa_dstaddr not used; interface addr used for both
+- fix use ifa_addr for device and ifa_dstaddr for tunnel
+### slide or base green when not set
+- why compared against em dash not hyphen
+- fix default is '-' check that value
 
-## 21 Grappa RPPairing confirmed working
+## 22 Grappa RPPairing confirmed working
 
 tunnel up on 10.7.0.1 49152 via raw RPPairing
 RSD publishes about 85 services
@@ -9824,60 +9831,3 @@ Do NOT collapse kAuthenticGrappaTokens to NULL.
 
 ## 3586 reserved
 - placeholder 2586
-
-## 3587 reserved
-- placeholder 2587
-
-## 3588 reserved
-- placeholder 2588
-
-## 3589 reserved
-- placeholder 2589
-
-## 3590 reserved
-- placeholder 2590
-
-## 3591 reserved
-- placeholder 2591
-
-## 3592 reserved
-- placeholder 2592
-
-## 3593 reserved
-- placeholder 2593
-
-## 3594 reserved
-- placeholder 2594
-
-## 3595 reserved
-- placeholder 2595
-
-## 3596 reserved
-- placeholder 2596
-
-## 3597 reserved
-- placeholder 2597
-
-## 3598 reserved
-- placeholder 2598
-
-## 3599 reserved
-- placeholder 2599
-
-## 3600 reserved
-- placeholder 2600
-
-## 3601 reserved
-- placeholder 2601
-
-## 3602 reserved
-- placeholder 2602
-
-## 3603 reserved
-- placeholder 2603
-
-## 3604 reserved
-- placeholder 2604
-
-## 3605 reserved
-- placeholder 2605

@@ -7,13 +7,17 @@ enum NetworkStatus {
         let ipv4: String
         let netmask: String?
     }
+    struct TunnelPair {
+        let local: String
+        let peer: String?
+        let iface: String
+    }
 
     static func interfaces() -> [Interface] {
         var result: [Interface] = []
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
         defer { freeifaddrs(ifaddr) }
-
         var ptr: UnsafeMutablePointer<ifaddrs>? = first
         while let cur = ptr {
             defer { ptr = cur.pointee.ifa_next }
@@ -36,6 +40,29 @@ enum NetworkStatus {
         return String(decoding: bytes, as: UTF8.self)
     }
 
+    static func tunnelPairs() -> [TunnelPair] {
+        var result: [TunnelPair] = []
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
+        defer { freeifaddrs(ifaddr) }
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let cur = ptr {
+            defer { ptr = cur.pointee.ifa_next }
+            let name = String(cString: cur.pointee.ifa_name)
+            guard isTunnelInterface(name) else { continue }
+            guard let addr = cur.pointee.ifa_addr,
+                  addr.pointee.sa_family == sa_family_t(AF_INET) else { continue }
+            guard let local = numericHost(addr), isLoopbackRange(local) else { continue }
+            var peer: String? = nil
+            if let dst = cur.pointee.ifa_dstaddr,
+               dst.pointee.sa_family == sa_family_t(AF_INET) {
+                if let p = numericHost(dst), isLoopbackRange(p), p != local { peer = p }
+            }
+            result.append(TunnelPair(local: local, peer: peer, iface: name))
+        }
+        return result
+    }
+
     static func summarize(deviceIP: String) -> (vpn: Bool, wifi: Bool, detail: String) {
         let ifs = interfaces()
         let vpn = loopbackVPNUp()
@@ -45,32 +72,23 @@ enum NetworkStatus {
     }
 
     static func loopbackVPNUp() -> Bool {
-        if tunnelIP() != nil { return true }
-        if deviceIP() != nil { return true }
-        return false
+        return !tunnelPairs().isEmpty
     }
 
     static func tunnelIP() -> String? {
-        for iface in interfaces() {
-            guard isTunnelInterface(iface.name) else { continue }
-            if isLoopbackRange(iface.ipv4) { return iface.ipv4 }
+        for p in tunnelPairs() {
+            if let peer = p.peer { return peer }
         }
         return nil
     }
 
     static func deviceIP() -> String? {
-        for iface in interfaces() {
-            if isLoopbackRange(iface.ipv4) && !iface.ipv4.hasPrefix("127.") {
-                return iface.ipv4
-            }
-        }
+        for p in tunnelPairs() { return p.local }
         return nil
     }
 
     static func isLoopbackRange(_ ip: String) -> Bool {
-        ip.hasPrefix("10.7.0.") || ip.hasPrefix("10.7.1.")
-            || ip.hasPrefix("10.7.2.") || ip.hasPrefix("10.7.3.")
-            || ip.hasPrefix("10.7.")
+        return ip.hasPrefix("10.7.")
     }
 
     static func isTunnelInterface(_ name: String) -> Bool {
