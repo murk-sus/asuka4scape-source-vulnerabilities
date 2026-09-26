@@ -25,7 +25,7 @@ jobs:
         with:
           xcode-version: "26.5"
 
-      - name: Cleanup
+      - name: Remove legacy workflow
         run: |
           rm -f .github/workflows/build_and_release.yml
           rm -f natsuk1/Views/SimpleList.swift
@@ -312,7 +312,7 @@ jobs:
           static int impl(void) {
               nk_log("");
               nk_log("================================================================");
-              nk_log("natsuk1 v4.1 — NECP recon");
+              nk_log("natsuk1 v4.3 — NECP recon");
               nk_log("iOS 27.0 / iPhone14,5 / 24A437");
               nk_log("================================================================");
               nk_log("");
@@ -533,7 +533,16 @@ jobs:
                       }
                   }
               }
-              func respring() { show_respring = true }
+              func respring() {
+                  DispatchQueue.main.async {
+                      guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                            let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first,
+                            let root = window.rootViewController else { return }
+                      let host = UIHostingController(rootView: RespringView().ignoresSafeArea())
+                      host.modalPresentationStyle = .fullScreen
+                      root.present(host, animated: false)
+                  }
+              }
               func clear() { LockedBuffer.shared.clear(); log = "" }
               func cancel() {
                   nk_necp_cancel()
@@ -560,9 +569,8 @@ jobs:
                   }
                   .tint(.accentColor)
                   .onReceive(NotificationCenter.default.publisher(for: Notification.Name("natsuk1.respring"))) { _ in
-                      state.show_respring = true
+                      state.respring()
                   }
-                  .overlay(RespringView().opacity(state.show_respring ? 1 : 0).ignoresSafeArea())
               }
           }
           EOF
@@ -733,19 +741,21 @@ jobs:
                                   .font(.system(size: 12, design: .monospaced))
                                   .foregroundStyle(loopbackVPNUp ? .green : .orange)
                           }
-                          HStack {
-                              Text("Tunnel")
-                              Spacer()
-                              Text(tunnelIP ?? "—")
-                                  .font(.system(size: 12, design: .monospaced))
-                                  .foregroundStyle(.secondary)
+                          if let t = tunnelIP {
+                              HStack {
+                                  Text("Tunnel")
+                                  Spacer()
+                                  Text(t).font(.system(size: 12, design: .monospaced))
+                                      .foregroundStyle(.secondary)
+                              }
                           }
-                          HStack {
-                              Text("Device")
-                              Spacer()
-                              Text(deviceIP ?? "—")
-                                  .font(.system(size: 12, design: .monospaced))
-                                  .foregroundStyle(.secondary)
+                          if let d = deviceIP {
+                              HStack {
+                                  Text("Device")
+                                  Spacer()
+                                  Text(d).font(.system(size: 12, design: .monospaced))
+                                      .foregroundStyle(.secondary)
+                              }
                           }
                           if !loopbackVPNUp {
                               Text("Start LocalDevVPN with interface 10.7.0.x")
@@ -764,10 +774,12 @@ jobs:
                                   .font(.system(size: 12, design: .monospaced))
                                   .foregroundStyle(pairingStatusColor)
                           }
-                          HStack(spacing: 8) {
-                              ProgressView().opacity(isPairing ? 1 : 0)
-                              Text(airlift.pairingStatus.isEmpty ? "Idle" : airlift.pairingStatus)
-                                  .font(.subheadline).foregroundStyle(.secondary)
+                          if isPairing {
+                              HStack(spacing: 8) {
+                                  ProgressView()
+                                  Text(airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus)
+                                      .font(.subheadline).foregroundStyle(.secondary)
+                              }
                           }
                           if let pin = airlift.pairPIN {
                               VStack(alignment: .leading, spacing: 8) {
@@ -1501,25 +1513,29 @@ jobs:
           chk() {
             if eval "$2" >/dev/null 2>&1; then echo "  OK   $1"; else echo "  FAIL $1"; FAIL=1; fi
           }
-          chk "nk_offsets.h"               "test -s natsuk1/Exploit/nk_offsets.h"
-          chk "necp.c"                     "test -s natsuk1/Exploit/necp.c"
-          chk "natsuk1.swift"              "test -s natsuk1/natsuk1.swift"
-          chk "ContentView.swift"          "test -s natsuk1/Views/ContentView.swift"
-          chk "OverviewView.swift"         "test -s natsuk1/Views/OverviewView.swift"
-          chk "RuntimeView.swift"          "test -s natsuk1/Views/RuntimeView.swift"
-          chk "AirliftView.swift"          "test -s natsuk1/Views/AirliftView.swift"
-          chk "SettingsView.swift"         "test -s natsuk1/Views/SettingsView.swift"
-          chk "ToolsView.swift"            "test -s natsuk1/Views/ToolsView.swift"
-          chk "AboutView.swift"            "test -s natsuk1/Views/AboutView.swift"
-          chk "DeviceInfoView.swift"       "test -s natsuk1/Views/DeviceInfoView.swift"
-          chk "PathAccessView.swift"       "test -s natsuk1/Views/PathAccessView.swift"
-          chk "offsets json"               "test -s natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
-          chk "SimpleList gone"            "! test -f natsuk1/Views/SimpleList.swift"
-          chk "no scaleEffect"             "! grep -rq -e 'scaleEffect' natsuk1/"
-          chk "no NotSupportedView"        "! grep -q -e 'NotSupportedView' natsuk1/natsuk1.swift"
-          chk "List in Overview"           "grep -q -e 'List {' natsuk1/Views/OverviewView.swift"
-          chk "List in Airlift"            "grep -q -e 'List {' natsuk1/Views/AirliftView.swift"
-          chk "build_and_release removed"  "! test -f .github/workflows/build_and_release.yml"
+          chk "nk_offsets.h"                    "test -s natsuk1/Exploit/nk_offsets.h"
+          chk "necp.c"                          "test -s natsuk1/Exploit/necp.c"
+          chk "natsuk1.swift"                   "test -s natsuk1/natsuk1.swift"
+          chk "ContentView.swift"               "test -s natsuk1/Views/ContentView.swift"
+          chk "OverviewView.swift"              "test -s natsuk1/Views/OverviewView.swift"
+          chk "RuntimeView.swift"               "test -s natsuk1/Views/RuntimeView.swift"
+          chk "AirliftView.swift"               "test -s natsuk1/Views/AirliftView.swift"
+          chk "SettingsView.swift"              "test -s natsuk1/Views/SettingsView.swift"
+          chk "ToolsView.swift"                 "test -s natsuk1/Views/ToolsView.swift"
+          chk "AboutView.swift"                 "test -s natsuk1/Views/AboutView.swift"
+          chk "DeviceInfoView.swift"            "test -s natsuk1/Views/DeviceInfoView.swift"
+          chk "PathAccessView.swift"            "test -s natsuk1/Views/PathAccessView.swift"
+          chk "offsets json"                    "test -s natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
+          chk "SimpleList gone"                 "! test -f natsuk1/Views/SimpleList.swift"
+          chk "no scaleEffect"                  "! grep -rq -e 'scaleEffect' natsuk1/"
+          chk "no NotSupportedView"             "! grep -q -e 'NotSupportedView' natsuk1/natsuk1.swift"
+          chk "no RespringView in ContentView"  "! grep -q -e 'RespringView' natsuk1/Views/ContentView.swift"
+          chk "RespringView presented by UIKit" "grep -q -e 'UIHostingController' natsuk1/natsuk1.swift"
+          chk "List in Overview"                "grep -q -e 'List {' natsuk1/Views/OverviewView.swift"
+          chk "List in Airlift"                 "grep -q -e 'List {' natsuk1/Views/AirliftView.swift"
+          chk "List in Settings"                "grep -q -e 'List {' natsuk1/Views/SettingsView.swift"
+          chk "List in Tools"                   "grep -q -e 'List {' natsuk1/Views/ToolsView.swift"
+          chk "build_and_release removed"       "! test -f .github/workflows/build_and_release.yml"
           python3 -c "import json; json.load(open('natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json'))" || FAIL=1
           echo "  OK   json valid"
           if [ "$FAIL" -ne 0 ]; then echo "VERIFY FAILED"; exit 1; fi
@@ -1564,7 +1580,7 @@ jobs:
           NOTES="$(cat <<EOF
           ### natsuk1 — iOS 27.0 (24A437)
 
-          v4.1 — List style restored, no if/else in List root.
+          v4.3 — RespringView moved out of SwiftUI tree (CoreAnimation UAF fix).
 
           **IPA** \`${IPA_URL}\`
 
@@ -1589,5 +1605,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "v4.1: restore List style, remove SimpleList, no if/else in List [skip ci]"
+          git commit -m "v4.3: RespringView out of SwiftUI tree (CoreAnimation UAF) [skip ci]"
           git push
