@@ -25,80 +25,57 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            SimpleList {
-                SimpleSection("App", systemImage: "exclamationmark.circle") {
+            List {
+                Section {
                     HStack(spacing: 14) {
-                        Group {
-                            if let icon = appIcon {
-                                Image(uiImage: icon).resizable().aspectRatio(contentMode: .fill)
-                            } else {
-                                ZStack {
-                                    LinearGradient(colors: [Color.accentColor, Color.accentColor.opacity(0.6)],
-                                                   startPoint: .topLeading, endPoint: .bottomTrailing)
-                                    Image(systemName: "bolt.fill").font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
-                                }
+                        if let icon = appIcon {
+                            Image(uiImage: icon).resizable().aspectRatio(contentMode: .fill)
+                                .frame(width: 56, height: 56)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        } else {
+                            ZStack {
+                                LinearGradient(colors: [Color.accentColor, Color.accentColor.opacity(0.6)],
+                                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                                Image(systemName: "bolt.fill").font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
                             }
+                            .frame(width: 56, height: 56)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
-                        .frame(width: 56, height: 56)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(appName).font(.title3).fontWeight(.semibold)
                             Text("Version \(version)").font(.subheadline).foregroundStyle(.secondary)
                         }
-                        Spacer()
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-
-                    Divider()
-
-                    NavigationLink { AboutView().environmentObject(state) } label: {
-                        HStack {
-                            Text("About")
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                    }
+                    NavigationLink { AboutView().environmentObject(state) } label: { Text("About") }
+                } header: {
+                    Label("App", systemImage: "exclamationmark.circle")
                 }
 
-                SimpleSection("Background Keep-Alive", systemImage: "moon.stars") {
+                Section {
                     Toggle(isOn: $keep_alive_audio) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Silent Audio")
-                            Text("Keeps the app running in the background.")
-                                .font(.caption).foregroundStyle(.secondary)
+                            Text("Keeps the app running in the background.").font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-
-                    Divider()
-
                     Toggle(isOn: $keep_alive_location) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Background Location")
-                            Text("Low-accuracy location keeps the app alive.")
-                                .font(.caption).foregroundStyle(.secondary)
+                            Text("Low-accuracy location keeps the app alive.").font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
+                } header: {
+                    Label("Background Keep-Alive", systemImage: "moon.stars")
                 }
 
-                SimpleSection("Options", systemImage: "slider.horizontal.3") {
+                Section {
                     Toggle("Auto Run on Launch", isOn: $auto_run)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                    Divider()
                     Toggle("Verbose Output", isOn: $verbose)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
+                } header: {
+                    Label("Options", systemImage: "slider.horizontal.3")
                 }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
         }

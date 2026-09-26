@@ -15,11 +15,6 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("natsuk1.respring"))) { _ in
             state.show_respring = true
         }
-        .overlay(
-            RespringView()
-                .opacity(state.show_respring ? 1 : 0)
-                .allowsHitTesting(state.show_respring)
-                .ignoresSafeArea()
-        )
+        .overlay(RespringView().opacity(state.show_respring ? 1 : 0).ignoresSafeArea())
     }
 }

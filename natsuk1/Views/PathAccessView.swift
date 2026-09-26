@@ -26,20 +26,17 @@ struct PathAccessView: View {
     @State private var busy = false
 
     private let paths: [String] = [
-        "/usr/lib/libMobileGestalt.dylib", "/usr/lib/libMobileActivation.dylib",
-        "/usr/lib/libmis.dylib", "/usr/lib/libsandbox.1.dylib",
-        "/usr/lib/system/libsystem_kernel.dylib", "/usr/lib/system/libsystem_sandbox.dylib",
-        "/System/Library/PrivateFrameworks/MobileGestalt.framework",
-        "/System/Library/CoreServices/SystemVersion.plist",
+        "/usr/lib/libMobileGestalt.dylib",
+        "/usr/lib/libMobileActivation.dylib",
+        "/usr/lib/libmis.dylib",
+        "/usr/lib/libsandbox.1.dylib",
         "/var/mobile/Library/Preferences/com.apple.MobileGestalt.plist",
         "/var/mobile/Library/Preferences/.GlobalPreferences.plist",
         "/var/mobile/Library/Preferences/com.apple.springboard.plist",
-        "/var/mobile/Library/Caches", "/var/mobile/Library/Logs", "/var/mobile/Library",
-        "/var/mobile/Media", "/var/mobile/Containers/Data/Application",
-        "/var/mobile/Containers/Data/System", "/var/mobile/Containers/Shared/AppGroup",
-        "/var/containers/Bundle/Application", "/var/containers/Shared/SystemGroup",
-        "/private/var/mobile", "/private/var/mobile/Library", "/private/etc/hosts", "/etc/hosts",
-        "/System/Library", "/System/Library/Frameworks", "/System/Library/PrivateFrameworks",
+        "/var/mobile/Library/Caches",
+        "/var/mobile/Library",
+        "/var/mobile/Containers/Data/Application",
+        "/var/containers/Bundle/Application",
         NSHomeDirectory(),
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path,
         FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].path,
@@ -55,31 +52,61 @@ struct PathAccessView: View {
     ]
 
     var body: some View {
-        SimpleList {
-            SimpleSection("Summary", systemImage: "chart.bar") {
-                summaryRow("Paths", "\(results.filter { $0.exists }.count)/\(results.count)")
-                Divider()
-                summaryRow("Readable", "\(results.filter { $0.readable }.count)")
-                Divider()
-                summaryRow("Writable", "\(results.filter { $0.writable }.count)")
-                Divider()
-                summaryRow("Libraries", "\(libs.filter { $0.loaded }.count)/\(libs.count)")
-                Divider()
+        List {
+            Section {
+                HStack { Text("Paths"); Spacer(); Text("\(results.filter { $0.exists }.count)/\(results.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
+                HStack { Text("Readable"); Spacer(); Text("\(results.filter { $0.readable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
+                HStack { Text("Writable"); Spacer(); Text("\(results.filter { $0.writable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
+                HStack { Text("Libraries"); Spacer(); Text("\(libs.filter { $0.loaded }.count)/\(libs.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
                 Button { scan() } label: {
                     HStack {
                         Text(busy ? "Scanning..." : "Run Scan")
                         Spacer()
                         ProgressView().opacity(busy ? 1 : 0)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                }
-                .disabled(busy)
+                }.disabled(busy)
+            } header: {
+                Label("Summary", systemImage: "chart.bar")
             }
 
-            libsSection
-            pathsSection
+            Section {
+                ForEach(libs) { r in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text(r.name).font(.system(size: 12, weight: .semibold))
+                            badge(r.loaded ? "loaded" : "no", color: r.loaded ? .green : .red)
+                        }
+                        Text(r.path).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).lineLimit(2)
+                        HStack(spacing: 4) {
+                            ForEach(r.symbols, id: \.self) { sym in
+                                badge(sym, color: r.foundSymbols.contains(sym) ? .green : .gray)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Label("Libraries", systemImage: "books.vertical")
+            }
+
+            Section {
+                ForEach(results) { r in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(r.path).font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(r.exists ? .primary : .secondary).lineLimit(2)
+                        HStack(spacing: 6) {
+                            badge(r.exists ? "exists" : "missing", color: r.exists ? .green : .red)
+                            if r.isDirectory { badge("dir", color: .blue) }
+                            if r.readable { badge("r", color: .green) }
+                            if r.writable { badge("w", color: .orange) }
+                            if let s = r.size { badge("\(s)B", color: .gray) }
+                        }
+                    }
+                }
+            } header: {
+                Label("Paths", systemImage: "folder")
+            }
         }
+        .listStyle(.insetGrouped)
         .navigationTitle("Path Access")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -94,62 +121,6 @@ struct PathAccessView: View {
             }
         }
         .onAppear { if results.isEmpty { scan() } }
-    }
-
-    private var libsSection: some View {
-        SimpleSection("Libraries", systemImage: "books.vertical") {
-            ForEach(Array(libs.enumerated()), id: \.element.id) { idx, r in
-                if idx > 0 { Divider() }
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Text(r.name).font(.system(size: 12, weight: .semibold))
-                        badge(r.loaded ? "loaded" : "no", color: r.loaded ? .green : .red)
-                    }
-                    Text(r.path).font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary).lineLimit(2)
-                    if !r.symbols.isEmpty {
-                        HStack(spacing: 4) {
-                            ForEach(r.symbols, id: \.self) { sym in
-                                badge(sym, color: r.foundSymbols.contains(sym) ? .green : .gray)
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            }
-        }
-    }
-
-    private var pathsSection: some View {
-        SimpleSection("Paths", systemImage: "folder") {
-            ForEach(Array(results.enumerated()), id: \.element.id) { idx, r in
-                if idx > 0 { Divider() }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(r.path).font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(r.exists ? .primary : .secondary).lineLimit(2)
-                    HStack(spacing: 6) {
-                        badge(r.exists ? "exists" : "missing", color: r.exists ? .green : .red)
-                        if r.isDirectory { badge("dir", color: .blue) }
-                        if r.readable { badge("r", color: .green) }
-                        if r.writable { badge("w", color: .orange) }
-                        if let s = r.size { badge("\(s)B", color: .gray) }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            }
-        }
-    }
-
-    private func summaryRow(_ key: String, _ value: String) -> some View {
-        HStack {
-            Text(key)
-            Spacer()
-            Text(value).font(.system(.body, design: .monospaced)).foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
     }
 
     private func badge(_ text: String, color: Color) -> some View {

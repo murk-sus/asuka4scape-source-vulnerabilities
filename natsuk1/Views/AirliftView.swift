@@ -12,12 +12,154 @@ struct AirliftView: View {
     private let ticker = Timer.publish(every: 5.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        SimpleList {
-            networkSection
-            pairingOrExploit
-            logSection
-            logActionsSection
+        List {
+            Section {
+                HStack {
+                    Text("Status")
+                    Spacer()
+                    Text(loopbackVPNUp ? "active" : "not active")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(loopbackVPNUp ? .green : .orange)
+                }
+                HStack {
+                    Text("Tunnel")
+                    Spacer()
+                    Text(tunnelIP ?? "—")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Text("Device")
+                    Spacer()
+                    Text(deviceIP ?? "—")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                if !loopbackVPNUp {
+                    Text("Start LocalDevVPN with interface 10.7.0.x")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Label("Network", systemImage: "network")
+            }
+
+            Section {
+                HStack {
+                    Text("State")
+                    Spacer()
+                    Text(pairingStatusText)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(pairingStatusColor)
+                }
+                HStack(spacing: 8) {
+                    ProgressView().opacity(isPairing ? 1 : 0)
+                    Text(airlift.pairingStatus.isEmpty ? "Idle" : airlift.pairingStatus)
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                if let pin = airlift.pairPIN {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("ENTER PIN").font(.caption2.bold()).foregroundStyle(.secondary)
+                        Text(pin).font(.system(size: 34, weight: .black, design: .monospaced))
+                            .foregroundStyle(.orange)
+                        Button {
+                            if let url = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(url)
+                            }
+                        } label: {
+                            Text("Open Settings").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent).tint(.orange)
+                    }
+                    .padding(12)
+                    .background(Color.orange.opacity(0.12),
+                                in: RoundedRectangle(cornerRadius: 12))
+                }
+            } header: {
+                Label("Pairing", systemImage: "link.circle")
+            }
+
+            Section {
+                Button(role: .destructive) { airlift.cancelPairing() } label: {
+                    Text("Cancel Pairing")
+                }
+                .disabled(!isPairing)
+
+                Button { airlift.runPairing() } label: {
+                    Text("Start Pairing")
+                }
+                .disabled(isPairing)
+            }
+
+            Section {
+                HStack {
+                    Text("Target")
+                    Spacer()
+                    TextField("/var/mobile/Library/SpringBoard", text: Binding(
+                        get: { airlift.target }, set: { airlift.target = $0 }))
+                        .font(.system(size: 12, design: .monospaced))
+                        .multilineTextAlignment(.trailing)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                }
+            } header: {
+                Label("Target", systemImage: "scope")
+            }
+
+            Section {
+                Button { airlift.runExploit() } label: {
+                    Text("Run Exploit")
+                }
+                .disabled(airlift.state == .running || !loopbackVPNUp || !airlift.hasPairing())
+
+                Button(role: .destructive) { airlift.cancelExploit() } label: {
+                    Text("Cancel Exploit")
+                }
+                .disabled(airlift.state != .running)
+
+                Button { respring() } label: {
+                    Text("Respring")
+                }
+            } header: {
+                Label("Exploit", systemImage: "cpu")
+            }
+
+            Section {
+                Button(role: .destructive) { airlift.deletePairing() } label: {
+                    Text("Delete Pairing")
+                }
+                .disabled(!airlift.hasPairing())
+            }
+
+            Section {
+                LogTerminal(text: airlift.exploitLog.isEmpty
+                            ? "No output yet."
+                            : airlift.exploitLog.joined(separator: "\n"))
+            } header: {
+                Label("Log", systemImage: "terminal")
+            }
+
+            Section {
+                Button {
+                    UIPasteboard.general.string = airlift.exploitLog.joined(separator: "\n")
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        copied = false
+                    }
+                } label: {
+                    Text(copied ? "Copied!" : "Copy All")
+                }
+                .disabled(airlift.exploitLog.isEmpty)
+
+                Button(role: .destructive) { airlift.clearLog() } label: {
+                    Text("Clear")
+                }
+                .disabled(airlift.exploitLog.isEmpty)
+            } header: {
+                Label("Log Actions", systemImage: "document.on.document")
+            }
         }
+        .listStyle(.insetGrouped)
         .navigationTitle("Airlift")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { refresh() }
@@ -34,111 +176,6 @@ struct AirliftView: View {
                 if self.loopbackVPNUp != vpn { self.loopbackVPNUp = vpn }
                 if self.tunnelIP != tun { self.tunnelIP = tun }
                 if self.deviceIP != dev { self.deviceIP = dev }
-            }
-        }
-    }
-
-    private var networkSection: some View {
-        SimpleSection("Network", systemImage: "network") {
-            HStack {
-                Text("Status")
-                Spacer()
-                Text(loopbackVPNUp ? "active" : "not active")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(loopbackVPNUp ? .green : .orange)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-
-            if let t = tunnelIP {
-                Divider()
-                HStack {
-                    Text("Tunnel")
-                    Spacer()
-                    Text(t)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-            }
-
-            if let d = deviceIP {
-                Divider()
-                HStack {
-                    Text("Device")
-                    Spacer()
-                    Text(d)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-            }
-
-            if !loopbackVPNUp {
-                Divider()
-                Text("Start LocalDevVPN with interface 10.7.0.x")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-            }
-        }
-    }
-
-    private var pairingOrExploit: some View {
-        Group {
-            if airlift.hasPairing() {
-                exploitSection
-            } else {
-                pairingSection
-            }
-        }
-    }
-
-    private var pairingSection: some View {
-        Group {
-            SimpleSection("Pairing", systemImage: "link.circle") {
-                HStack {
-                    Text("State")
-                    Spacer()
-                    Text(pairingStatusText)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(pairingStatusColor)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-
-                HStack(spacing: 8) {
-                    ProgressView().opacity(isPairing ? 1 : 0)
-                    Text(airlift.pairingStatus.isEmpty ? "Idle" : airlift.pairingStatus)
-                        .font(.subheadline).foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-            }
-
-            SimpleSection("Actions", systemImage: "hand.tap") {
-                Button(role: .destructive) { airlift.cancelPairing() } label: {
-                    Text("Cancel Pairing")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                }
-                .opacity(isPairing ? 1 : 0)
-                .disabled(!isPairing)
-                .frame(height: isPairing ? nil : 0)
-
-                Button { airlift.runPairing() } label: {
-                    Text("Start Pairing")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                }
-                .opacity(isPairing ? 0 : 1)
-                .disabled(isPairing)
-                .frame(height: isPairing ? 0 : nil)
             }
         }
     }
@@ -168,115 +205,10 @@ struct AirliftView: View {
         }
     }
 
-    private var exploitSection: some View {
-        Group {
-            SimpleSection("Pairing", systemImage: "link.circle") {
-                HStack {
-                    Text("State")
-                    Spacer()
-                    Text(pairingStatusText)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(pairingStatusColor)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-
-                Divider()
-
-                HStack {
-                    Text("Target")
-                    Spacer()
-                    TextField("/var/mobile/Library/SpringBoard", text: Binding(
-                        get: { airlift.target }, set: { airlift.target = $0 }))
-                        .font(.system(size: 12, design: .monospaced))
-                        .multilineTextAlignment(.trailing)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-            }
-
-            SimpleSection("Exploit", systemImage: "cpu") {
-                Button { airlift.runExploit() } label: {
-                    Text("Run Exploit")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                }
-                .disabled(airlift.state == .running || !loopbackVPNUp)
-
-                Divider()
-
-                Button(role: .destructive) { airlift.cancelExploit() } label: {
-                    Text("Cancel Exploit")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                }
-                .disabled(airlift.state != .running)
-
-                Divider()
-
-                Button { respring() } label: {
-                    Text("Respring")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                }
-            }
-
-            SimpleSection("Danger", systemImage: "exclamationmark.triangle") {
-                Button(role: .destructive) { airlift.deletePairing() } label: {
-                    Text("Delete Pairing")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                }
-            }
-        }
-    }
-
     private func respring() {
         NotificationCenter.default.post(
             name: Notification.Name("natsuk1.respring"),
             object: nil
         )
-    }
-
-    private var logSection: some View {
-        SimpleSection("Log", systemImage: "terminal") {
-            LogTerminal(text: airlift.exploitLog.isEmpty
-                        ? "No output yet."
-                        : airlift.exploitLog.joined(separator: "\n"))
-        }
-    }
-
-    private var logActionsSection: some View {
-        SimpleSection("Log Actions", systemImage: "document.on.document") {
-            Button {
-                UIPasteboard.general.string = airlift.exploitLog.joined(separator: "\n")
-                copied = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                    copied = false
-                }
-            } label: {
-                Text(copied ? "Copied!" : "Copy All")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-            }
-            .disabled(airlift.exploitLog.isEmpty)
-
-            Divider()
-
-            Button(role: .destructive) { airlift.clearLog() } label: {
-                Text("Clear")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-            }
-            .disabled(airlift.exploitLog.isEmpty)
-        }
     }
 }

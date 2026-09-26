@@ -18,32 +18,29 @@ struct AboutView: View {
     }
 
     var body: some View {
-        SimpleList {
-            SimpleSection("About", systemImage: "info.circle") {
+        List {
+            Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(appName).font(.title2).fontWeight(.semibold)
                     Text("Version \(version) (\(build))").font(.subheadline).foregroundStyle(.secondary)
                     Text("Research project iOS.").font(.footnote).foregroundStyle(.secondary)
                 }
-                .padding(12)
+                .padding(.vertical, 6)
             }
-
-            SimpleSection("Open Source", systemImage: "doc.text") {
+            Section {
                 linkRow("Source Repository", url: repoURL)
-                Divider()
                 linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
-            }
-
-            SimpleSection("Community", systemImage: "star") {
+            } header: { Text("Open Source") }
+            Section {
                 linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
-            }
-
-            SimpleSection("Disclaimer", systemImage: "exclamationmark.triangle") {
+            } header: { Text("Community") }
+            Section { } header: { Text("Disclaimer") }
+            footer: {
                 Text("Independent research project. Not affiliated with Apple Inc.")
                     .font(.footnote).foregroundStyle(.secondary)
-                    .padding(12)
             }
         }
+        .listStyle(.insetGrouped)
         .navigationTitle("About")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -53,12 +50,8 @@ struct AboutView: View {
             HStack {
                 Text(title).foregroundStyle(.tint)
                 Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
         }.buttonStyle(.plain)
     }
 }
