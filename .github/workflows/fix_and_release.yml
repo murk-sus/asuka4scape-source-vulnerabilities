@@ -106,12 +106,24 @@ jobs:
           #include <errno.h>
           #include <sys/syscall.h>
           #include <mach/mach.h>
-          #include <mach/mach_vm.h>
           #include <mach/message.h>
           #include <mach/vm_region.h>
 
           #include "nk_api.h"
           #include "nk_offsets.h"
+
+          extern kern_return_t mach_vm_read_overwrite(
+              vm_map_t target_task,
+              mach_vm_address_t address,
+              mach_vm_size_t size,
+              mach_vm_address_t data,
+              mach_vm_size_t *outsize);
+
+          extern kern_return_t mach_vm_write(
+              vm_map_t target_task,
+              mach_vm_address_t address,
+              vm_offset_t data,
+              mach_msg_type_number_t dataCnt);
 
           #ifndef SYS_NECP_OPEN
           #define SYS_NECP_OPEN 501
@@ -417,6 +429,24 @@ jobs:
               nk_log("[!] cancel requested");
           }
           ENDOFFILE
+
+      - name: Patch natsuk1.swift
+        run: |
+          python3 - <<'ENDOFPY'
+          import re, sys
+          p = "natsuk1/natsuk1.swift"
+          s = open(p).read()
+          orig = s
+
+          s = s.replace("    static let shared = AppState()",
+                        "    nonisolated(unsafe) static let shared = AppState()")
+
+          if s == orig:
+              print("no change to natsuk1.swift (already patched?)")
+          else:
+              open(p, "w").write(s)
+              print("patched natsuk1.swift")
+          ENDOFPY
 
       - name: Install tools
         run: |
