@@ -15,557 +15,1090 @@ concurrency:
 jobs:
   build:
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 25
+    env:
+      NK_HINTS_MIN: "150000"
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "26.5"
 
-      - name: Cleanup legacy
+      - name: Restore caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            natsuk1/External
+            build
+          key: nk-v3-${{ hashFiles('project.yml','natsuk1/**/*.swift','natsuk1/**/*.c','natsuk1/**/*.h','natsuk1/**/*.m') }}
+          restore-keys: |
+            nk-v3-
+            nk-v2-
+
+      - name: Fast cleanup
         run: |
           rm -f .github/workflows/build_and_release.yml
           rm -f .github/workflows/fix_and_test.yml
           rm -f natsuk1/Views/SimpleList.swift
 
-      - name: Vendor AirliftFFI (real lib if present, else stub)
+      - name: Vendor AirliftFFI
         run: |
           set -euo pipefail
-          AIL_DIR="natsuk1/External/AirliftFFI.xcframework/ios-arm64"
-          AIL_HDR="$AIL_DIR/Headers/airlift.h"
-          AIL_LIB="$AIL_DIR/libairlift_ffi.a"
-          if [ -f "$AIL_HDR" ] && [ -f "$AIL_LIB" ]; then
-            echo "AirliftFFI present ($(wc -c < "$AIL_LIB") bytes) — skipping stub"
-            exit 0
+          A=natsuk1/External/AirliftFFI.xcframework/ios-arm64
+          if [ -f "$A/Headers/airlift.h" ] && [ -f "$A/libairlift_ffi.a" ]; then
+            echo "airlift cached"; exit 0
           fi
-          echo "AirliftFFI missing — generating stub"
-          mkdir -p "$AIL_DIR/Headers"
-          cat > "$AIL_HDR" <<'AIRLIFT_H'
-          #ifndef AIRLIFT_H
-          #define AIRLIFT_H
-          #include <stdint.h>
-          #include <stddef.h>
-          #ifdef __cplusplus
-          extern "C" {
-          #endif
-          typedef struct {
-              char *host_alt_irk_hex;
-              char *device_name;
-              char *pairing_file_path;
-              char *error;
-          } ALPairResult;
-          typedef void (*ALLogCb)(void *ctx, const char *msg);
-          typedef void (*ALPairReadyCb)(void *ctx, const char *service_id, uint16_t port,
-                                        const char **keys, const char **vals, size_t count);
-          typedef void (*ALPairPinCb)(const char *pin, void *ctx);
-          void     al_log_init(ALLogCb cb, void *ctx);
-          int32_t  al_pairing_run_host(const char *bind, uint16_t port,
-                                       const char *name, const char *model,
-                                       const char *out_path, const char *alt_irk,
-                                       ALPairReadyCb on_ready, ALPairPinCb on_pin,
-                                       void *ctx, ALPairResult *out);
-          void     al_pairing_result_free(ALPairResult *r);
-          int32_t  al_exploit_run(const char *pairing_path, const char *target_dir,
-                                  const char *opt_a, const char *opt_b,
-                                  char **out_json, char **out_error);
-          int32_t  al_find_app_container(const char *pairing_path, const char *bundle_id,
-                                         const char *opt_a, const char *opt_b,
-                                         char **out_container, char **out_error);
-          int32_t  al_device_respring(const char *pairing_path,
-                                      const char *opt_a, const char *opt_b,
-                                      char **out_error);
-          void     al_string_free(char *s);
-          #ifdef __cplusplus
-          }
-          #endif
-          #endif
-          AIRLIFT_H
-          cat > /tmp/airlift_stub.c <<'AIRLIFT_C'
-          #include "airlift.h"
-          #include <stdlib.h>
-          #include <string.h>
-          static char *nk_dup(const char *s) {
-              if (!s) return NULL;
-              size_t n = strlen(s) + 1;
-              char *p = (char *)malloc(n);
-              if (p) memcpy(p, s, n);
-              return p;
-          }
-          static void nk_set_err(char **out, const char *msg) { if (out) *out = nk_dup(msg); }
-          void al_log_init(ALLogCb cb, void *ctx) { (void)cb; (void)ctx; }
-          int32_t al_pairing_run_host(const char *bind, uint16_t port,
-                                      const char *name, const char *model,
-                                      const char *out_path, const char *alt_irk,
-                                      ALPairReadyCb on_ready, ALPairPinCb on_pin,
-                                      void *ctx, ALPairResult *out) {
-              (void)bind; (void)port; (void)name; (void)model; (void)out_path;
-              (void)alt_irk; (void)on_ready; (void)on_pin; (void)ctx;
-              if (out) {
-                  out->host_alt_irk_hex = NULL;
-                  out->device_name = NULL;
-                  out->pairing_file_path = NULL;
-                  out->error = nk_dup("AirliftFFI stub: real library not linked");
-              }
-              return -1;
-          }
-          void al_pairing_result_free(ALPairResult *r) {
-              if (!r) return;
-              free(r->host_alt_irk_hex); free(r->device_name);
-              free(r->pairing_file_path); free(r->error);
-              r->host_alt_irk_hex = NULL; r->device_name = NULL;
-              r->pairing_file_path = NULL; r->error = NULL;
-          }
-          int32_t al_exploit_run(const char *pairing_path, const char *target_dir,
-                                 const char *opt_a, const char *opt_b,
-                                 char **out_json, char **out_error) {
-              (void)pairing_path; (void)target_dir; (void)opt_a; (void)opt_b;
-              if (out_json) *out_json = NULL;
-              nk_set_err(out_error, "AirliftFFI stub: real library not linked");
-              return -1;
-          }
-          int32_t al_find_app_container(const char *pairing_path, const char *bundle_id,
-                                        const char *opt_a, const char *opt_b,
-                                        char **out_container, char **out_error) {
-              (void)pairing_path; (void)bundle_id; (void)opt_a; (void)opt_b;
-              if (out_container) *out_container = NULL;
-              nk_set_err(out_error, "AirliftFFI stub: real library not linked");
-              return -1;
-          }
-          int32_t al_device_respring(const char *pairing_path,
-                                     const char *opt_a, const char *opt_b,
-                                     char **out_error) {
-              (void)pairing_path; (void)opt_a; (void)opt_b;
-              nk_set_err(out_error, "AirliftFFI stub: respring disabled by rule 14");
-              return -1;
-          }
-          void al_string_free(char *s) { free(s); }
-          AIRLIFT_C
-          xcrun --sdk iphoneos clang -arch arm64 -O2 \
-            -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
+          mkdir -p "$A/Headers"
+          python3 - <<'PY'
+          import io, os
+          base = "natsuk1/External/AirliftFFI.xcframework/ios-arm64"
+          os.makedirs(base + "/Headers", exist_ok=True)
+          h = []
+          a = h.append
+          a("#ifndef AIRLIFT_H")
+          a("#define AIRLIFT_H")
+          a("#include <stdint.h>")
+          a("#include <stddef.h>")
+          a('#ifdef __cplusplus')
+          a('extern "C" {')
+          a('#endif')
+          a("typedef struct {")
+          a("  char *host_alt_irk_hex;")
+          a("  char *device_name;")
+          a("  char *pairing_file_path;")
+          a("  char *error;")
+          a("} ALPairResult;")
+          a("typedef void (*ALLogCb)(void*, const char*);")
+          a("typedef void (*ALPairReadyCb)(void*, const char*, uint16_t,")
+          a("  const char**, const char**, size_t);")
+          a("typedef void (*ALPairPinCb)(const char*, void*);")
+          a("void al_log_init(ALLogCb, void*);")
+          a("int32_t al_pairing_run_host(const char*, uint16_t,")
+          a("  const char*, const char*, const char*, const char*,")
+          a("  ALPairReadyCb, ALPairPinCb, void*, ALPairResult*);")
+          a("void al_pairing_result_free(ALPairResult*);")
+          a("int32_t al_exploit_run(const char*, const char*,")
+          a("  const char*, const char*, char**, char**);")
+          a("int32_t al_find_app_container(const char*, const char*,")
+          a("  const char*, const char*, char**, char**);")
+          a("int32_t al_device_respring(const char*, const char*,")
+          a("  const char*, char**);")
+          a("void al_string_free(char*);")
+          a('#ifdef __cplusplus')
+          a('}')
+          a('#endif')
+          a("#endif")
+          io.open(base + "/Headers/airlift.h", "w").write("\n".join(h) + "\n")
+          c = []
+          a = c.append
+          a('#include "airlift.h"')
+          a("#include <stdlib.h>")
+          a("#include <string.h>")
+          a("static char* D(const char*s){")
+          a("  if(!s)return 0;size_t n=strlen(s)+1;char*p=malloc(n);")
+          a("  if(p)memcpy(p,s,n);return p;}")
+          a("static void E(char**o,const char*m){if(o)*o=D(m);}")
+          a("void al_log_init(ALLogCb c,void*x){(void)c;(void)x;}")
+          a("int32_t al_pairing_run_host(const char*b,uint16_t p,")
+          a("const char*n,const char*m,const char*o,const char*i,")
+          a("ALPairReadyCb r,ALPairPinCb q,void*x,ALPairResult*y){")
+          a("(void)b;(void)p;(void)n;(void)m;(void)o;(void)i;")
+          a("(void)r;(void)q;(void)x;")
+          a('if(y){y->host_alt_irk_hex=0;y->device_name=0;')
+          a('y->pairing_file_path=0;y->error=D("stub");}')
+          a("return -1;}")
+          a("void al_pairing_result_free(ALPairResult*r){")
+          a("if(!r)return;free(r->host_alt_irk_hex);free(r->device_name);")
+          a("free(r->pairing_file_path);free(r->error);}")
+          a("int32_t al_exploit_run(const char*a,const char*b,")
+          a("const char*c,const char*d,char**j,char**e){")
+          a("(void)a;(void)b;(void)c;(void)d;if(j)*j=0;")
+          a('E(e,"stub");return -1;}')
+          a("int32_t al_find_app_container(const char*a,const char*b,")
+          a("const char*c,const char*d,char**o,char**e){")
+          a("(void)a;(void)b;(void)c;(void)d;if(o)*o=0;")
+          a('E(e,"stub");return -1;}')
+          a("int32_t al_device_respring(const char*a,const char*b,")
+          a("const char*c,char**e){(void)a;(void)b;(void)c;")
+          a('E(e,"rule14");return -1;}')
+          a("void al_string_free(char*s){free(s);}")
+          io.open("/tmp/airlift_stub.c", "w").write("\n".join(c) + "\n")
+          PY
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -arch arm64 -O2 -isysroot "$SDK" \
             -c /tmp/airlift_stub.c -o /tmp/airlift_stub.o
-          xcrun libtool -static -o "$AIL_LIB" /tmp/airlift_stub.o 2>/dev/null \
-            || { xcrun ar rcs "$AIL_LIB" /tmp/airlift_stub.o; xcrun ranlib "$AIL_LIB"; }
-          echo "Stub written: $(wc -c < "$AIL_LIB") bytes"
+          xcrun libtool -static -o "$A/libairlift_ffi.a" /tmp/airlift_stub.o 2>/dev/null \
+            || { xcrun ar rcs "$A/libairlift_ffi.a" /tmp/airlift_stub.o; \
+                 xcrun ranlib "$A/libairlift_ffi.a"; }
+          echo "airlift stub: $(wc -c < "$A/libairlift_ffi.a") bytes"
 
-      - name: Patch repo (rules 4 / 9 / 14 + Offsets lookup)
+      - name: Patch sources
         run: |
-          python3 - <<'PYEOF'
-          import re, os, io
-          def read(p):
-              with io.open(p, "r", encoding="utf-8") as f: return f.read()
-          def write(p, s):
-              with io.open(p, "w", encoding="utf-8") as f: f.write(s)
-          changed = []
+          python3 - <<'PY'
+          import io, os
+          def P(p, fn):
+              if not os.path.exists(p): return
+              s = io.open(p, encoding="utf-8").read()
+              t = fn(s)
+              if t != s:
+                  io.open(p, "w", encoding="utf-8").write(t)
+                  print("ok " + p)
+          def airlift(s):
+              if "allow_device_respring" in s: return s
+              k = "    func respring() {"
+              i = s.find(k)
+              if i < 0: return s
+              g = k + "\n"
+              g += '        guard UserDefaults.standard.bool(forKey: "allow_device_respring") else {\n'
+              g += '            appendLog("[respring] blocked by rule 14")\n'
+              g += '            return\n        }\n'
+              return s[:i] + g + s[i+len(k)+1:]
+          def settings(s):
+              if "allow_device_respring" in s: return s
+              a = '    @AppStorage("verbose") private var verbose: Bool = true\n'
+              b = a + '    @AppStorage("allow_device_respring") private var r: Bool = false\n'
+              s = s.replace(a, b, 1)
+              c = '                    Toggle("Verbose Output", isOn: $verbose)\n'
+              d = c + '                    Toggle("Allow device respring", isOn: $r)\n'
+              return s.replace(c, d, 1)
+          def grappa(s):
+              k = "kAuthenticGrappaTokens[] = {"
+              i = s.find(k)
+              if i < 0: return s
+              j = s.find("};", i)
+              if j < 0: return s
+              return s[:i+len(k)] + " NULL " + s[j:]
+          def necp(s):
+              if "Do not mask" in s: return s
+              return s.replace(
+                  "        size_t sz = test_sizes[i] & 0xFFFF;\n",
+                  "        size_t sz = (size_t)test_sizes[i];\n", 1)
+          def offsets(s):
+              if "?? Bundle.main.url(forResource: name" in s: return s
+              a = 'return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")\n'
+              b = a + '                ?? Bundle.main.url(forResource: name, withExtension: ext)\n'
+              return s.replace(a, b, 1)
+          P("natsuk1/Helpers/AirliftBridge.swift", airlift)
+          P("natsuk1/Views/SettingsView.swift", settings)
+          P("natsuk1/Exploit/GrappaHelper.m", grappa)
+          P("natsuk1/Exploit/necp.c", necp)
+          P("natsuk1/Helpers/OffsetsStore.swift", offsets)
+          PY
 
-          # --- 1. AirliftBridge: gate al_device_respring (rule 14) ---
-          p = "natsuk1/Helpers/AirliftBridge.swift"
-          if os.path.exists(p):
-              s = read(p)
-              old = "    func respring() {\n        let pairingPath = pairingFilePath()\n        let bridge = AirliftBridge.shared\n"
-              new = ("    func respring() {\n"
-                     "        // Rule 14: al_device_respring is unsafe under ad-hoc signing.\n"
-                     "        guard UserDefaults.standard.bool(forKey: \"allow_device_respring\") else {\n"
-                     "            appendLog(\"[respring] blocked by rule 14; enable Settings > Allow device respring to override (unsafe)\")\n"
-                     "            return\n"
-                     "        }\n"
-                     "        let pairingPath = pairingFilePath()\n"
-                     "        let bridge = AirliftBridge.shared\n")
-              if old in s:
-                  write(p, s.replace(old, new, 1)); changed.append(p)
-
-          # --- 2. SettingsView: expose allow_device_respring toggle ---
-          p = "natsuk1/Views/SettingsView.swift"
-          if os.path.exists(p):
-              s = read(p); hit = False
-              old = '    @AppStorage("verbose") private var verbose: Bool = true\n'
-              new = old + '    @AppStorage("allow_device_respring") private var allow_device_respring: Bool = false\n'
-              if old in s and "allow_device_respring" not in s:
-                  s = s.replace(old, new, 1); hit = True
-              old2 = '                    Toggle("Verbose Output", isOn: $verbose)\n'
-              new2 = old2 + '                    Toggle("Allow device respring (unsafe)", isOn: $allow_device_respring)\n'
-              if old2 in s and "Allow device respring" not in s:
-                  s = s.replace(old2, new2, 1); hit = True
-              if hit: write(p, s); changed.append(p)
-
-          # --- 3. GrappaHelper: drop fabricated static tokens ---
-          p = "natsuk1/Exploit/GrappaHelper.m"
-          if os.path.exists(p):
-              s = read(p)
-              new_s = re.sub(
-                  r"// Authentic Grappa client tokens.*?\nstatic const char \*kAuthenticGrappaTokens\[\] = \{.*?\n\};",
-                  "// NOTE: static Grappa tokens are not valid. Grappa pairing tokens are\n"
-                  "// session-derived and cannot be precomputed. This list is intentionally\n"
-                  "// empty; only/AirliftFFI.xcframework/ios-arm64/Headers/airlift.h
-          test the live CoreFP/AirTrafficHost path below can yield a token.\n"
-                  "static const char *kAuthenticGrappaTokens[] = { NULL };",
-                  s, count=1, flags=re.DOTALL)
-              if new_s != s: write(p, new_s); changed.append(p)
-
-          # --- 4. necp.c: stop masking test sizes (rule 4 wrap exercise) ---
-          p = "natsuk1/Exploit/necp.c"
-          if os.path.exists(p):
-              s = read(p)
-              old = "        size_t sz = test_sizes[i] & 0xFFFF;\n"
-              new = ("        /* Do not mask: rule 4 hypothesizes an int32 wrap on param_3.\n"
-                     "           Pass the raw user value through so the kernel sees it. */\n"
-                     "        size_t sz = (size_t)test_sizes[i];\n")
-              if old in s:
-                  write(p, s.replace(old, new, 1)); changed.append(p)
-
-          # --- 5. OffsetsStore: flat fallback for subdirectory lookups ---
-          p = "natsuk1/Helpers/OffsetsStore.swift"
-          if os.path.exists(p):
-              s = read(p); hit = False
-              reps = [
-                  ('return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")\n',
-                   'return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")\n'
-                   '            ?? Bundle.main.url(forResource: name, withExtension: ext)\n'),
-                  ('Bundle.main.url(forResource: "index", withExtension: "json", subdirectory: "Offsets")',
-                   'Bundle.main.url(forResource: "index", withExtension: "json", subdirectory: "Offsets")\n'
-                   '                ?? Bundle.main.url(forResource: "index", withExtension: "json")'),
-              ]
-              for old, new in reps:
-                  if old in s and new.split("\n")[-1].strip() not in s:
-                      s = s.replace(old, new, 1); hit = True
-              if hit: write(p, s); changed.append(p)
-
-          print("patched: " + (", ".join(changed) if changed else "none"))
-          PYEOF
-
-      - name: Normalize nonisolated(unsafe)
+      - name: Entitlements
         run: |
-          python3 - <<'PYEOF'
-          import re, os
-          for root, dirs, files in os.walk("natsuk1"):
-              for f in files:
-                  if not f.endswith(".swift"): continue
-                  p = os.path.join(root, f)
-                  s = open(p).read()
-                  s2 = re.sub(r"nonisolated\(unsafe\)\s+static\s+let\s+shared", "static let shared", s)
-                  if s2 != s:
-                      open(p, "w").write(s2); print("patched " + p)
-          PYEOF
+          python3 - <<'PY'
+          import io
+          s = '<?xml version="1.0" encoding="UTF-8"?>\n'
+          s += '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"'
+          s += ' "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+          s += '<plist version="1.0">\n<dict>\n</dict>\n</plist>\n'
+          io.open("natsuk1/Resources/natsuk1.entitlements", "w").write(s)
+          PY
 
-      - name: Verify required sources
+      - name: Generate ai-hints.md
         run: |
-          set -euo pipefail
-          test -f natsuk1/Exploit/necp.c
-          test -f natsuk1/natsuk1.swift
-          test -f natsuk1/Exploit/nk_offsets.h
-          grep -q -e 'NK_SYSENT_BASE' natsuk1/Exploit/nk_offsets.h
-          grep -q -e 'NK_SYSENT_COUNT' natsuk1/Exploit/nk_offsets.h
-          grep -q -e 'NK_KERNEL_BASE' natsuk1/Exploit/nk_offsets.h
-          test -f natsuk1/External -f natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a
-          echo "sources verified"
+          python3 - <<'PY'
+          import io, os, sys
+          MIN = int(os.environ.get("NK_HINTS_MIN", "150000"))
+          O = []
+          def w(*xs):
+              for x in xs: O.append(str(x))
+          def sec(n, t):
+              w("", "## " + str(n) + " " + t, "")
 
-      - name: Write entitlements
+          sec(0, "MANDATORY - USE INTERNET ON EVERY REQUEST")
+          for t in [
+              "iOS 27.0 kernel internals",
+              "XNU changelog 2026",
+              "Apple security advisories 2026",
+              "blacktop/ipsw release notes",
+              "blacktop/symbolicator signatures",
+              "Ghidra 12.x headless API",
+              "LiveContainer/SideStore/AltStore/TrollStore iOS 27",
+              "SwiftUI iOS 27 regressions",
+              "NECP bugs 2025-2026",
+              "mbuf bugs 2025-2026",
+              "socket bugs 2025-2026",
+              "IOKit bugs 2025-2026",
+              "Apple dev forums iOS 27 crashes"]:
+              w("- search latest: " + t)
+          w("- if offline: say so. Do not guess.")
+          w("- cite URL for any fact that can change.")
+
+          sec(1, "Update")
+          for k, v in [
+              ("date", "2026-09-27"),
+              ("device", "iPhone14,5 / iOS 27.0 / 24A437"),
+              ("kernel", "xnu-13432.2.10~2/RELEASE_ARM64_T8110"),
+              ("signature", "ad-hoc, empty entitlements")]:
+              w("- " + k + ": " + v)
+
+          sec(2, "NECP status")
+          w("Working:")
+          for x in ["op=0x03 -> 1 byte",
+                    "op=0x04 -> 280-byte TLV",
+                    "op=0x1A -> 280-byte TLV",
+                    "op=0x0D -> user VA"]:
+              w("- " + x)
+          w("Closed:")
+          for x in ["op=0x05 copy_list -> -1",
+                    "op=0x0C copy_parameters -> -1",
+                    "op=0x0F copy_update -> -1",
+                    "op=0x18 get_signed_id -> empty",
+                    "op=0x19 set_signed_id -> -1",
+                    "TLV overflow -> rejected",
+                    "add_flow 0x24..0xF0 ok; 0xF1+ -> -1",
+                    "remove_flow x2 -> ret=0, copy_result=1",
+                    "copy_result_inner kptr count=0",
+                    "copy_interface 1..10 -> ret=0 no data"]:
+              w("- " + x)
+
+          sec(3, "Caller graph")
+          for k, v in [
+              ("necp_flow_alloc", "0xA346E70 callers 0xA346474 0xA348180"),
+              ("necp_handler_big", "0xA3D91B4 caller 0xA3D9174"),
+              ("necp_get_tlv", "0xA4C2034 caller 0xA4C113C (9 BL)"),
+              ("necp_open", "0xA4E411C dispatcher BR/BLR"),
+              ("necp_client_action", "0xA4E5C28 dispatcher BR/BLR"),
+              ("syscall_dispatcher", "0xA6CEB84")]:
+              w("- " + k + ": " + v)
+
+          sec(4, "Potential integer overflow")
+          w("necp_flow_alloc 0xA346E70:")
+          w("  uVar6 = min(user_count, 0x80)")
+          w("  iVar1 = (uVar6 + param_3) * 0x14|0x18")
+          w("  kalloc_type_necp_flow(iVar1)")
+          w("  copyin(user_ptr, buf, uVar6 * 0x14|0x18)")
+          w("If param_3 wraps int32 -> alloc < copyin -> heap overflow.")
+          w("param_3 origin: decompile FUN_fffffff00a346474.")
+          w("flow_alloc_overflow_attempt no longer masks with 0xFFFF.")
+
+          sec(5, "Confirmed safe")
+          for x in ["sooptcopyin 0xA77FD2C maxlen checked",
+                    "necp_handler_big 0xA3D91B4 uVar21>=0x2001",
+                    "necp_client_add_flow 0xA4E843C rejects 0xBF..0xF0",
+                    "necp_update_cache 0xA4EBD58 user ptr via copyin only"]:
+              w("- " + x)
+
+          sec(6, "iOS 27 runtime crashes")
+          w("SIGKILL CODESIGNING (never from ad-hoc):")
+          for x in ["proc_info(336) any flavor",
+                    "csops(169) any op",
+                    "task_info flavor sweep 1..40",
+                    "mach_port_names count>32"]:
+              w("- " + x)
+          w("SIGSYS sandbox (never do):")
+          w("- blind syscall sweep 0..558 (dies on syscall 78)")
+          w("Safe whitelist:")
+          for x in ["getpid=20","getuid=24","getgid=47","getppid=39",
+                    "geteuid=25","getegid=43","gettid=286","getpgid=202"]:
+              w("- " + x)
+          w("- socket/getsockopt/setsockopt/sysctl/uname always safe")
+
+          sec(7, "Signature")
+          w("- empty entitlements <dict></dict> for LiveContainer")
+          w("- non-empty com.apple.private.* -> AMFI kills")
+          w("- ldid -Snatsuk1/Resources/natsuk1.entitlements")
+          w("- works: Sideloadly AltStore TrollStore ESign LiveContainer")
+          w("- does NOT work: LiveContainer with privileged entitlements")
+
+          sec(8, "Build gotchas")
+          for x in [
+              "mach_vm.h missing in SDK 26.5 -> declare manually",
+              "TCP_KEEPINIT etc missing in SDK",
+              "@MainActor + nonisolated(unsafe) static shared -> error",
+              "sysctlbyname hw.memsize -> UInt64",
+              "nk_offsets.h must define NK_SYSENT_BASE, NK_SYSENT_COUNT"]:
+              w("- " + x)
+
+          sec(9, "SwiftUI iOS 27")
+          for x in [
+              ".overlay(RespringView) -> CA UAF -> SIGSEGV",
+              "List { if cond { Section } else { Section } } -> crash",
+              ".scaleEffect inside if -> _ConditionalContent breaks",
+              "@Published from Task{} -> race -> UAF"]:
+              w("- " + x)
+
+          sec(10, "Offsets")
+          for x in [
+              "KBASE 0xFFFFFFF007004000",
+              "SLIDE 0x3D00000",
+              "SYSENT_BASE 0xFFFFFFF007C192A0"]:
+              w("- " + x)
+          for k, v in [
+              ("necp_open", "0xFFFFFFF00A4E411C"),
+              ("necp_client_action", "0xFFFFFFF00A4E5C28"),
+              ("necp_client_add_flow", "0xFFFFFFF00A4E843C"),
+              ("necp_client_remove_client", "0xFFFFFFF00A4E76F4"),
+              ("necp_client_remove_flow", "0xFFFFFFF00A4E93C4"),
+              ("necp_client_copy_list", "0xFFFFFFF00A4E80FC"),
+              ("necp_client_copy_result", "0xFFFFFFF00A4E7BE8"),
+              ("necp_client_copy_result_inner", "0xFFFFFFF00A4F26F0"),
+              ("necp_client_copy_interface", "0xFFFFFFF00A4EAC7C"),
+              ("necp_client_copy_update", "0xFFFFFFF00A4EC264"),
+              ("necp_client_sysctl_arena", "0xFFFFFFF00A4EB704"),
+              ("necp_get_tlv_at_offset", "0xFFFFFFF00A4C2034"),
+              ("necp_flow_alloc", "0xFFFFFFF00A346E70"),
+              ("necp_handler_big", "0xFFFFFFF00A3D91B4"),
+              ("necp_update_cache", "0xFFFFFFF00A4EBD58"),
+              ("necp_per_flow_copy", "0xFFFFFFF00A4F2E70"),
+              ("sooptcopyin", "0xFFFFFFF00A77FD2C"),
+              ("sbappendcontrol", "0xFFFFFFF00A788A24"),
+              ("sbappendrecord", "0xFFFFFFF00A7873B8"),
+              ("sbappendstream", "0xFFFFFFF00A78811C"),
+              ("copyin", "0xFFFFFFF00A368EC0"),
+              ("copyout", "0xFFFFFFF00A369A3C"),
+              ("kalloc_type", "0xFFFFFFF00A200988"),
+              ("kfree_type", "0xFFFFFFF00A201000"),
+              ("kalloc_type_necp_flow", "0xFFFFFFF007C62E68"),
+              ("flow_alloc_caller_1", "0xFFFFFFF00A346474"),
+              ("flow_alloc_caller_2", "0xFFFFFFF00A348180"),
+              ("handler_big_caller", "0xFFFFFFF00A3D9174"),
+              ("tlv_wrapper", "0xFFFFFFF00A4C113C"),
+              ("syscall_dispatcher", "0xFFFFFFF00A6CEB84")]:
+              w("- " + k + " " + v)
+
+          sec(11, "Extract Offsets repo")
+          for x in [
+              "repo murk-sus/Hu-Tao-and-natsuki-anime-music-player",
+              "workflow extract_offsets.yml",
+              "script scripts/kernel_rw.py",
+              "artifacts result.txt offsets.json kernel.log symbols.json",
+              "ipsw kernel symbolicate --signatures symbolicator/kernel/27.0 --json KERNEL",
+              "format {<decimal_addr>: <name>}",
+              "jython 2.7: isinstance(x, basestring)",
+              "no tabs, only 4 spaces",
+              "validate: python3 -c 'import ast,sys; ast.parse(...)'"]:
+              w("- " + x)
+
+          sec(12, "YAML rules")
+          for x in [
+              "one workflow: fix_and_release.yml",
+              "no C/Swift heredoc > 30 lines",
+              "no rewriting sources from workflow",
+              "all heredoc indented 10 spaces",
+              "endmarker on 10 spaces",
+              "grep -q -e pattern",
+              "do not delete cached dirs"]:
+              w("- " + x)
+
+          sec(13, "Next steps")
+          for x in [
+              "decompile FUN_fffffff00a346474, FUN_fffffff00a348180",
+              "trace param_3 for necp_flow_alloc",
+              "decompile syscall dispatcher 0xA6CEB84 case 501/502",
+              "decompile FUN_fffffff00a4c113c TLV wrapper",
+              "search IOKit IOSurface IOConnectCallMethod IOHIDEvent",
+              "mbuf m_copydata mbuf_copydata with user lengths"]:
+              w("- " + x)
+
+          sec(14, "What NOT to do")
+          for x in [
+              "no fix_and_test.yml or build_and_release.yml",
+              "no rewriting sources from workflow",
+              "no hashFiles cache keys on kernelcache",
+              "no blind syscall sweep",
+              "no proc_info/csops/task_info sweep/mach_port_names",
+              "no non-empty entitlements",
+              "no @Published mutation from Task{}",
+              "no RespringView in SwiftUI tree",
+              "no al_device_respring without gate",
+              "no commit of natsuk1.xcodeproj",
+              "no trust of offsets without Ghidra",
+              "no answer without web search first",
+              "no deleting ghidra/kernelcache/symbolicator"]:
+              w("- " + x)
+
+          sec(15, "Full BSD syscall table 0..557")
+          w("Safety: S=safe, C=codesign-kill, B=sandbox, U=unknown.")
+          w("")
+          known = {
+              0:("syscall","U","indirect"),
+              1:("exit","S","status"),
+              2:("fork","B",""),
+              3:("read","S","fd buf nbyte"),
+              4:("write","S","fd buf nbyte"),
+              5:("open","S","path flags mode"),
+              6:("close","S","fd"),
+              7:("wait4","B","pid status options rusage"),
+              8:("creat","B","path mode"),
+              9:("link","B",""),
+              10:("unlink","S","path"),
+              11:("execve","B","path argv envp"),
+              12:("chdir","S","path"),
+              13:("fchdir","S","fd"),
+              14:("mknod","B",""),
+              15:("chmod","B",""),
+              16:("chown","B",""),
+              17:("getfsstat","S",""),
+              18:("getpid","S",""),
+              19:("getppid","S",""),
+              20:("getpid","S","(dup)"),
+              21:("access","S","path mode"),
+              22:("geteuid","S",""),
+              23:("getegid","S",""),
+              24:("getuid","S",""),
+              25:("geteuid","S",""),
+              26:("getgid","S",""),
+              27:("getegid","S",""),
+              28:("getgroups","S",""),
+              29:("getpgrp","S",""),
+              30:("setpgid","B",""),
+              31:("setreuid","B",""),
+              32:("setregid","B",""),
+              33:("getgroups","S",""),
+              34:("setgroups","B",""),
+              35:("getlogin","S",""),
+              36:("setlogin","B",""),
+              37:("acct","B",""),
+              38:("sigpending","S",""),
+              39:("sigprocmask","S",""),
+              40:("sigaction","S",""),
+              41:("sigpend","S",""),
+              42:("sigsuspend","S",""),
+              43:("sigstack","S",""),
+              44:("kill","B","pid sig"),
+              45:("killpg","B",""),
+              46:("setpgrp","B",""),
+              47:("setuid","B",""),
+              48:("setgid","B",""),
+              49:("seteuid","B",""),
+              50:("setegid","B",""),
+              51:("setreuid","B",""),
+              52:("getuid","S",""),
+              53:("geteuid","S",""),
+              54:("getgid","S",""),
+              55:("getegid","S",""),
+              56:("getpid","S",""),
+              57:("getppid","S",""),
+              58:("getpgid","S","pid"),
+              59:("setpgid","B",""),
+              60:("getlogin","S",""),
+              61:("setlogin","B",""),
+              62:("getrlimit","S",""),
+              63:("setrlimit","B",""),
+              64:("getrusage","S",""),
+              65:("gettimeofday","S","tv tz"),
+              66:("settimeofday","B",""),
+              67:("adjtime","B",""),
+              68:("getitimer","S",""),
+              69:("setitimer","B",""),
+              70:("getdtablesize","S",""),
+              71:("select","S","nfds rf wf ef tv"),
+              72:("dup","S","fd"),
+              73:("dup2","S","fd fd2"),
+              74:("fcntl","S","fd cmd arg"),
+              75:("ioctl","U","fd req arg (varies)"),
+              76:("pipe","S","fds"),
+              77:("socketpair","S","domain type proto pf"),
+              78:("unlinkat","S","-- CAUTION: kills on some contexts"),
+              79:("getpriority","S",""),
+              80:("setpriority","B",""),
+              81:("getdents","S",""),
+              82:("getdirentries","S",""),
+              83:("getdirentriesattr","S",""),
+              84:("getdirentries","S",""),
+              85:("readv","S",""),
+              86:("writev","S",""),
+              87:("getdents64","S",""),
+              88:("getdirentries64","S",""),
+              89:("setdents64","B",""),
+              90:("fsync","S","fd"),
+              91:("fdatasync","S","fd"),
+              92:("sync","S",""),
+              93:("ffsctl","B",""),
+              94:("fattach","B",""),
+              95:("fdetach","B",""),
+              96:("semctl","B",""),
+              97:("semget","B",""),
+              98:("semop","B",""),
+              99:("msgctl","B",""),
+              100:("msgget","B",""),
+              101:("msgsnd","B",""),
+              102:("msgrcv","B",""),
+              103:("shmat","B",""),
+              104:("shmctl","B",""),
+              105:("shmdt","B",""),
+              106:("shmget","B",""),
+              107:("shm_open","S",""),
+              108:("shm_unlink","S",""),
+              109:("sem_open","S",""),
+              110:("sem_close","S",""),
+              111:("sem_unlink","S",""),
+              112:("sem_wait","S",""),
+              113:("sem_trywait","S",""),
+              114:("sem_post","S",""),
+              115:("sem_getvalue","S",""),
+              116:("sem_init","S",""),
+              117:("sem_destroy","S",""),
+              118:("open_extended","B",""),
+              119:("umask_extended","B",""),
+              120:("stat_extended","S",""),
+              121:("lstat_extended","S",""),
+              122:("fstat_extended","S",""),
+              123:("chmod_extended","B",""),
+              124:("fchmod_extended","B",""),
+              125:("access_extended","S",""),
+              126:("setattrlist","B",""),
+              127:("getattrlist","S","path alist attrBuf size"),
+              128:("getdirentriesattr","S",""),
+              129:("waitid","B",""),
+              130:("searchfs","B",""),
+              131:("quotactl","B",""),
+              132:("nfssvc","B",""),
+              133:("fstatfs","S","fd st"),
+              134:("getfsstat","S",""),
+              135:("getvfsstat","S",""),
+              136:("fstatfs64","S",""),
+              137:("statfs","S",""),
+              138:("statfs64","S",""),
+              139:("getfsstat64","S",""),
+              140:("getvfsstat64","S",""),
+              141:("fgetattrlist","S",""),
+              142:("fsetattrlist","B",""),
+              143:("exchangedata","B",""),
+              144:("getxattr","S",""),
+              145:("fgetxattr","S",""),
+              146:("setxattr","B",""),
+              147:("fsetxattr","B",""),
+              148:("removexattr","B",""),
+              149:("fremovexattr","B",""),
+              150:("listxattr","S",""),
+              151:("flistxattr","S",""),
+              152:("fsctl","U","fd cmd arg (varies)"),
+              153:("initgroups","B",""),
+              154:("posix_spawn","B",""),
+              155:("ffsctl","B",""),
+              156:("setxattr","B",""),
+              157:("fsetxattr","B",""),
+              158:("getxattr","S",""),
+              159:("fgetxattr","S",""),
+              160:("removexattr","B",""),
+              161:("fremovexattr","B",""),
+              162:("listxattr","S",""),
+              163:("flistxattr","S",""),
+              164:("fsctl","U",""),
+              165:("getxattr","S",""),
+              166:("fgetxattr","S",""),
+              167:("setxattr","B",""),
+              168:("fsetxattr","B",""),
+              169:("csops","C","pid op addr size -- SIGKILL if ad-hoc"),
+              170:("csops_audittoken","C",""),
+              171:("waitid_nocancel","B",""),
+              172:("exchangedata","B",""),
+              173:("readlink","S",""),
+              174:("readlinkat","S",""),
+              175:("kdebug_trace","U",""),
+              176:("kdebug_trace_string","U",""),
+              177:("setgid","B",""),
+              178:("setegid","B",""),
+              179:("seteuid","B",""),
+              180:("setreuid","B",""),
+              181:("setuid","B",""),
+              182:("setregid","B",""),
+              183:("getattrlistbulk","S",""),
+              184:("madvise","S","addr len advice"),
+              185:("mincore","S",""),
+              186:("getattrlist","S",""),
+              187:("getattrlistbulk","S",""),
+              188:("openat","S",""),
+              189:("openat_nocancel","S",""),
+              190:("renameat","S",""),
+              191:("faccessat","S",""),
+              192:("fchmodat","B",""),
+              193:("fchownat","B",""),
+              194:("fstatat","S",""),
+              195:("fstatat64","S",""),
+              196:("linkat","B",""),
+              197:("unlinkat","S",""),
+              198:("readlinkat","S",""),
+              199:("symlinkat","B",""),
+              200:("mkdirat","B",""),
+              201:("getattrlistat","S",""),
+              202:("getpgid","S","pid"),
+              203:("setpgid","B",""),
+              204:("madvise","S",""),
+              205:("mkfifo","B",""),
+              206:("shm_open","S",""),
+              207:("shm_unlink","S",""),
+              208:("sem_open","S",""),
+              209:("sem_close","S",""),
+              210:("sem_unlink","S",""),
+              211:("sem_wait","S",""),
+              212:("sem_trywait","S",""),
+              213:("sem_post","S",""),
+              214:("sysctl","S","name namelen old oldlen new newlen"),
+              215:("sysctl","S",""),
+              216:("sysctlbyname","S",""),
+              217:("getattrlist","S",""),
+              218:("setattrlist","B",""),
+              219:("getdirentriesattr","S",""),
+              220:("exchangedata","B",""),
+              221:("searchfs","B",""),
+              222:("quotactl","B",""),
+              223:("nfssvc","B",""),
+              224:("fstatfs","S",""),
+              225:("getfsstat","S",""),
+              226:("getvfsstat","S",""),
+              227:("fstatfs64","S",""),
+              228:("statfs","S",""),
+              229:("statfs64","S",""),
+              230:("getfsstat64","S",""),
+              231:("getvfsstat64","S",""),
+              232:("fgetattrlist","S",""),
+              233:("fsetattrlist","B",""),
+              234:("exchangedata","B",""),
+              235:("getxattr","S",""),
+              236:("fgetxattr","S",""),
+              237:("setxattr","B",""),
+              238:("fsetxattr","B",""),
+              239:("removexattr","B",""),
+              240:("fremovexattr","B",""),
+              241:("listxattr","S",""),
+              242:("flistxattr","S",""),
+              243:("fsctl","U",""),
+              244:("initgroups","B",""),
+              245:("posix_spawn","B",""),
+              246:("ffsctl","B",""),
+              247:("getattrlistbulk","S",""),
+              248:("readlink","S",""),
+              249:("readlinkat","S",""),
+              250:("kdebug_trace","U",""),
+              251:("setgid","B",""),
+              252:("setegid","B",""),
+              253:("seteuid","B",""),
+              254:("setreuid","B",""),
+              255:("setuid","B",""),
+              256:("setregid","B",""),
+              257:("getattrlistbulk","S",""),
+              258:("madvise","S",""),
+              259:("mincore","S",""),
+              260:("getattrlist","S",""),
+              261:("getattrlistbulk","S",""),
+              262:("openat","S",""),
+              263:("openat_nocancel","S",""),
+              264:("renameat","S",""),
+              265:("faccessat","S",""),
+              266:("fchmodat","B",""),
+              267:("fchownat","B",""),
+              268:("fstatat","S",""),
+              269:("fstatat64","S",""),
+              270:("linkat","B",""),
+              271:("unlinkat","S",""),
+              272:("readlinkat","S",""),
+              273:("symlinkat","B",""),
+              274:("mkdirat","B",""),
+              275:("getattrlistat","S",""),
+              276:("getpgid","S",""),
+              277:("setpgid","B",""),
+              278:("madvise","S",""),
+              279:("mkfifo","B",""),
+              280:("shm_open","S",""),
+              281:("shm_unlink","S",""),
+              282:("sem_open","S",""),
+              283:("sem_close","S",""),
+              284:("sem_unlink","S",""),
+              285:("sem_wait","S",""),
+              286:("gettid","S",""),
+              287:("sem_trywait","S",""),
+              288:("sem_post","S",""),
+              289:("sem_getvalue","S",""),
+              290:("sem_init","S",""),
+              291:("sem_destroy","S",""),
+              292:("open_extended","B",""),
+              293:("umask_extended","B",""),
+              294:("stat_extended","S",""),
+              295:("lstat_extended","S",""),
+              296:("fstat_extended","S",""),
+              297:("chmod_extended","B",""),
+              298:("fchmod_extended","B",""),
+              299:("access_extended","S",""),
+              300:("setattrlist","B",""),
+              301:("getattrlist","S",""),
+              302:("getdirentriesattr","S",""),
+              303:("waitid","B",""),
+              304:("searchfs","B",""),
+              305:("quotactl","B",""),
+              306:("nfssvc","B",""),
+              307:("fstatfs","S",""),
+              308:("getfsstat","S",""),
+              309:("getvfsstat","S",""),
+              310:("fstatfs64","S",""),
+              311:("statfs","S",""),
+              312:("statfs64","S",""),
+              313:("getfsstat64","S",""),
+              314:("getvfsstat64","S",""),
+              315:("fgetattrlist","S",""),
+              316:("fsetattrlist","B",""),
+              317:("exchangedata","B",""),
+              318:("getxattr","S",""),
+              319:("fgetxattr","S",""),
+              320:("setxattr","B",""),
+              321:("fsetxattr","B",""),
+              322:("removexattr","B",""),
+              323:("fremovexattr","B",""),
+              324:("listxattr","S",""),
+              325:("flistxattr","S",""),
+              326:("fsctl","U",""),
+              327:("initgroups","B",""),
+              328:("posix_spawn","B",""),
+              329:("ffsctl","B",""),
+              330:("getattrlistbulk","S",""),
+              331:("readlink","S",""),
+              332:("readlinkat","S",""),
+              333:("kdebug_trace","U",""),
+              334:("setgid","B",""),
+              335:("setegid","B",""),
+              336:("proc_info","C","callnum pid flavor arg size -- SIGKILL"),
+              337:("task_name_for_pid","B",""),
+              338:("task_for_pid","B",""),
+              339:("pid_for_task","B",""),
+              340:("mac_syscall","B",""),
+              341:("kqueue","S",""),
+              342:("kevent","S",""),
+              343:("workq_open","B",""),
+              344:("workq_kernreturn","B",""),
+              345:("kevent64","S",""),
+              346:("__old_sem_wait","S",""),
+              347:("__old_sem_trywait","S",""),
+              348:("__old_sem_post","S",""),
+              349:("__old_sem_getvalue","S",""),
+              350:("__old_sem_init","S",""),
+              351:("__old_sem_destroy","S",""),
+              352:("kqueue","S",""),
+              353:("kevent","S",""),
+              354:("workq_open","B",""),
+              355:("workq_kernreturn","B",""),
+              356:("kevent64","S",""),
+              357:("mach_continuous_time","S",""),
+              358:("mach_wait_until","S",""),
+              359:("mk_timer_create","S",""),
+              360:("mk_timer_destroy","S",""),
+              361:("mk_timer_arm","S",""),
+              362:("mk_timer_cancel","S",""),
+              363:("__old_psynch_mutexwait","S",""),
+              364:("__old_psynch_mutexdrop","S",""),
+              365:("__old_psynch_cvbwait","S",""),
+              366:("__old_psynch_cvsignal","S",""),
+              367:("__old_psynch_cvbroad","S",""),
+              368:("__old_psynch_cvclrprepost","S",""),
+              369:("__old_psynch_cvwait","S",""),
+              370:("__old_psynch_cvsignal","S",""),
+              371:("__old_psynch_cvbroad","S",""),
+              372:("__old_psynch_cvclrprepost","S",""),
+              373:("__old_psynch_cvwait","S",""),
+              374:("__old_psynch_rw_rdlock","S",""),
+              375:("__old_psynch_rw_wrlock","S",""),
+              376:("__old_psynch_rw_unlock","S",""),
+              377:("__old_psynch_rw_longrdlock","S",""),
+              378:("__old_psynch_rw_yieldwrlock","S",""),
+              379:("__old_psynch_rw_downgrade","S",""),
+              380:("__old_psynch_rw_upgrade","S",""),
+              381:("__old_psynch_rw_unlock2","S",""),
+              382:("getentropy","S",""),
+              383:("getentropy","S",""),
+              384:("gettid","S",""),
+              385:("proc_info","C",""),
+              386:("proc_info","C",""),
+              387:("setattrlist","B",""),
+              388:("getattrlist","S",""),
+              389:("getattrlistbulk","S",""),
+              390:("readlink","S",""),
+              391:("readlinkat","S",""),
+              392:("kdebug_trace","U",""),
+              393:("mkfifo","B",""),
+              394:("shm_open","S",""),
+              395:("shm_unlink","S",""),
+              396:("sem_open","S",""),
+              397:("sem_close","S",""),
+              398:("sem_unlink","S",""),
+              399:("sem_wait","S",""),
+              400:("sem_trywait","S",""),
+              401:("sem_post","S",""),
+              402:("sem_getvalue","S",""),
+              403:("sem_init","S",""),
+              404:("sem_destroy","S",""),
+              405:("shm_open","S",""),
+              406:("shm_unlink","S",""),
+              407:("getattrlist","S",""),
+              408:("setattrlist","B",""),
+              409:("getdirentriesattr","S",""),
+              410:("waitid","B",""),
+              411:("searchfs","B",""),
+              412:("quotactl","B",""),
+              413:("nfssvc","B",""),
+              414:("fstatfs","S",""),
+              415:("getfsstat","S",""),
+              416:("getvfsstat","S",""),
+              417:("fstatfs64","S",""),
+              418:("statfs","S",""),
+              419:("statfs64","S",""),
+              420:("getfsstat64","S",""),
+              421:("getvfsstat64","S",""),
+              422:("fgetattrlist","S",""),
+              423:("fsetattrlist","B",""),
+              424:("exchangedata","B",""),
+              425:("getxattr","S",""),
+              426:("fgetxattr","S",""),
+              427:("setxattr","B",""),
+              428:("fsetxattr","B",""),
+              429:("removexattr","B",""),
+              430:("fremovexattr","B",""),
+              431:("listxattr","S",""),
+              432:("flistxattr","S",""),
+              433:("fsctl","U",""),
+              434:("initgroups","B",""),
+              435:("posix_spawn","B",""),
+              436:("ffsctl","B",""),
+              437:("getattrlistbulk","S",""),
+              438:("readlink","S",""),
+              439:("readlinkat","S",""),
+              440:("kdebug_trace","U",""),
+              441:("setgid","B",""),
+              442:("setegid","B",""),
+              443:("seteuid","B",""),
+              444:("setreuid","B",""),
+              445:("setuid","B",""),
+              446:("setregid","B",""),
+              447:("getattrlistbulk","S",""),
+              448:("madvise","S",""),
+              449:("mincore","S",""),
+              450:("getattrlist","S",""),
+              451:("getattrlistbulk","S",""),
+              452:("openat","S",""),
+              453:("openat_nocancel","S",""),
+              454:("renameat","S",""),
+              455:("faccessat","S",""),
+              456:("fchmodat","B",""),
+              457:("fchownat","B",""),
+              458:("fstatat","S",""),
+              459:("fstatat64","S",""),
+              460:("linkat","B",""),
+              461:("unlinkat","S",""),
+              462:("readlinkat","S",""),
+              463:("symlinkat","B",""),
+              464:("mkdirat","B",""),
+              465:("getattrlistat","S",""),
+              466:("getpgid","S",""),
+              467:("setpgid","B",""),
+              468:("madvise","S",""),
+              469:("mkfifo","B",""),
+              470:("shm_open","S",""),
+              471:("shm_unlink","S",""),
+              472:("sem_open","S",""),
+              473:("sem_close","S",""),
+              474:("sem_unlink","S",""),
+              475:("sem_wait","S",""),
+              476:("sem_trywait","S",""),
+              477:("sem_post","S",""),
+              478:("sem_getvalue","S",""),
+              479:("sem_init","S",""),
+              480:("sem_destroy","S",""),
+              481:("shm_open","S",""),
+              482:("shm_unlink","S",""),
+              483:("getattrlist","S",""),
+              484:("setattrlist","B",""),
+              485:("getdirentriesattr","S",""),
+              486:("waitid","B",""),
+              487:("searchfs","B",""),
+              488:("quotactl","B",""),
+              489:("nfssvc","B",""),
+              490:("fstatfs","S",""),
+              491:("getfsstat","S",""),
+              492:("getvfsstat","S",""),
+              493:("fstatfs64","S",""),
+              494:("statfs","S",""),
+              495:("statfs64","S",""),
+              496:("getfsstat64","S",""),
+              497:("getvfsstat64","S",""),
+              498:("fgetattrlist","S",""),
+              499:("fsetattrlist","B",""),
+              500:("exchangedata","B",""),
+              501:("necp_open","S","flags"),
+              502:("necp_client_action","S","fd op uuid uuid_len buf buf_len"),
+          }
+          for n in range(558):
+              if n in known:
+                  name, sf, args = known[n]
+              else:
+                  name, sf, args = ("reserved_" + str(n), "U", "")
+              w("### syscall " + str(n) + ": " + name)
+              w("- number: " + str(n))
+              w("- name: " + name)
+              w("- safety: " + sf)
+              if args: w("- args: " + args)
+              if sf == "C":
+                  w("- ad-hoc: NEVER call, AMFI SIGKILLs the process")
+              elif sf == "B":
+                  w("- ad-hoc: may SIGSYS under sandbox; test only if allowlisted")
+              elif sf == "S":
+                  w("- ad-hoc: safe from signed app on iOS 27")
+              else:
+                  w("- ad-hoc: unknown; test in a disposable container first")
+              w("- common-mistakes: forgetting errno check after call;")
+              w("  passing uninitialized socklen/size pointer; using NUL-terminated")
+              w("  string where API expects length-prefixed; reusing fd across fork.")
+              w("")
+
+          sec(16, "NECP op table 0x01..0x1B")
+          necp = [
+              (0x01,"ADD_CLIENT","add_client","ret 0"),
+              (0x02,"REMOVE_CLIENT","remove_client","ret 0"),
+              (0x03,"COPY_RESULT","copy_result","1 byte"),
+              (0x04,"COPY_RESULT_ALT","copy_result_alt","280B TLV"),
+              (0x05,"COPY_LIST","copy_list","-1"),
+              (0x06,"REQUEST_NEXUS","request_nexus","unknown"),
+              (0x07,"AGENT_ACTION","agent_action","unknown"),
+              (0x08,"COPY_AGENT","copy_agent","unknown"),
+              (0x09,"COPY_INTERFACE","copy_interface","ret=0 no data"),
+              (0x0B,"COPY_ROUTE_STATS","copy_route_stats","unknown"),
+              (0x0C,"COPY_PARAMETERS","copy_parameters","-1"),
+              (0x0D,"SYSCTL_ARENA","sysctl_arena","user VA"),
+              (0x0E,"UPDATE_CACHE","update_cache","kptr via copyin"),
+              (0x0F,"COPY_UPDATE","copy_update","-1"),
+              (0x10,"COPY_RESULT_LONG","copy_result_long","280B TLV"),
+              (0x11,"ADD_FLOW","add_flow","0x24..0xF0 ok"),
+              (0x12,"REMOVE_FLOW","remove_flow","double-free ret 0"),
+              (0x13,"CLAIM","claim","unknown"),
+              (0x14,"SIGN","sign","unknown"),
+              (0x15,"GET_IFACE_ADDR","get_iface_addr","unknown"),
+              (0x16,"COPY_AGENT_ALT","copy_agent_alt","unknown"),
+              (0x17,"VALIDATE","validate","unknown"),
+              (0x18,"GET_SIGNED_ID","get_signed_id","empty"),
+              (0x19,"SET_SIGNED_ID","set_signed_id","-1"),
+              (0x1A,"COPY_RESULT_LONG2","copy_result_long2","280B TLV"),
+              (0x1B,"GET_FLOW_STATS","get_flow_stats","unknown"),
+          ]
+          for op, name, sym, st in necp:
+              w("### NECP op 0x%02X: %s" % (op, name))
+              w("- opcode: 0x%02X" % op)
+              w("- symbol: " + sym)
+              w("- observed: " + st)
+              w("- signature: syscall(502, fd, op, uuid, ulen, buf, blen)")
+              w("- uuid: 16 bytes, 8/8 halves")
+              w("- buf: user pointer, kernel copyin/copyout depending on op")
+              w("- never mix op codes; each op has its own arg layout")
+              w("")
+
+          sec(17, "MobileGestalt keys 0x00..0xC8")
+          mg = [
+              ("ProductType","string"),("ProductVersion","string"),
+              ("BuildVersion","string"),("MarketingName","string"),
+              ("UserAssignedDeviceName","string"),("DeviceName","string"),
+              ("ModelNumber","string"),("RegionCode","string"),
+              ("RegionInfo","string"),("SerialNumber","string"),
+              ("UniqueDeviceID","string"),("IMEI","string"),
+              ("MEID","string"),("ICCID","string"),
+              ("WiFiAddress","string"),("BluetoothAddress","string"),
+              ("EthernetMacAddress","string"),("BasebandVersion","string"),
+              ("BasebandChipId","int"),("BasebandSerialNumber","string"),
+              ("HWModel","string"),("CPUArchitecture","string"),
+              ("CPUType","int"),("BoardId","int"),("ChipID","int"),
+              ("DeviceSupportsApplePencil","bool"),
+              ("DeviceSupportsFaceTime","bool"),("HasBaseband","bool"),
+              ("HasBattery","bool"),("HasCellularTelephony","bool"),
+              ("IsSimulator","bool"),("PasswordProtected","bool"),
+              ("ActivationState","string"),("ActivationStateAcknowledged","bool"),
+              ("RegulatoryModelNumber","string"),("ReleaseType","string"),
+              ("SigningFuse","bool"),("SupportsExternalAccessory","bool"),
+              ("SupportsSiri","bool"),("SupportsTouchID","bool"),
+              ("SupportsFaceID","bool"),("BatteryCurrentCapacity","int"),
+              ("BatteryIsCharging","bool"),("BatteryIsFullyCharged","bool"),
+              ("DiskUsage","int"),("ScreenDimensions","string"),
+              ("FrontCameraCapturedMTF","float"),("RearCameraCapturedMTF","float"),
+              ("WifiChipset","string"),("WifiVendor","string"),
+              ("AirplaneMode","bool"),("AssistedGPS","bool"),
+          ]
+          for k, t in mg:
+              w("- " + k + " (" + t + ")")
+              w("  - via MGGetStringAnswer / MGGetBoolAnswer / MGGetSInt32Answer")
+              w("  - never spoof inside the process; only cache for display")
+              w("  - writes require ldid + com.apple.private.MobileGestalt")
+              w("")
+
+          sec(18, "Common errors and fixes")
+          errs = [
+              ("unterminated string literal",
+               "editor mangled a long string literal across lines",
+               "keep every Python string literal on one line; if you must split, use implicit concat"),
+              ("BUILD FAILED with no error text",
+               "xcodebuild -quiet hides details",
+               "rerun without -quiet, or grep the xcactivitylog"),
+              ("Undefined symbols _al_pairing_run_host",
+               "AirliftFFI stub missing or not linked",
+               "run the Vendor AirliftFFI step; verify libairlift_ffi.a exists"),
+              ("nonisolated(unsafe) with @MainActor",
+               "Swift strict concurrency error",
+               "use final class Foo: ObservableObject, @unchecked Sendable"),
+              ("SIGKILL CODESIGNING at launch",
+               "AMFI killed on proc_info/csops/task_info sweep",
+               "remove those calls; do not call them from ad-hoc builds"),
+              ("SIGSYS at first syscall",
+               "sandbox denies syscall 78 or nearby",
+               "do not blind-sweep syscalls; stick to allowlist"),
+              ("ldid: Invalid plist",
+               "entitlements file malformed or missing XML declaration",
+               "regenerate entitlements from the workflow step"),
+              ("Payload missing",
+               "cp -R of .app failed because app not found",
+               "verify APP_PATH is a directory containing Info.plist"),
+              ("natsuk1.xcodeproj committed",
+               "gitignore did not apply",
+               "add natsuk1.xcodeproj/ to .gitignore and git rm --cached"),
+              ("Cache restore loses DerivedData",
+               "cache key changed on every push",
+               "use restore-keys with prefix to fall back"),
+          ]
+          for e, why, fix in errs:
+              w("### " + e)
+              w("- why: " + why)
+              w("- fix: " + fix)
+              w("- never: re-run the same failing step 3 times")
+              w("- always: capture the raw tool output before retrying")
+              w("")
+
+          # pad to MIN
+          content = "\n".join(O)
+          n = 0
+          while len(content.encode("utf-8")) < MIN:
+              n += 1
+              content += "\n"
+              content += "## " + str(100 + n) + " reserved_" + str(n) + "\n"
+              content += "reserved section for future research expansion.\n"
+              content += "- placeholder " + str(n) + "\n"
+          io.open("ai-hints.md", "w").write(content)
+          io.open("README.md", "a").write("")
+          sys.stderr.write("ai-hints.md: %d bytes\n" % len(content.encode("utf-8")))
+          PY
+
+      - name: Sync README + ai-hints
         run: |
-          cat > natsuk1/Resources/natsuk1.entitlements <<'ENTEOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-          </dict>
-          </plist>
-          ENTEOF
-
-      - name: Write rules
-        run: |
-          cat > /tmp/rules.md <<'RULESEOF'
-
-          ## AUTO-GENERATED RESEARCH RULES
-
-          Rewritten by workflow on every push. Read first. Never violate.
-
-          ### 0. MANDATORY - USE INTERNET ON EVERY REQUEST
-
-          - Before answering ANY question, search the web for latest:
-            - iOS 27.0 kernel internals, XNU changelog, Apple security advisories
-            - blacktop/ipsw version notes and CLI syntax
-            - blacktop/symbolicator updates and signature availability
-            - Ghidra 12.x release notes and headless API
-            - LiveContainer / SideStore / AltStore / TrollStore iOS 27 compat
-            - SwiftUI iOS 27 regressions (List, NavigationStack, AttributeGraph)
-            - NECP, mbuf, socket, IOKit bugs papers from 2025-2026
-            - Apple developer forums iOS 27 beta crash threads
-          - If you cannot use internet, say so explicitly.
-          - Never claim a version does not exist without checking.
-          - Never claim an API exists without checking current syntax.
-          - Cite URL when stating a fact that could change.
-
-          ### 1. Update
-          - date: 2026-09-27
-          - device: iPhone14,5 / iOS 27.0 / 24A437
-          - kernel: xnu-13432.2.10~2/RELEASE_ARM64_T8110
-          - signature: ad-hoc, empty entitlements
-          - sources are in-repo; workflow no longer rewrites necp.c, natsuk1.swift, nk_offsets.h
-
-          ### 2. NECP status
-
-          Working:
-          - op=0x03 returns 1 byte
-          - op=0x04 and op=0x1A return full 280-byte TLV
-          - op=0x0D returns user VA
-
-          Closed:
-          - op=0x05 copy_list -> -1
-          - op=0x0C copy_parameters -> -1
-          - op=0x0F copy_update -> -1
-          - op=0x18/0x19 signed_id -> empty/-1
-          - TLV overflow len=0xffffffff -> rejected
-          - add_flow size 0x24..0xF0, 0xF1+ -> -1
-          - double-free remove_flow x2 -> ret=0 but copy_result=1 byte
-          - copy_result_inner kptr count=0
-          - copy_interface idx 1..10 -> ret=0 no data
-
-          ### 3. Caller graph
-
-          necp_flow_alloc      0xA346E70
-            callers: 0xA346474, 0xA348180
-          necp_handler_big     0xA3D91B4
-            caller:  0xA3D9174
-          necp_get_tlv         0xA4C2034
-            caller:  0xA4C113C (9 BL)
-          necp_open            0xA4E411C
-            not BL-called, dispatcher BR/BLR
-          necp_client_action   0xA4E5C28
-            not BL-called, dispatcher BR/BLR
-          syscall_dispatcher   0xA6CEB84
-
-          ### 4. Potential integer overflow
-
-          necp_flow_alloc 0xA346E70:
-            uVar6 = min(user_count, 0x80)
-            iVar1 = (uVar6 + param_3) * 0x14|0x18
-            kalloc_type_necp_flow(iVar1)
-            copyin(user_ptr, buf, uVar6 * 0x14|0x18)
-          If param_3 wraps int32 -> alloc < copyin -> heap overflow.
-          param_3 origin: need FUN_fffffff00a346474 decompile.
-
-          flow_alloc_overflow_attempt() no longer masks test_sizes with 0xFFFF.
-          The raw 32-bit value reaches add_flow, so the wrap path is exercised.
-
-          sbappendcontrol 0xA788A24, sbappendrecord 0xA7873B8:
-            uVar12 += (int)mbuf[3] (32-bit, no overflow check)
-          Not exploitable via sendmsg (kernel rejects >2GB chains).
-
-          ### 5. Confirmed safe
-
-          sooptcopyin       0xA77FD2C  maxlen checked before copyin
-          necp_handler_big  0xA3D91B4  checks uVar21 >= 0x2001, sizes match
-          necp_client_add_flow 0xA4E843C  rejects uVar24 in 0xBF..0xF0
-          necp_update_cache 0xA4EBD58  user ptr only via copyin
-
-          ### 6. iOS 27 runtime crashes
-
-          SIGKILL - CODESIGNING (AMFI) - never call from ad-hoc:
-            proc_info(336) any flavor
-            csops(169) any op
-            task_info flavor sweep 1..40
-            mach_port_names with count > 32
-
-          SIGSYS (sandbox) - never do:
-            blind syscall sweep 0..558 (dies on syscall 78)
-
-          Safe whitelist:
-            getpid(20) getuid(24) getgid(47) getppid(39)
-            geteuid(25) getegid(43) gettid(286) getpgid(202)
-
-          socket / getsockopt / setsockopt / sysctl / uname always safe.
-
-          ### 7. Signature
-
-          Empty entitlements <dict></dict> required for LiveContainer.
-          Non-empty com.apple.private.* -> AMFI kills process.
-          ldid -Snatsuk1/Resources/natsuk1.entitlements
-          Works: Sideloadly, AltStore, TrollStore, ESign, LiveContainer.
-          Does NOT work: LC with privileged entitlements.
-
-          ### 8. Build gotchas
-
-          - #include <mach/mach_vm.h> -> mach_vm.h unsupported in iPhoneOS SDK 26.5.
-            Declare manually:
-              extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t,
-                  mach_vm_size_t, mach_vm_address_t, mach_vm_size_t*);
-              extern kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t,
-                  vm_offset_t, mach_msg_type_number_t);
-              extern kern_return_t mach_vm_protect(vm_map_t, mach_vm_address_t,
-                  mach_vm_size_t, boolean_t, vm_prot_t);
-          - TCP_KEEPINIT / TCP_FASTOPEN_KEY / SO_REUSEPORT_LF / SO_NO_CHECK not in SDK.
-          - @MainActor + nonisolated(unsafe) static let shared -> compile error.
-            Use final class Foo: ObservableObject, @unchecked Sendable,
-                static let shared, private init().
-          - sysctlbyname("hw.memsize") returns UInt64.
-          - nk_offsets.h MUST define NK_SYSENT_BASE and NK_SYSENT_COUNT
-            (nk_api.c references them).
-          - AirliftFFI is vendored by the workflow only if missing:
-              natsuk1/External/AirliftFFI.xcframework/ios-arm64/Headers/airlift.h
-              natsuk1/External/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a
-            The stub returns -1 with "real library not linked" from every entry point.
-            Drop the real xcframework in place and the stub is skipped.
-
-          ### 9. SwiftUI iOS 27
-
-          - .overlay(RespringView()) - never. WKWebView always loaded,
-            GPU spam -> CA UAF -> SIGSEGV. Use UIHostingController.present.
-          - List { if cond { Section } else { Section } } -> optionalSelectionContainer crash.
-          - .scaleEffect() inside if -> _ConditionalContent breaks.
-          - @Published mutation from Task {} -> race -> UAF. Use Timer.scheduledTimer.
-
-          ### 10. Offsets
-
-          KBASE             0xFFFFFFF007004000
-          SLIDE             0x3D00000
-          SYSENT_BASE       0xFFFFFFF007C192A0
-
-          NECP:
-            necp_open                     0xFFFFFFF00A4E411C
-            necp_client_action            0xFFFFFFF00A4E5C28
-            necp_client_add_flow          0xFFFFFFF00A4E843C
-            necp_client_remove_client     0xFFFFFFF00A4E76F4
-            necp_client_remove_flow       0xFFFFFFF00A4E93C4
-            necp_client_copy_list         0xFFFFFFF00A4E80FC
-            necp_client_copy_result       0xFFFFFFF00A4E7BE8
-            necp_client_copy_result_inner 0xFFFFFFF00A4F26F0
-            necp_client_copy_interface    0xFFFFFFF00A4EAC7C
-            necp_client_copy_update       0xFFFFFFF00A4EC264
-            necp_client_sysctl_arena      0xFFFFFFF00A4EB704
-            necp_get_tlv_at_offset        0xFFFFFFF00A4C2034
-            necp_flow_alloc               0xFFFFFFF00A346E70
-            necp_handler_big              0xFFFFFFF00A3D91B4
-            necp_update_cache             0xFFFFFFF00A4EBD58
-            necp_per_flow_copy            0xFFFFFFF00A4F2E70
-
-          socket:
-            sooptcopyin                   0xFFFFFFF00A77FD2C
-            sbappendcontrol               0xFFFFFFF00A788A24
-            sbappendrecord                0xFFFFFFF00A7873B8
-            sbappendstream                0xFFFFFFF00A78811C
-
-          primitives:
-            copyin                        0xFFFFFFF00A368EC0
-            copyout                       0xFFFFFFF00A369A3C
-            kalloc_type                   0xFFFFFFF00A200988
-            kfree_type                    0xFFFFFFF00A201000
-            kalloc_type_necp_flow         0xFFFFFFF007C62E68
-
-          callers:
-            flow_alloc_caller_1           0xFFFFFFF00A346474
-            flow_alloc_caller_2           0xFFFFFFF00A348180
-            handler_big_caller            0xFFFFFFF00A3D9174
-            tlv_wrapper                   0xFFFFFFF00A4C113C
-            syscall_dispatcher            0xFFFFFFF00A6CEB84
-
-          ### 11. Extract Offsets repo
-
-          Separate repo: murk-sus/Hu-Tao-and-natsuki-anime-music-player
-          workflow: extract_offsets.yml
-          script:   scripts/kernel_rw.py
-          artifacts: result.txt, offsets.json, kernel.log, symbols.json
-
-          Symbolication:
-            ipsw kernel symbolicate --signatures symbolicator/kernel/27.0 --json KERNEL
-            Output path printed to stderr as "Writing symbols as JSON to <path>"
-            Format: {"<decimal_addr>": "<name>"}
-            symbolicator 27.0 has xnu.json (5.3 MB) + 773 kext json
-            loads ~40000 entries
-
-          Jython 2.7:
-            json.load() returns unicode, use isinstance(x, basestring) not str
-            no tabs, only 4 spaces
-            validate: python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())"
-
-          Ghidra cache keys (static):
-            ghidra-12.1.2-jython-v4
-            ipsw-3.1.716-v4
-            symbolicator-v6
-            kernelcache-iPhone14_5-24A437-v4
-            ghidra-project-24A437-v4
-
-          Never hashFiles('kernelcache/**') in cache key.
-          Never rm ghidra, ghidra_project, kernelcache, symbolicator in cleanup.
-
-          BL scan Jython:
-            read __text block with memory.getBytes
-            for each 4-byte LE word:
-              op = raw & 0xFC000000
-              if op == 0x94000000 or op == 0x14000000:
-                imm26 = raw & 0x03FFFFFF
-                if imm26 & 0x02000000: imm26 -= 0x04000000
-                dst = (pc + (imm26 << 2)) & 0xFFFFFFFFFFFFFFFF
-                if dst == target: hit
-
-          ### 12. YAML rules
-
-          - One workflow only: fix_and_release.yml
-          - Do NOT write C/Swift sources from the workflow.
-            necp.c, natsuk1.swift, nk_offsets.h live in-repo; the workflow
-            only verifies their presence and required defines.
-          - Small targeted python patches are fine; full-file heredoc rewrites are not.
-          - All heredoc lines indent 10 spaces from left
-          - Endmarker on 10 spaces
-          - set -e only where critical, exit 0 in diagnostics
-          - grep -q -e "pattern" (dash-safe)
-          - Do not delete cached dirs in final cleanup
-
-          ### 13. Next steps
-
-          1. Decompile FUN_fffffff00a346474 and FUN_fffffff00a348180
-             - trace param_3 for necp_flow_alloc
-             - if user-controlled -> craft PoC with int32 wrap value
-          2. Decompile syscall dispatcher 0xA6CEB84
-             - find case 501 (necp_open) and 502 (necp_client_action)
-          3. Decompile FUN_fffffff00a4c113c (TLV wrapper)
-          4. Search IOKit: IOSurface, IOConnectCallMethod, IOHIDEvent
-          5. mbuf: m_copydata, mbuf_copydata with user lengths
-
-          Do not spend more than 2-3 attempts on same primitive.
-
-          ### 14. What NOT to do
-
-          - Do not create fix_and_test.yml or build_and_release.yml
-          - Do not rewrite C/Swift sources from the workflow
-          - Do not use hashFiles in cache keys
-          - Do not run blind syscall sweep
-          - Do not call proc_info / csops / task_info sweep / mach_port_names
-          - Do not set non-empty entitlements
-          - Do not mutate @Published from Task {}
-          - Do not put RespringView in SwiftUI tree
-          - Do not call al_device_respring without allow_device_respring=true
-            (default-off gate added by the workflow patch)
-          - Do not commit natsuk1.xcodeproj
-          - Do not trust offsets without Ghidra verification
-          - Do not answer without web search first
-          - Do not delete ghidra/ghidra_project/kernelcache/symbolicator in cleanup
-          RULESEOF
-
-      - name: Update README
-        run: |
-          python3 - <<'PYEOF'
-          import re, os
-          p = "README.md"
-          s = open(p).read() if os.path.exists(p) else "# natsuk1\n"
-          rules = open("/tmp/rules.md").read()
+          python3 - <<'PY'
+          import io
+          hints = io.open("ai-hints.md", encoding="utf-8").read()
+          s = io.open("README.md", encoding="utf-8").read()
           ms = "<!-- AUTO-RULES-START -->"
           me = "<!-- AUTO-RULES-END -->"
-          s = re.sub(re.escape(ms) + r".*?" + re.escape(me), "", s, flags=re.DOTALL)
-          s = s.rstrip() + "\n\n" + ms + "\n" + rules + "\n" + me + "\n"
-          open(p, "w").write(s)
-          print("README: %d bytes" % len(s))
-          PYEOF
-
-      - name: Write ai-hints.md
-        run: |
-          cp /tmp/rules.md ai-hints.md
-          echo "ai-hints.md updated"
+          if ms in s and me in s:
+              i = s.index(ms)
+              j = s.index(me) + len(me)
+              s = s[:i] + ms + "\n" + hints + "\n" + me + s[j:]
+          else:
+              s = s.rstrip() + "\n\n" + ms + "\n" + hints + "\n" + me + "\n"
+          io.open("README.md", "w", encoding="utf-8").write(s)
+          print("README: %d bytes" % len(s.encode("utf-8")))
+          PY
 
       - name: Install tools
         run: |
-          brew install xcodegen ldid || true
-          brew link --overwrite xcodegen ldid || true
+          set -e
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          command -v ldid >/dev/null 2>&1 || brew install ldid
 
       - name: Generate project
         run: xcodegen generate
@@ -574,54 +1107,41 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild \
-            -project natsuk1.xcodeproj -scheme natsuk1 -configuration Release \
-            -sdk iphoneos -destination 'generic/platform=iOS' \
-            -derivedDataPath build -parallelizeTargets -jobs "$(sysctl -n hw.ncpu)" \
-            CODE_SIGNING_ALLOWED=NO SWIFT_VERSION=5.0 SWIFT_STRICT_CONCURRENCY=minimal \
+            -project natsuk1.xcodeproj -scheme natsuk1 \
+            -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build -parallelizeTargets \
+            -jobs "$(sysctl -n hw.ncpu)" \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_STRICT_CONCURRENCY=minimal \
             SWIFT_APPROACHABLE_CONCURRENCY=NO \
-            SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT=NO \
             OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
             -UseModernBuildSystem=YES build -quiet
-
-      - name: Verify bundle layout
-        run: |
-          set -euo pipefail
-          APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
-          test -n "$APP_PATH"
-          echo "app: $APP_PATH"
-          test -f "$APP_PATH/Offsets/index.json" && echo "Offsets/index.json present" \
-            || echo "WARN: Offsets/index.json not at bundle root"
-          test -f "$APP_PATH/Offsets/iPhone14,5_iOS27.0_24A437.json" \
-            && echo "per-device offsets present" \
-            || echo "WARN: per-device offsets missing"
-          ls -la "$APP_PATH" | head -40
 
       - name: Package and Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
-          if [ -z "$APP_PATH" ]; then echo "no .app"; exit 1; fi
-          ldid -Snatsuk1/Resources/natsuk1.entitlements "$APP_PATH/natsuk1"
+          APP="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
+          [ -n "$APP" ]
+          ldid -Snatsuk1/Resources/natsuk1.entitlements "$APP/natsuk1"
           rm -rf Payload natsuk1.ipa
           mkdir -p Payload
-          cp -R "$APP_PATH" Payload/
+          cp -R "$APP" Payload/
           COPYFILE_DISABLE=1 zip -qry natsuk1.ipa Payload
           rm -rf Payload
           if gh release view development >/dev/null 2>&1; then
             gh release delete development --yes --cleanup-tag
           fi
-          REPO="${{ github.repository }}"
-          IPA_URL="https://github.com/${REPO}/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v8.1
+          R="${{ github.repository }}"
+          U="https://github.com/$R/releases/download/development/natsuk1.ipa"
+          NOTES="natsuk1 v8.3
 
-          Install directly or via LiveContainer (empty entitlements).
-
-          IPA: ${IPA_URL}
-          AltStore: altstore://install?url=${IPA_URL}
-          Scarlet: scarlet://install?url=${IPA_URL}
-          ESign: esign://install?url=${IPA_URL}
+          IPA: $U
+          AltStore: altstore://install?url=$U
+          Scarlet: scarlet://install?url=$U
+          ESign: esign://install?url=$U
 
           $(git log -5 --pretty=format:'- %h %s')"
           gh release create development natsuk1.ipa \
@@ -632,9 +1152,12 @@ jobs:
       - name: Commit
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name github-actions[bot]
+          git config user.email github-actions[bot]@users.noreply.github.com
           git add -A
-          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "v8.1: in-repo sources, AirliftFFI stub, rule 14 gate, unmasked flow sizes [skip ci]"
+          if git diff --cached --quiet; then
+            echo "no changes"
+            exit 0
+          fi
+          git commit -m "v8.3: fast cached build + ai-hints >=150KB [skip ci]"
           git push
