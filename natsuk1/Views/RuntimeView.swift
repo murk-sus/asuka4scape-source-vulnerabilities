@@ -6,27 +6,31 @@ struct RuntimeView: View {
 
     var body: some View {
         Section {
-            row("Slide", state.slide, hot: state.slide != "—")
-            row("Base",  state.base,  hot: state.base  != "—")
+            HStack {
+                Text("Slide")
+                Spacer()
+                Text(state.slide)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(state.slide != "—" ? .green : .secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            HStack {
+                Text("Base")
+                Spacer()
+                Text(state.base)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(state.base != "—" ? .green : .secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             HStack {
                 Text("Status")
                 Spacer()
                 StatusDot(status: state.status)
             }
         } header: {
-            Label("Runtime", systemImage: "waveform.path.ecg")
-        }
-    }
-
-    private func row(_ k: String, _ v: String, hot: Bool) -> some View {
-        HStack {
-            Text(k)
-            Spacer()
-            Text(v)
-                .font(.system(size: 13, design: .monospaced))
-                .foregroundStyle(hot ? Color.green : Color.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            Text("Runtime")
         }
     }
 }

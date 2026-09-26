@@ -20,6 +20,7 @@ struct AirliftView: View {
                 pairingSection
             }
             logSection
+            logActionsSection
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Airlift")
@@ -44,34 +45,21 @@ struct AirliftView: View {
 
     @ViewBuilder
     private var networkSection: some View {
-        if !loopbackVPNUp {
-            Section {
-                HStack(spacing: 10) {
-                    Image(systemName: "wifi.exclamationmark")
-                        .foregroundStyle(.orange)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Loopback VPN is not active")
-                            .font(.subheadline).fontWeight(.semibold)
-                        Text("Start LocalDevVPN (10.7.0.x)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            } header: {
-                Label("Network", systemImage: "network")
-            }
-        } else {
-            Section {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.shield.fill")
+        Section {
+            if loopbackVPNUp {
+                HStack {
+                    Text("Status")
+                    Spacer()
+                    Text("active")
+                        .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.green)
-                    Text("Loopback VPN active")
-                        .font(.subheadline).fontWeight(.semibold)
                 }
                 if let t = tunnelIP {
                     HStack {
                         Text("Tunnel")
                         Spacer()
-                        Text(t).font(.system(size: 12, design: .monospaced))
+                        Text(t)
+                            .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -79,23 +67,37 @@ struct AirliftView: View {
                     HStack {
                         Text("Device")
                         Spacer()
-                        Text(d).font(.system(size: 12, design: .monospaced))
+                        Text(d)
+                            .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
                 }
-            } header: {
-                Label("Network", systemImage: "network")
+            } else {
+                HStack {
+                    Text("Status")
+                    Spacer()
+                    Text("not active")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.orange)
+                }
+                Text("Start LocalDevVPN with interface 10.7.0.x")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
+        } header: {
+            Text("Network")
         }
     }
 
     @ViewBuilder
     private var pairingSection: some View {
         Section {
-            HStack(spacing: 8) {
-                Image(systemName: pairingStatusIcon)
+            HStack {
+                Text("State")
+                Spacer()
+                Text(pairingStatusText)
+                    .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(pairingStatusColor)
-                Text(pairingStatusText).font(.subheadline.bold())
             }
             if case .pairing = airlift.state {
                 HStack(spacing: 8) {
@@ -114,8 +116,7 @@ struct AirliftView: View {
                             UIApplication.shared.open(url)
                         }
                     } label: {
-                        Label("Open Settings", systemImage: "arrow.up.forward.app")
-                            .frame(maxWidth: .infinity)
+                        Text("Open Settings").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent).tint(.orange)
                 }
@@ -124,25 +125,17 @@ struct AirliftView: View {
                             in: RoundedRectangle(cornerRadius: 12))
             }
         } header: {
-            Label("Pairing", systemImage: "link.circle")
+            Text("Pairing")
         }
 
         Section {
             if case .pairing = airlift.state {
                 Button(role: .destructive) { airlift.cancelPairing() } label: {
-                    HStack {
-                        Image(systemName: "xmark.circle")
-                        Text("Cancel Pairing")
-                    }
-                    .frame(maxWidth: .infinity)
+                    Text("Cancel Pairing").frame(maxWidth: .infinity, alignment: .leading)
                 }
             } else {
                 Button { airlift.runPairing() } label: {
-                    HStack {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                        Text("Start Pairing")
-                    }
-                    .frame(maxWidth: .infinity)
+                    Text("Start Pairing").frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -150,21 +143,11 @@ struct AirliftView: View {
 
     private var pairingStatusText: String {
         switch airlift.state {
-        case .pairing: return "Pairing…"
-        case .ready:   return "Paired"
-        case .running: return "Exploit running…"
-        case .done(let ok, _): return ok ? "Done" : "Failed"
-        default:       return "Not paired"
-        }
-    }
-
-    private var pairingStatusIcon: String {
-        switch airlift.state {
-        case .pairing: return "hourglass"
-        case .ready:   return "link.circle.fill"
-        case .running: return "bolt.fill"
-        case .done(let ok, _): return ok ? "checkmark.circle.fill" : "xmark.circle.fill"
-        default:       return "link.badge.plus"
+        case .pairing: return "pairing"
+        case .ready:   return "paired"
+        case .running: return "running"
+        case .done(let ok, _): return ok ? "done" : "failed"
+        default:       return "idle"
         }
     }
 
@@ -174,7 +157,7 @@ struct AirliftView: View {
         case .ready:   return .green
         case .running: return .orange
         case .done(let ok, _): return ok ? .green : .red
-        default:       return .orange
+        default:       return .secondary
         }
     }
 
@@ -182,8 +165,11 @@ struct AirliftView: View {
     private var exploitSection: some View {
         Section {
             HStack {
-                Image(systemName: "link.circle.fill").foregroundStyle(.green)
-                Text("Paired").font(.subheadline.bold())
+                Text("State")
+                Spacer()
+                Text(pairingStatusText)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(pairingStatusColor)
             }
             HStack {
                 Text("Target")
@@ -196,45 +182,30 @@ struct AirliftView: View {
                     .textInputAutocapitalization(.never)
             }
         } header: {
-            Label("Pairing", systemImage: "link.circle")
+            Text("Pairing")
         }
 
         Section {
             Button { airlift.runExploit() } label: {
-                HStack {
-                    Image(systemName: "bolt.fill")
-                    Text("Run Exploit")
-                }
+                Text("Run Exploit").frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(airlift.state == .running || !loopbackVPNUp)
 
-            Button(role: .destructive) {
-                airlift.cancelExploit()
-            } label: {
-                HStack {
-                    Image(systemName: "xmark.circle")
-                    Text("Cancel Exploit")
-                }
+            Button(role: .destructive) { airlift.cancelExploit() } label: {
+                Text("Cancel Exploit").frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(airlift.state != .running)
 
             Button { respring() } label: {
-                HStack {
-                    Image(systemName: "arrow.clockwise")
-                    Text("Respring")
-                }
+                Text("Respring").frame(maxWidth: .infinity, alignment: .leading)
             }
         } header: {
-            Label("Exploit", systemImage: "bolt.shield")
+            Text("Exploit")
         }
 
         Section {
             Button(role: .destructive) { airlift.deletePairing() } label: {
-                HStack {
-                    Image(systemName: "trash")
-                    Text("Delete Pairing")
-                }
-                .frame(maxWidth: .infinity)
+                Text("Delete Pairing").frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -253,9 +224,12 @@ struct AirliftView: View {
                         ? "No output yet."
                         : airlift.exploitLog.joined(separator: "\n"))
         } header: {
-            Label("Log", systemImage: "terminal")
+            Text("Log")
         }
+    }
 
+    @ViewBuilder
+    private var logActionsSection: some View {
         Section {
             Button {
                 UIPasteboard.general.string = airlift.exploitLog.joined(separator: "\n")
@@ -264,20 +238,17 @@ struct AirliftView: View {
                     copied = false
                 }
             } label: {
-                HStack {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    Text(copied ? "Copied!" : "Copy All")
-                }
+                Text(copied ? "Copied!" : "Copy All")
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(airlift.exploitLog.isEmpty)
 
             Button(role: .destructive) { airlift.clearLog() } label: {
-                HStack {
-                    Image(systemName: "trash")
-                    Text("Clear")
-                }
+                Text("Clear").frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(airlift.exploitLog.isEmpty)
+        } header: {
+            Text("Log Actions")
         }
     }
 }

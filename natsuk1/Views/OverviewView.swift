@@ -9,11 +9,8 @@ struct OverviewView: View {
         NavigationStack {
             List {
                 Section {
-                    Button {
-                        state.necp_run()
-                    } label: {
+                    Button { state.necp_run() } label: {
                         HStack {
-                            Image(systemName: "bolt.fill")
                             Text("Run Exploit")
                             Spacer()
                             if state.running { ProgressView().scaleEffect(0.8) }
@@ -21,17 +18,12 @@ struct OverviewView: View {
                     }
                     .disabled(state.running)
 
-                    Button(role: .destructive) {
-                        state.cancel()
-                    } label: {
-                        HStack {
-                            Image(systemName: "xmark.circle")
-                            Text("Cancel Exploit")
-                        }
+                    Button(role: .destructive) { state.cancel() } label: {
+                        Text("Cancel Exploit").frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .disabled(!state.running)
                 } header: {
-                    Label("Exploit", systemImage: "cpu")
+                    Text("Exploit")
                 }
 
                 RuntimeView()
@@ -40,7 +32,7 @@ struct OverviewView: View {
                 Section {
                     LogTerminal(text: state.log.isEmpty ? "Awaiting execution." : state.log)
                 } header: {
-                    Label(state.t("Logs", "Логи"), systemImage: "terminal")
+                    Text(state.t("Logs", "Логи"))
                 }
 
                 Section {
@@ -51,20 +43,18 @@ struct OverviewView: View {
                             copied = false
                         }
                     } label: {
-                        HStack {
-                            Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                            Text(copied ? "Copied!" : state.t("Copy All", "Копировать всё"))
-                        }
+                        Text(copied ? "Copied!" : state.t("Copy All", "Копировать всё"))
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .disabled(state.log.isEmpty)
 
                     Button(role: .destructive) { state.clear() } label: {
-                        HStack {
-                            Image(systemName: "trash")
-                            Text(state.t("Clear", "Очистить"))
-                        }
+                        Text(state.t("Clear", "Очистить"))
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .disabled(state.log.isEmpty)
+                } header: {
+                    Text("Log Actions")
                 }
             }
             .listStyle(.insetGrouped)
