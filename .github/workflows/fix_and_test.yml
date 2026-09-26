@@ -32,9 +32,6 @@ jobs:
           rm -f *.txt natsuk1-app.tar.gz
           rm -rf Payload
 
-      # ============================================================
-      # 1. nk_offsets.h
-      # ============================================================
       - name: Write nk_offsets.h
         run: |
           cat > natsuk1/Exploit/nk_offsets.h <<'EOF'
@@ -42,6 +39,8 @@ jobs:
           #define NK_OFFSETS_H
 
           #define NK_KERNEL_BASE                0xFFFFFFF007004000ULL
+          #define NK_SYSENT_BASE                0xFFFFFFF007C192A0ULL
+          #define NK_SYSENT_COUNT               558
           #define NK_SLIDE_FALLBACK             0x3D00000ULL
 
           #define NK_NECP_OPEN                  0xFFFFFFF00A4E411CULL
@@ -94,9 +93,6 @@ jobs:
           #endif
           EOF
 
-      # ============================================================
-      # 2. necp.c
-      # ============================================================
       - name: Write necp.c
         run: |
           cat > natsuk1/Exploit/necp.c <<'EOF'
@@ -305,9 +301,6 @@ jobs:
           }
           EOF
 
-      # ============================================================
-      # 3. Offsets JSON
-      # ============================================================
       - name: Write offsets JSON
         run: |
           cat > natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json <<'EOF'
@@ -427,9 +420,6 @@ jobs:
           }
           EOF
 
-      # ============================================================
-      # 4. ai-hints.md
-      # ============================================================
       - name: Write ai-hints.md
         run: |
           cat > ai-hints.md <<'EOF'
@@ -469,7 +459,7 @@ jobs:
           | 0x09 | 0xA4EAC7C | copy_interface |
           | 0x0B | 0xA4EBA0C | copy_route_statistics |
           | 0x0C | 0xA4EA8A0 | copy_parameters |
-          | 0x0D | 0xA4EB704 | **sysctl_arena (KASLR)** |
+          | 0x0D | 0xA4EB704 | sysctl_arena (KASLR) |
           | 0x0E | 0xA4EBD58 | update_cache |
           | 0x0F | 0xA4EC264 | copy_update |
           | 0x10 | 0xA4E7BE8 | copy_result (long) |
@@ -549,7 +539,7 @@ jobs:
           - `per_flow_copy` (0xA4F2E70) — внутрянка copy_result_inner.
           - `op=0x0E update_cache` — вызывает `FUN_fffffff00a5af190`/`5af698`
             с kernel netagent ptr. Не user-controllable.
-          - `op=0x06/07/0E` — требуют netagent entitlements, не работают из песочницы.
+          - `op=0x06/07/0E` — требуют netagent entitlements.
 
           ## 6. Что делать дальше
 
@@ -562,8 +552,7 @@ jobs:
 
           ## 7. Правила CI
 
-          - Ключи кэша Ghidra — статические с версией (`ghidra-project-24A437-v4`).
-            Никаких hashFiles(kernelcache/**) — сломает warm.
+          - Ключи кэша Ghidra — статические с версией.
           - Warm: `-process -noanalysis`. Cold: `-import` раз в жизни.
           - Jython 2.7: только 4 пробела, никаких табов.
           - Verify перед коммитом: JSON valid + `ast.parse` + clang syntax.
@@ -603,9 +592,6 @@ jobs:
           ```
           EOF
 
-      # ============================================================
-      # 5. README.md
-      # ============================================================
       - name: Write README.md
         run: |
           cat > README.md <<'EOF'
@@ -682,9 +668,6 @@ jobs:
           MIT — see [LICENSE](LICENSE).
           EOF
 
-      # ============================================================
-      # 6. Validate
-      # ============================================================
       - name: Validate
         run: |
           set +e
@@ -699,9 +682,10 @@ jobs:
           chk "ai-hints.md exists"       "test -s ai-hints.md"
           chk "readme exists"            "test -s README.md"
           chk "no NEXTHINT"              "! test -f NEXTHINT.txt"
-
-          chk "kaslr marker in necp.c"   "grep -q -e 'kaslr_leak' natsuk1/Exploit/necp.c"
+          chk "kaslr in necp.c"          "grep -q -e 'kaslr_leak' natsuk1/Exploit/necp.c"
           chk "sysctl arena in necp.c"   "grep -q -e 'NECP_SYSCTL_ARENA' natsuk1/Exploit/necp.c"
+          chk "NK_SYSENT_BASE defined"   "grep -q -e 'NK_SYSENT_BASE' natsuk1/Exploit/nk_offsets.h"
+          chk "NK_SYSENT_COUNT defined"  "grep -q -e 'NK_SYSENT_COUNT' natsuk1/Exploit/nk_offsets.h"
           chk "nk_offsets kaslr"         "grep -q -e 'NK_NECP_SYSCTL_ARENA' natsuk1/Exploit/nk_offsets.h"
           chk "op0x0D in json"           "grep -q -e 'off_necp_op_sysctl_arena' natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
 
@@ -711,9 +695,6 @@ jobs:
           if [ "$FAIL" -ne 0 ]; then echo "VERIFY FAILED"; exit 1; fi
           echo "VERIFY OK"
 
-      # ============================================================
-      # 7. Build
-      # ============================================================
       - name: Install tools
         run: brew install xcodegen ldid || true
 
@@ -731,9 +712,6 @@ jobs:
             OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
             -UseModernBuildSystem=YES build -quiet
 
-      # ============================================================
-      # 8. Package + release
-      # ============================================================
       - name: Package and release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -777,9 +755,6 @@ jobs:
             --latest=false \
             --notes "$NOTES"
 
-      # ============================================================
-      # 9. Commit
-      # ============================================================
       - name: Commit
         run: |
           set -euo pipefail
