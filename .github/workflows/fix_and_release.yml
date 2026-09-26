@@ -25,76 +25,10 @@ jobs:
         with:
           xcode-version: "26.5"
 
-      - name: Remove legacy workflow
+      - name: Cleanup
         run: |
           rm -f .github/workflows/build_and_release.yml
-          ls -la .github/workflows/
-
-      - name: Write SimpleList.swift
-        run: |
-          cat > natsuk1/Views/SimpleList.swift <<'EOF'
-          import SwiftUI
-          import UIKit
-
-          struct SimpleList<Content: View>: View {
-              let content: Content
-              init(@ViewBuilder content: () -> Content) {
-                  self.content = content()
-              }
-              var body: some View {
-                  ScrollView {
-                      VStack(spacing: 16) {
-                          content
-                      }
-                      .padding(.horizontal, 16)
-                      .padding(.vertical, 12)
-                      .frame(maxWidth: .infinity, alignment: .leading)
-                  }
-                  .background(Color(UIColor.systemGroupedBackground))
-              }
-          }
-
-          struct SimpleSection<Content: View>: View {
-              let title: String?
-              let systemImage: String?
-              let content: Content
-
-              init(_ title: String, systemImage: String, @ViewBuilder content: () -> Content) {
-                  self.title = title
-                  self.systemImage = systemImage
-                  self.content = content()
-              }
-
-              init(@ViewBuilder content: () -> Content) {
-                  self.title = nil
-                  self.systemImage = nil
-                  self.content = content()
-              }
-
-              var body: some View {
-                  VStack(alignment: .leading, spacing: 6) {
-                      if let title = title {
-                          HStack(spacing: 4) {
-                              if let img = systemImage {
-                                  Image(systemName: img)
-                                      .font(.system(size: 11, weight: .semibold))
-                              }
-                              Text(title.uppercased())
-                                  .font(.system(size: 11, weight: .semibold))
-                          }
-                          .foregroundStyle(.secondary)
-                          .padding(.leading, 12)
-                      }
-                      VStack(alignment: .leading, spacing: 0) {
-                          content
-                      }
-                      .frame(maxWidth: .infinity, alignment: .leading)
-                      .background(Color(UIColor.secondarySystemGroupedBackground),
-                                  in: RoundedRectangle(cornerRadius: 10))
-                  }
-              }
-          }
-          EOF
+          rm -f natsuk1/Views/SimpleList.swift
 
       - name: Write nk_offsets.h
         run: |
@@ -378,7 +312,7 @@ jobs:
           static int impl(void) {
               nk_log("");
               nk_log("================================================================");
-              nk_log("natsuk1 v4.0 — NECP recon");
+              nk_log("natsuk1 v4.1 — NECP recon");
               nk_log("iOS 27.0 / iPhone14,5 / 24A437");
               nk_log("================================================================");
               nk_log("");
@@ -628,12 +562,7 @@ jobs:
                   .onReceive(NotificationCenter.default.publisher(for: Notification.Name("natsuk1.respring"))) { _ in
                       state.show_respring = true
                   }
-                  .overlay(
-                      RespringView()
-                          .opacity(state.show_respring ? 1 : 0)
-                          .allowsHitTesting(state.show_respring)
-                          .ignoresSafeArea()
-                  )
+                  .overlay(RespringView().opacity(state.show_respring ? 1 : 0).ignoresSafeArea())
               }
           }
           EOF
@@ -650,71 +579,35 @@ jobs:
 
               var body: some View {
                   NavigationStack {
-                      SimpleList {
-                          SimpleSection("Exploit", systemImage: "cpu") {
+                      List {
+                          Section {
                               Button { state.necp_run() } label: {
                                   HStack {
                                       Text("Run Exploit")
                                       Spacer()
                                       ProgressView().opacity(state.running ? 1 : 0)
                                   }
-                                  .padding(.horizontal, 12)
-                                  .padding(.vertical, 10)
                               }
                               .disabled(state.running)
 
-                              Divider()
-
                               Button(role: .destructive) { state.cancel() } label: {
                                   Text("Cancel Exploit")
-                                      .frame(maxWidth: .infinity, alignment: .leading)
-                                      .padding(.horizontal, 12)
-                                      .padding(.vertical, 10)
                               }
                               .disabled(!state.running)
+                          } header: {
+                              Label("Exploit", systemImage: "cpu")
                           }
 
-                          SimpleSection("Runtime", systemImage: "waveform.path.ecg") {
-                              HStack {
-                                  Text("Slide")
-                                  Spacer()
-                                  Text(state.slide)
-                                      .font(.system(size: 12, design: .monospaced))
-                                      .foregroundStyle(state.slide != "—" ? .green : .secondary)
-                                      .lineLimit(1).truncationMode(.middle)
-                              }
-                              .padding(.horizontal, 12)
-                              .padding(.vertical, 10)
+                          RuntimeView()
+                              .environmentObject(state)
 
-                              Divider()
-
-                              HStack {
-                                  Text("Base")
-                                  Spacer()
-                                  Text(state.base)
-                                      .font(.system(size: 12, design: .monospaced))
-                                      .foregroundStyle(state.base != "—" ? .green : .secondary)
-                                      .lineLimit(1).truncationMode(.middle)
-                              }
-                              .padding(.horizontal, 12)
-                              .padding(.vertical, 10)
-
-                              Divider()
-
-                              HStack {
-                                  Text("Status")
-                                  Spacer()
-                                  StatusDot(status: state.status)
-                              }
-                              .padding(.horizontal, 12)
-                              .padding(.vertical, 10)
-                          }
-
-                          SimpleSection(state.t("Logs", "Логи"), systemImage: "terminal") {
+                          Section {
                               LogTerminal(text: state.log.isEmpty ? "Awaiting execution." : state.log)
+                          } header: {
+                              Label(state.t("Logs", "Логи"), systemImage: "terminal")
                           }
 
-                          SimpleSection("Log Actions", systemImage: "document.on.document") {
+                          Section {
                               Button {
                                   UIPasteboard.general.string = state.log
                                   copied = true
@@ -723,23 +616,18 @@ jobs:
                                   }
                               } label: {
                                   Text(copied ? "Copied!" : state.t("Copy All", "Копировать всё"))
-                                      .frame(maxWidth: .infinity, alignment: .leading)
-                                      .padding(.horizontal, 12)
-                                      .padding(.vertical, 10)
                               }
                               .disabled(state.log.isEmpty)
-
-                              Divider()
 
                               Button(role: .destructive) { state.clear() } label: {
                                   Text(state.t("Clear", "Очистить"))
-                                      .frame(maxWidth: .infinity, alignment: .leading)
-                                      .padding(.horizontal, 12)
-                                      .padding(.vertical, 10)
                               }
                               .disabled(state.log.isEmpty)
+                          } header: {
+                              Label("Log Actions", systemImage: "document.on.document")
                           }
                       }
+                      .listStyle(.insetGrouped)
                       .navigationTitle("natsuk1")
                       .navigationBarTitleDisplayMode(.inline)
                   }
@@ -749,7 +637,6 @@ jobs:
           struct StatusDot: View {
               let status: AppState.Status
               @State private var pulse = false
-
               var body: some View {
                   Image(systemName: "circle.fill")
                       .font(.system(size: 14))
@@ -775,9 +662,47 @@ jobs:
                           .multilineTextAlignment(.leading)
                           .foregroundStyle(.primary)
                           .frame(maxWidth: .infinity, alignment: .leading)
-                          .padding(12)
                   }
                   .frame(minHeight: 200, maxHeight: 400)
+              }
+          }
+          EOF
+
+      - name: Write RuntimeView.swift
+        run: |
+          cat > natsuk1/Views/RuntimeView.swift <<'EOF'
+          import SwiftUI
+          import UIKit
+
+          struct RuntimeView: View {
+              @EnvironmentObject var state: AppState
+
+              var body: some View {
+                  Section {
+                      HStack {
+                          Text("Slide")
+                          Spacer()
+                          Text(state.slide)
+                              .font(.system(size: 12, design: .monospaced))
+                              .foregroundStyle(state.slide != "—" ? .green : .secondary)
+                              .lineLimit(1).truncationMode(.middle)
+                      }
+                      HStack {
+                          Text("Base")
+                          Spacer()
+                          Text(state.base)
+                              .font(.system(size: 12, design: .monospaced))
+                              .foregroundStyle(state.base != "—" ? .green : .secondary)
+                              .lineLimit(1).truncationMode(.middle)
+                      }
+                      HStack {
+                          Text("Status")
+                          Spacer()
+                          StatusDot(status: state.status)
+                      }
+                  } header: {
+                      Label("Runtime", systemImage: "waveform.path.ecg")
+                  }
               }
           }
           EOF
@@ -799,12 +724,154 @@ jobs:
               private let ticker = Timer.publish(every: 5.0, on: .main, in: .common).autoconnect()
 
               var body: some View {
-                  SimpleList {
-                      networkSection
-                      pairingOrExploit
-                      logSection
-                      logActionsSection
+                  List {
+                      Section {
+                          HStack {
+                              Text("Status")
+                              Spacer()
+                              Text(loopbackVPNUp ? "active" : "not active")
+                                  .font(.system(size: 12, design: .monospaced))
+                                  .foregroundStyle(loopbackVPNUp ? .green : .orange)
+                          }
+                          HStack {
+                              Text("Tunnel")
+                              Spacer()
+                              Text(tunnelIP ?? "—")
+                                  .font(.system(size: 12, design: .monospaced))
+                                  .foregroundStyle(.secondary)
+                          }
+                          HStack {
+                              Text("Device")
+                              Spacer()
+                              Text(deviceIP ?? "—")
+                                  .font(.system(size: 12, design: .monospaced))
+                                  .foregroundStyle(.secondary)
+                          }
+                          if !loopbackVPNUp {
+                              Text("Start LocalDevVPN with interface 10.7.0.x")
+                                  .font(.caption)
+                                  .foregroundStyle(.secondary)
+                          }
+                      } header: {
+                          Label("Network", systemImage: "network")
+                      }
+
+                      Section {
+                          HStack {
+                              Text("State")
+                              Spacer()
+                              Text(pairingStatusText)
+                                  .font(.system(size: 12, design: .monospaced))
+                                  .foregroundStyle(pairingStatusColor)
+                          }
+                          HStack(spacing: 8) {
+                              ProgressView().opacity(isPairing ? 1 : 0)
+                              Text(airlift.pairingStatus.isEmpty ? "Idle" : airlift.pairingStatus)
+                                  .font(.subheadline).foregroundStyle(.secondary)
+                          }
+                          if let pin = airlift.pairPIN {
+                              VStack(alignment: .leading, spacing: 8) {
+                                  Text("ENTER PIN").font(.caption2.bold()).foregroundStyle(.secondary)
+                                  Text(pin).font(.system(size: 34, weight: .black, design: .monospaced))
+                                      .foregroundStyle(.orange)
+                                  Button {
+                                      if let url = URL(string: UIApplication.openSettingsURLString) {
+                                          UIApplication.shared.open(url)
+                                      }
+                                  } label: {
+                                      Text("Open Settings").frame(maxWidth: .infinity)
+                                  }
+                                  .buttonStyle(.borderedProminent).tint(.orange)
+                              }
+                              .padding(12)
+                              .background(Color.orange.opacity(0.12),
+                                          in: RoundedRectangle(cornerRadius: 12))
+                          }
+                      } header: {
+                          Label("Pairing", systemImage: "link.circle")
+                      }
+
+                      Section {
+                          Button(role: .destructive) { airlift.cancelPairing() } label: {
+                              Text("Cancel Pairing")
+                          }
+                          .disabled(!isPairing)
+
+                          Button { airlift.runPairing() } label: {
+                              Text("Start Pairing")
+                          }
+                          .disabled(isPairing)
+                      }
+
+                      Section {
+                          HStack {
+                              Text("Target")
+                              Spacer()
+                              TextField("/var/mobile/Library/SpringBoard", text: Binding(
+                                  get: { airlift.target }, set: { airlift.target = $0 }))
+                                  .font(.system(size: 12, design: .monospaced))
+                                  .multilineTextAlignment(.trailing)
+                                  .autocorrectionDisabled()
+                                  .textInputAutocapitalization(.never)
+                          }
+                      } header: {
+                          Label("Target", systemImage: "scope")
+                      }
+
+                      Section {
+                          Button { airlift.runExploit() } label: {
+                              Text("Run Exploit")
+                          }
+                          .disabled(airlift.state == .running || !loopbackVPNUp || !airlift.hasPairing())
+
+                          Button(role: .destructive) { airlift.cancelExploit() } label: {
+                              Text("Cancel Exploit")
+                          }
+                          .disabled(airlift.state != .running)
+
+                          Button { respring() } label: {
+                              Text("Respring")
+                          }
+                      } header: {
+                          Label("Exploit", systemImage: "cpu")
+                      }
+
+                      Section {
+                          Button(role: .destructive) { airlift.deletePairing() } label: {
+                              Text("Delete Pairing")
+                          }
+                          .disabled(!airlift.hasPairing())
+                      }
+
+                      Section {
+                          LogTerminal(text: airlift.exploitLog.isEmpty
+                                      ? "No output yet."
+                                      : airlift.exploitLog.joined(separator: "\n"))
+                      } header: {
+                          Label("Log", systemImage: "terminal")
+                      }
+
+                      Section {
+                          Button {
+                              UIPasteboard.general.string = airlift.exploitLog.joined(separator: "\n")
+                              copied = true
+                              DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                  copied = false
+                              }
+                          } label: {
+                              Text(copied ? "Copied!" : "Copy All")
+                          }
+                          .disabled(airlift.exploitLog.isEmpty)
+
+                          Button(role: .destructive) { airlift.clearLog() } label: {
+                              Text("Clear")
+                          }
+                          .disabled(airlift.exploitLog.isEmpty)
+                      } header: {
+                          Label("Log Actions", systemImage: "document.on.document")
+                      }
                   }
+                  .listStyle(.insetGrouped)
                   .navigationTitle("Airlift")
                   .navigationBarTitleDisplayMode(.inline)
                   .onAppear { refresh() }
@@ -821,111 +888,6 @@ jobs:
                           if self.loopbackVPNUp != vpn { self.loopbackVPNUp = vpn }
                           if self.tunnelIP != tun { self.tunnelIP = tun }
                           if self.deviceIP != dev { self.deviceIP = dev }
-                      }
-                  }
-              }
-
-              private var networkSection: some View {
-                  SimpleSection("Network", systemImage: "network") {
-                      HStack {
-                          Text("Status")
-                          Spacer()
-                          Text(loopbackVPNUp ? "active" : "not active")
-                              .font(.system(size: 12, design: .monospaced))
-                              .foregroundStyle(loopbackVPNUp ? .green : .orange)
-                      }
-                      .padding(.horizontal, 12)
-                      .padding(.vertical, 10)
-
-                      if let t = tunnelIP {
-                          Divider()
-                          HStack {
-                              Text("Tunnel")
-                              Spacer()
-                              Text(t)
-                                  .font(.system(size: 12, design: .monospaced))
-                                  .foregroundStyle(.secondary)
-                          }
-                          .padding(.horizontal, 12)
-                          .padding(.vertical, 10)
-                      }
-
-                      if let d = deviceIP {
-                          Divider()
-                          HStack {
-                              Text("Device")
-                              Spacer()
-                              Text(d)
-                                  .font(.system(size: 12, design: .monospaced))
-                                  .foregroundStyle(.secondary)
-                          }
-                          .padding(.horizontal, 12)
-                          .padding(.vertical, 10)
-                      }
-
-                      if !loopbackVPNUp {
-                          Divider()
-                          Text("Start LocalDevVPN with interface 10.7.0.x")
-                              .font(.caption)
-                              .foregroundStyle(.secondary)
-                              .padding(.horizontal, 12)
-                              .padding(.vertical, 10)
-                      }
-                  }
-              }
-
-              private var pairingOrExploit: some View {
-                  Group {
-                      if airlift.hasPairing() {
-                          exploitSection
-                      } else {
-                          pairingSection
-                      }
-                  }
-              }
-
-              private var pairingSection: some View {
-                  Group {
-                      SimpleSection("Pairing", systemImage: "link.circle") {
-                          HStack {
-                              Text("State")
-                              Spacer()
-                              Text(pairingStatusText)
-                                  .font(.system(size: 12, design: .monospaced))
-                                  .foregroundStyle(pairingStatusColor)
-                          }
-                          .padding(.horizontal, 12)
-                          .padding(.vertical, 10)
-
-                          HStack(spacing: 8) {
-                              ProgressView().opacity(isPairing ? 1 : 0)
-                              Text(airlift.pairingStatus.isEmpty ? "Idle" : airlift.pairingStatus)
-                                  .font(.subheadline).foregroundStyle(.secondary)
-                          }
-                          .padding(.horizontal, 12)
-                          .padding(.vertical, 10)
-                      }
-
-                      SimpleSection("Actions", systemImage: "hand.tap") {
-                          Button(role: .destructive) { airlift.cancelPairing() } label: {
-                              Text("Cancel Pairing")
-                                  .frame(maxWidth: .infinity, alignment: .leading)
-                                  .padding(.horizontal, 12)
-                                  .padding(.vertical, 10)
-                          }
-                          .opacity(isPairing ? 1 : 0)
-                          .disabled(!isPairing)
-                          .frame(height: isPairing ? nil : 0)
-
-                          Button { airlift.runPairing() } label: {
-                              Text("Start Pairing")
-                                  .frame(maxWidth: .infinity, alignment: .leading)
-                                  .padding(.horizontal, 12)
-                                  .padding(.vertical, 10)
-                          }
-                          .opacity(isPairing ? 0 : 1)
-                          .disabled(isPairing)
-                          .frame(height: isPairing ? 0 : nil)
                       }
                   }
               }
@@ -955,116 +917,11 @@ jobs:
                   }
               }
 
-              private var exploitSection: some View {
-                  Group {
-                      SimpleSection("Pairing", systemImage: "link.circle") {
-                          HStack {
-                              Text("State")
-                              Spacer()
-                              Text(pairingStatusText)
-                                  .font(.system(size: 12, design: .monospaced))
-                                  .foregroundStyle(pairingStatusColor)
-                          }
-                          .padding(.horizontal, 12)
-                          .padding(.vertical, 10)
-
-                          Divider()
-
-                          HStack {
-                              Text("Target")
-                              Spacer()
-                              TextField("/var/mobile/Library/SpringBoard", text: Binding(
-                                  get: { airlift.target }, set: { airlift.target = $0 }))
-                                  .font(.system(size: 12, design: .monospaced))
-                                  .multilineTextAlignment(.trailing)
-                                  .autocorrectionDisabled()
-                                  .textInputAutocapitalization(.never)
-                          }
-                          .padding(.horizontal, 12)
-                          .padding(.vertical, 10)
-                      }
-
-                      SimpleSection("Exploit", systemImage: "cpu") {
-                          Button { airlift.runExploit() } label: {
-                              Text("Run Exploit")
-                                  .frame(maxWidth: .infinity, alignment: .leading)
-                                  .padding(.horizontal, 12)
-                                  .padding(.vertical, 10)
-                          }
-                          .disabled(airlift.state == .running || !loopbackVPNUp)
-
-                          Divider()
-
-                          Button(role: .destructive) { airlift.cancelExploit() } label: {
-                              Text("Cancel Exploit")
-                                  .frame(maxWidth: .infinity, alignment: .leading)
-                                  .padding(.horizontal, 12)
-                                  .padding(.vertical, 10)
-                          }
-                          .disabled(airlift.state != .running)
-
-                          Divider()
-
-                          Button { respring() } label: {
-                              Text("Respring")
-                                  .frame(maxWidth: .infinity, alignment: .leading)
-                                  .padding(.horizontal, 12)
-                                  .padding(.vertical, 10)
-                          }
-                      }
-
-                      SimpleSection("Danger", systemImage: "exclamationmark.triangle") {
-                          Button(role: .destructive) { airlift.deletePairing() } label: {
-                              Text("Delete Pairing")
-                                  .frame(maxWidth: .infinity, alignment: .leading)
-                                  .padding(.horizontal, 12)
-                                  .padding(.vertical, 10)
-                          }
-                      }
-                  }
-              }
-
               private func respring() {
                   NotificationCenter.default.post(
                       name: Notification.Name("natsuk1.respring"),
                       object: nil
                   )
-              }
-
-              private var logSection: some View {
-                  SimpleSection("Log", systemImage: "terminal") {
-                      LogTerminal(text: airlift.exploitLog.isEmpty
-                                  ? "No output yet."
-                                  : airlift.exploitLog.joined(separator: "\n"))
-                  }
-              }
-
-              private var logActionsSection: some View {
-                  SimpleSection("Log Actions", systemImage: "document.on.document") {
-                      Button {
-                          UIPasteboard.general.string = airlift.exploitLog.joined(separator: "\n")
-                          copied = true
-                          DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                              copied = false
-                          }
-                      } label: {
-                          Text(copied ? "Copied!" : "Copy All")
-                              .frame(maxWidth: .infinity, alignment: .leading)
-                              .padding(.horizontal, 12)
-                              .padding(.vertical, 10)
-                      }
-                      .disabled(airlift.exploitLog.isEmpty)
-
-                      Divider()
-
-                      Button(role: .destructive) { airlift.clearLog() } label: {
-                          Text("Clear")
-                              .frame(maxWidth: .infinity, alignment: .leading)
-                              .padding(.horizontal, 12)
-                              .padding(.vertical, 10)
-                      }
-                      .disabled(airlift.exploitLog.isEmpty)
-                  }
               }
           }
           EOF
@@ -1099,80 +956,57 @@ jobs:
 
               var body: some View {
                   NavigationStack {
-                      SimpleList {
-                          SimpleSection("App", systemImage: "exclamationmark.circle") {
+                      List {
+                          Section {
                               HStack(spacing: 14) {
-                                  Group {
-                                      if let icon = appIcon {
-                                          Image(uiImage: icon).resizable().aspectRatio(contentMode: .fill)
-                                      } else {
-                                          ZStack {
-                                              LinearGradient(colors: [Color.accentColor, Color.accentColor.opacity(0.6)],
-                                                             startPoint: .topLeading, endPoint: .bottomTrailing)
-                                              Image(systemName: "bolt.fill").font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
-                                          }
+                                  if let icon = appIcon {
+                                      Image(uiImage: icon).resizable().aspectRatio(contentMode: .fill)
+                                          .frame(width: 56, height: 56)
+                                          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                  } else {
+                                      ZStack {
+                                          LinearGradient(colors: [Color.accentColor, Color.accentColor.opacity(0.6)],
+                                                         startPoint: .topLeading, endPoint: .bottomTrailing)
+                                          Image(systemName: "bolt.fill").font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
                                       }
+                                      .frame(width: 56, height: 56)
+                                      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                   }
-                                  .frame(width: 56, height: 56)
-                                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                   VStack(alignment: .leading, spacing: 2) {
                                       Text(appName).font(.title3).fontWeight(.semibold)
                                       Text("Version \(version)").font(.subheadline).foregroundStyle(.secondary)
                                   }
-                                  Spacer()
                               }
-                              .padding(.horizontal, 12)
-                              .padding(.vertical, 10)
-
-                              Divider()
-
-                              NavigationLink { AboutView().environmentObject(state) } label: {
-                                  HStack {
-                                      Text("About")
-                                      Spacer()
-                                      Image(systemName: "chevron.right")
-                                          .font(.system(size: 13, weight: .semibold))
-                                          .foregroundStyle(.tertiary)
-                                  }
-                                  .padding(.horizontal, 12)
-                                  .padding(.vertical, 10)
-                              }
+                              NavigationLink { AboutView().environmentObject(state) } label: { Text("About") }
+                          } header: {
+                              Label("App", systemImage: "exclamationmark.circle")
                           }
 
-                          SimpleSection("Background Keep-Alive", systemImage: "moon.stars") {
+                          Section {
                               Toggle(isOn: $keep_alive_audio) {
                                   VStack(alignment: .leading, spacing: 2) {
                                       Text("Silent Audio")
-                                      Text("Keeps the app running in the background.")
-                                          .font(.caption).foregroundStyle(.secondary)
+                                      Text("Keeps the app running in the background.").font(.caption).foregroundStyle(.secondary)
                                   }
                               }
-                              .padding(.horizontal, 12)
-                              .padding(.vertical, 10)
-
-                              Divider()
-
                               Toggle(isOn: $keep_alive_location) {
                                   VStack(alignment: .leading, spacing: 2) {
                                       Text("Background Location")
-                                      Text("Low-accuracy location keeps the app alive.")
-                                          .font(.caption).foregroundStyle(.secondary)
+                                      Text("Low-accuracy location keeps the app alive.").font(.caption).foregroundStyle(.secondary)
                                   }
                               }
-                              .padding(.horizontal, 12)
-                              .padding(.vertical, 10)
+                          } header: {
+                              Label("Background Keep-Alive", systemImage: "moon.stars")
                           }
 
-                          SimpleSection("Options", systemImage: "slider.horizontal.3") {
+                          Section {
                               Toggle("Auto Run on Launch", isOn: $auto_run)
-                                  .padding(.horizontal, 12)
-                                  .padding(.vertical, 10)
-                              Divider()
                               Toggle("Verbose Output", isOn: $verbose)
-                                  .padding(.horizontal, 12)
-                                  .padding(.vertical, 10)
+                          } header: {
+                              Label("Options", systemImage: "slider.horizontal.3")
                           }
                       }
+                      .listStyle(.insetGrouped)
                       .navigationTitle("Settings")
                       .navigationBarTitleDisplayMode(.large)
                   }
@@ -1192,53 +1026,31 @@ jobs:
 
               var body: some View {
                   NavigationStack {
-                      SimpleList {
-                          SimpleSection("Exploit", systemImage: "memorychip") {
-                              NavigationLink { AirliftView().environmentObject(airlift) } label: {
-                                  navRow("Airlift")
-                              }
-                              Divider()
-                              NavigationLink { OffsetsView().environmentObject(offsets) } label: {
-                                  navRow("Offsets")
-                              }
+                      List {
+                          Section {
+                              NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }
+                              NavigationLink { OffsetsView().environmentObject(offsets) } label: { Text("Offsets") }
+                          } header: {
+                              Label("Exploit", systemImage: "memorychip")
                           }
 
-                          SimpleSection("Device", systemImage: "gearshape.2") {
-                              NavigationLink { DeviceInfoView() } label: {
-                                  navRow("Device Info")
-                              }
-                              Divider()
-                              Button { state.respring() } label: {
-                                  HStack {
-                                      Text("Respring")
-                                      Spacer()
-                                  }
-                                  .padding(.horizontal, 12)
-                                  .padding(.vertical, 10)
-                              }
+                          Section {
+                              NavigationLink { DeviceInfoView() } label: { Text("Device Info") }
+                              Button { state.respring() } label: { Text("Respring") }
+                          } header: {
+                              Label("Device", systemImage: "gearshape.2")
                           }
 
-                          SimpleSection("Diagnostics", systemImage: "chart.xyaxis.line") {
-                              NavigationLink { PathAccessView() } label: {
-                                  navRow("Path Access")
-                              }
+                          Section {
+                              NavigationLink { PathAccessView() } label: { Text("Path Access") }
+                          } header: {
+                              Label("Diagnostics", systemImage: "chart.xyaxis.line")
                           }
                       }
+                      .listStyle(.insetGrouped)
                       .navigationTitle("Tools")
                       .navigationBarTitleDisplayMode(.large)
                   }
-              }
-
-              private func navRow(_ title: String) -> some View {
-                  HStack {
-                      Text(title)
-                      Spacer()
-                      Image(systemName: "chevron.right")
-                          .font(.system(size: 13, weight: .semibold))
-                          .foregroundStyle(.tertiary)
-                  }
-                  .padding(.horizontal, 12)
-                  .padding(.vertical, 10)
               }
           }
           EOF
@@ -1266,32 +1078,29 @@ jobs:
               }
 
               var body: some View {
-                  SimpleList {
-                      SimpleSection("About", systemImage: "info.circle") {
+                  List {
+                      Section {
                           VStack(alignment: .leading, spacing: 6) {
                               Text(appName).font(.title2).fontWeight(.semibold)
                               Text("Version \(version) (\(build))").font(.subheadline).foregroundStyle(.secondary)
                               Text("Research project iOS.").font(.footnote).foregroundStyle(.secondary)
                           }
-                          .padding(12)
+                          .padding(.vertical, 6)
                       }
-
-                      SimpleSection("Open Source", systemImage: "doc.text") {
+                      Section {
                           linkRow("Source Repository", url: repoURL)
-                          Divider()
                           linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
-                      }
-
-                      SimpleSection("Community", systemImage: "star") {
+                      } header: { Text("Open Source") }
+                      Section {
                           linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
-                      }
-
-                      SimpleSection("Disclaimer", systemImage: "exclamationmark.triangle") {
+                      } header: { Text("Community") }
+                      Section { } header: { Text("Disclaimer") }
+                      footer: {
                           Text("Independent research project. Not affiliated with Apple Inc.")
                               .font(.footnote).foregroundStyle(.secondary)
-                              .padding(12)
                       }
                   }
+                  .listStyle(.insetGrouped)
                   .navigationTitle("About")
                   .navigationBarTitleDisplayMode(.inline)
               }
@@ -1301,12 +1110,8 @@ jobs:
                       HStack {
                           Text(title).foregroundStyle(.tint)
                           Spacer()
-                          Image(systemName: "chevron.right")
-                              .font(.system(size: 13, weight: .semibold))
-                              .foregroundStyle(.tertiary)
+                          Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(.tertiary)
                       }
-                      .padding(.horizontal, 12)
-                      .padding(.vertical, 10)
                   }.buttonStyle(.plain)
               }
           }
@@ -1320,35 +1125,30 @@ jobs:
 
           struct DeviceInfoView: View {
               var body: some View {
-                  SimpleList {
-                      SimpleSection("Hardware", systemImage: "cpu") {
+                  List {
+                      Section {
                           row("Model", DeviceName.friendly())
-                          Divider()
                           row("Identifier", machineID())
-                          Divider()
                           row("Chip", DeviceName.chip())
-                      }
+                      } header: { Label("Hardware", systemImage: "cpu") }
 
-                      SimpleSection("Software", systemImage: "gear") {
+                      Section {
                           row("iOS", sysctlString("kern.osproductversion"))
-                          Divider()
                           row("Build", sysctlString("kern.osversion"))
-                          Divider()
                           row("Architecture", arch())
-                      }
+                      } header: { Label("Software", systemImage: "gear") }
 
-                      SimpleSection("Resources", systemImage: "memorychip") {
+                      Section {
                           row("RAM", ram())
-                          Divider()
                           row("Uptime", uptime())
-                      }
+                      } header: { Label("Resources", systemImage: "memorychip") }
 
-                      SimpleSection("Locale", systemImage: "globe") {
+                      Section {
                           row("Locale", localeShort())
-                          Divider()
                           row("Region", regionShort())
-                      }
+                      } header: { Label("Locale", systemImage: "globe") }
                   }
+                  .listStyle(.insetGrouped)
                   .navigationTitle("Device")
                   .navigationBarTitleDisplayMode(.inline)
               }
@@ -1360,8 +1160,6 @@ jobs:
                       Text(value).font(.system(.body, design: .monospaced)).foregroundStyle(.secondary)
                           .lineLimit(1).truncationMode(.middle)
                   }
-                  .padding(.horizontal, 12)
-                  .padding(.vertical, 10)
               }
               private func machineID() -> String {
                   var sysinfo = utsname(); uname(&sysinfo)
@@ -1434,20 +1232,17 @@ jobs:
               @State private var busy = false
 
               private let paths: [String] = [
-                  "/usr/lib/libMobileGestalt.dylib", "/usr/lib/libMobileActivation.dylib",
-                  "/usr/lib/libmis.dylib", "/usr/lib/libsandbox.1.dylib",
-                  "/usr/lib/system/libsystem_kernel.dylib", "/usr/lib/system/libsystem_sandbox.dylib",
-                  "/System/Library/PrivateFrameworks/MobileGestalt.framework",
-                  "/System/Library/CoreServices/SystemVersion.plist",
+                  "/usr/lib/libMobileGestalt.dylib",
+                  "/usr/lib/libMobileActivation.dylib",
+                  "/usr/lib/libmis.dylib",
+                  "/usr/lib/libsandbox.1.dylib",
                   "/var/mobile/Library/Preferences/com.apple.MobileGestalt.plist",
                   "/var/mobile/Library/Preferences/.GlobalPreferences.plist",
                   "/var/mobile/Library/Preferences/com.apple.springboard.plist",
-                  "/var/mobile/Library/Caches", "/var/mobile/Library/Logs", "/var/mobile/Library",
-                  "/var/mobile/Media", "/var/mobile/Containers/Data/Application",
-                  "/var/mobile/Containers/Data/System", "/var/mobile/Containers/Shared/AppGroup",
-                  "/var/containers/Bundle/Application", "/var/containers/Shared/SystemGroup",
-                  "/private/var/mobile", "/private/var/mobile/Library", "/private/etc/hosts", "/etc/hosts",
-                  "/System/Library", "/System/Library/Frameworks", "/System/Library/PrivateFrameworks",
+                  "/var/mobile/Library/Caches",
+                  "/var/mobile/Library",
+                  "/var/mobile/Containers/Data/Application",
+                  "/var/containers/Bundle/Application",
                   NSHomeDirectory(),
                   FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path,
                   FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].path,
@@ -1463,31 +1258,61 @@ jobs:
               ]
 
               var body: some View {
-                  SimpleList {
-                      SimpleSection("Summary", systemImage: "chart.bar") {
-                          summaryRow("Paths", "\(results.filter { $0.exists }.count)/\(results.count)")
-                          Divider()
-                          summaryRow("Readable", "\(results.filter { $0.readable }.count)")
-                          Divider()
-                          summaryRow("Writable", "\(results.filter { $0.writable }.count)")
-                          Divider()
-                          summaryRow("Libraries", "\(libs.filter { $0.loaded }.count)/\(libs.count)")
-                          Divider()
+                  List {
+                      Section {
+                          HStack { Text("Paths"); Spacer(); Text("\(results.filter { $0.exists }.count)/\(results.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
+                          HStack { Text("Readable"); Spacer(); Text("\(results.filter { $0.readable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
+                          HStack { Text("Writable"); Spacer(); Text("\(results.filter { $0.writable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
+                          HStack { Text("Libraries"); Spacer(); Text("\(libs.filter { $0.loaded }.count)/\(libs.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
                           Button { scan() } label: {
                               HStack {
                                   Text(busy ? "Scanning..." : "Run Scan")
                                   Spacer()
                                   ProgressView().opacity(busy ? 1 : 0)
                               }
-                              .padding(.horizontal, 12)
-                              .padding(.vertical, 10)
-                          }
-                          .disabled(busy)
+                          }.disabled(busy)
+                      } header: {
+                          Label("Summary", systemImage: "chart.bar")
                       }
 
-                      libsSection
-                      pathsSection
+                      Section {
+                          ForEach(libs) { r in
+                              VStack(alignment: .leading, spacing: 4) {
+                                  HStack(spacing: 6) {
+                                      Text(r.name).font(.system(size: 12, weight: .semibold))
+                                      badge(r.loaded ? "loaded" : "no", color: r.loaded ? .green : .red)
+                                  }
+                                  Text(r.path).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).lineLimit(2)
+                                  HStack(spacing: 4) {
+                                      ForEach(r.symbols, id: \.self) { sym in
+                                          badge(sym, color: r.foundSymbols.contains(sym) ? .green : .gray)
+                                      }
+                                  }
+                              }
+                          }
+                      } header: {
+                          Label("Libraries", systemImage: "books.vertical")
+                      }
+
+                      Section {
+                          ForEach(results) { r in
+                              VStack(alignment: .leading, spacing: 4) {
+                                  Text(r.path).font(.system(size: 11, design: .monospaced))
+                                      .foregroundStyle(r.exists ? .primary : .secondary).lineLimit(2)
+                                  HStack(spacing: 6) {
+                                      badge(r.exists ? "exists" : "missing", color: r.exists ? .green : .red)
+                                      if r.isDirectory { badge("dir", color: .blue) }
+                                      if r.readable { badge("r", color: .green) }
+                                      if r.writable { badge("w", color: .orange) }
+                                      if let s = r.size { badge("\(s)B", color: .gray) }
+                                  }
+                              }
+                          }
+                      } header: {
+                          Label("Paths", systemImage: "folder")
+                      }
                   }
+                  .listStyle(.insetGrouped)
                   .navigationTitle("Path Access")
                   .navigationBarTitleDisplayMode(.inline)
                   .toolbar {
@@ -1502,62 +1327,6 @@ jobs:
                       }
                   }
                   .onAppear { if results.isEmpty { scan() } }
-              }
-
-              private var libsSection: some View {
-                  SimpleSection("Libraries", systemImage: "books.vertical") {
-                      ForEach(Array(libs.enumerated()), id: \.element.id) { idx, r in
-                          if idx > 0 { Divider() }
-                          VStack(alignment: .leading, spacing: 4) {
-                              HStack(spacing: 6) {
-                                  Text(r.name).font(.system(size: 12, weight: .semibold))
-                                  badge(r.loaded ? "loaded" : "no", color: r.loaded ? .green : .red)
-                              }
-                              Text(r.path).font(.system(size: 10, design: .monospaced))
-                                  .foregroundStyle(.secondary).lineLimit(2)
-                              if !r.symbols.isEmpty {
-                                  HStack(spacing: 4) {
-                                      ForEach(r.symbols, id: \.self) { sym in
-                                          badge(sym, color: r.foundSymbols.contains(sym) ? .green : .gray)
-                                      }
-                                  }
-                              }
-                          }
-                          .padding(.horizontal, 12)
-                          .padding(.vertical, 8)
-                      }
-                  }
-              }
-
-              private var pathsSection: some View {
-                  SimpleSection("Paths", systemImage: "folder") {
-                      ForEach(Array(results.enumerated()), id: \.element.id) { idx, r in
-                          if idx > 0 { Divider() }
-                          VStack(alignment: .leading, spacing: 4) {
-                              Text(r.path).font(.system(size: 11, design: .monospaced))
-                                  .foregroundStyle(r.exists ? .primary : .secondary).lineLimit(2)
-                              HStack(spacing: 6) {
-                                  badge(r.exists ? "exists" : "missing", color: r.exists ? .green : .red)
-                                  if r.isDirectory { badge("dir", color: .blue) }
-                                  if r.readable { badge("r", color: .green) }
-                                  if r.writable { badge("w", color: .orange) }
-                                  if let s = r.size { badge("\(s)B", color: .gray) }
-                              }
-                          }
-                          .padding(.horizontal, 12)
-                          .padding(.vertical, 8)
-                      }
-                  }
-              }
-
-              private func summaryRow(_ key: String, _ value: String) -> some View {
-                  HStack {
-                      Text(key)
-                      Spacer()
-                      Text(value).font(.system(.body, design: .monospaced)).foregroundStyle(.secondary)
-                  }
-                  .padding(.horizontal, 12)
-                  .padding(.vertical, 10)
               }
 
               private func badge(_ text: String, color: Color) -> some View {
@@ -1732,12 +1501,12 @@ jobs:
           chk() {
             if eval "$2" >/dev/null 2>&1; then echo "  OK   $1"; else echo "  FAIL $1"; FAIL=1; fi
           }
-          chk "SimpleList.swift"           "test -s natsuk1/Views/SimpleList.swift"
           chk "nk_offsets.h"               "test -s natsuk1/Exploit/nk_offsets.h"
           chk "necp.c"                     "test -s natsuk1/Exploit/necp.c"
           chk "natsuk1.swift"              "test -s natsuk1/natsuk1.swift"
           chk "ContentView.swift"          "test -s natsuk1/Views/ContentView.swift"
           chk "OverviewView.swift"         "test -s natsuk1/Views/OverviewView.swift"
+          chk "RuntimeView.swift"          "test -s natsuk1/Views/RuntimeView.swift"
           chk "AirliftView.swift"          "test -s natsuk1/Views/AirliftView.swift"
           chk "SettingsView.swift"         "test -s natsuk1/Views/SettingsView.swift"
           chk "ToolsView.swift"            "test -s natsuk1/Views/ToolsView.swift"
@@ -1745,17 +1514,11 @@ jobs:
           chk "DeviceInfoView.swift"       "test -s natsuk1/Views/DeviceInfoView.swift"
           chk "PathAccessView.swift"       "test -s natsuk1/Views/PathAccessView.swift"
           chk "offsets json"               "test -s natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
-          chk "no List in Overview"        "! grep -q -e '\bList\s*{' natsuk1/Views/OverviewView.swift"
-          chk "no List in Airlift"         "! grep -q -e '\bList\s*{' natsuk1/Views/AirliftView.swift"
-          chk "no List in Settings"        "! grep -q -e '\bList\s*{' natsuk1/Views/SettingsView.swift"
-          chk "no List in Tools"           "! grep -q -e '\bList\s*{' natsuk1/Views/ToolsView.swift"
-          chk "no List in About"           "! grep -q -e '\bList\s*{' natsuk1/Views/AboutView.swift"
-          chk "no List in DeviceInfo"      "! grep -q -e '\bList\s*{' natsuk1/Views/DeviceInfoView.swift"
-          chk "no List in PathAccess"      "! grep -q -e '\bList\s*{' natsuk1/Views/PathAccessView.swift"
-          chk "no scaleEffect anywhere"    "! grep -rq -e 'scaleEffect' natsuk1/"
+          chk "SimpleList gone"            "! test -f natsuk1/Views/SimpleList.swift"
+          chk "no scaleEffect"             "! grep -rq -e 'scaleEffect' natsuk1/"
           chk "no NotSupportedView"        "! grep -q -e 'NotSupportedView' natsuk1/natsuk1.swift"
-          chk "NK_SYSENT_BASE"             "grep -q -e 'NK_SYSENT_BASE' natsuk1/Exploit/nk_offsets.h"
-          chk "NK_SYSENT_COUNT"            "grep -q -e 'NK_SYSENT_COUNT' natsuk1/Exploit/nk_offsets.h"
+          chk "List in Overview"           "grep -q -e 'List {' natsuk1/Views/OverviewView.swift"
+          chk "List in Airlift"            "grep -q -e 'List {' natsuk1/Views/AirliftView.swift"
           chk "build_and_release removed"  "! test -f .github/workflows/build_and_release.yml"
           python3 -c "import json; json.load(open('natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json'))" || FAIL=1
           echo "  OK   json valid"
@@ -1801,7 +1564,7 @@ jobs:
           NOTES="$(cat <<EOF
           ### natsuk1 — iOS 27.0 (24A437)
 
-          v4.0 — no List, no ConditionalContent in List, no scaleEffect.
+          v4.1 — List style restored, no if/else in List root.
 
           **IPA** \`${IPA_URL}\`
 
@@ -1826,5 +1589,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "v4.0: replace List with SimpleList, fix LiveContainer crash [skip ci]"
+          git commit -m "v4.1: restore List style, remove SimpleList, no if/else in List [skip ci]"
           git push
