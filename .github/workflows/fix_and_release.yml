@@ -29,7 +29,159 @@ jobs:
         run: |
           rm -f .github/workflows/build_and_release.yml
           rm -f .github/workflows/fix_and_test.yml
-          rm -f natsuk1/Views/SimpleList.swift
+
+      - name: Write rules file
+        run: |
+          cat > /tmp/rules.md <<'RULES_EOF'
+
+          ## 🤖 AUTO-GENERATED RESEARCH RULES
+
+          Этот блок обновляется workflow при каждом push.
+          **Читать первым делом. Не нарушать.**
+
+          ### Обновлено
+          - date: 2026-09-26
+          - device: iPhone14,5 / iOS 27.0 / 24A437
+          - necp_status: **closed** (исчерпан)
+
+          ### 1. NECP — статус "ЗАКРЫТ"
+
+          Проверено всё:
+          - `op=0x03/0x04/0x10/0x1A` возвращают **ровно 310 байт** TLV
+          - `op=0x0D` (sysctl_arena) → user VA, RO, kernel-wide singleton,
+            первые 256 байт одинаковые у всех клиентов, `vm_protect(RW_COPY)`
+            даёт COW-копию — **ядро наших записей не видит**
+          - `op=0x05 copy_list` → ret=-1
+          - `op=0x0C copy_parameters` → ret=-1
+          - `op=0x0F copy_update` → ret=-1
+          - `op=0x18/0x19` signed_id → пусто / -1
+          - TLV overflow (`len=0xffffffff`) → kernel отклоняет
+          - double-free `remove_flow x2` → ret=0, но `copy_result` = 1 байт
+          - kptr count во всех dump'ах = 0
+
+          **Вывод:** NECP — обычный userspace API. Примитивов нет.
+
+          ### 2. iOS 27 sandbox — критично
+
+          - **`SIGKILL - CODESIGNING` = AMFI убивает ad-hoc приложение на iOS 27**
+            при вызове определённых syscall'ов:
+            - `proc_info(336)` — flavors 1..20
+            - `csops(169)` — ops 0..15
+            - `task_info` — flavors 1..40
+            - `mach_port_names` — при большом count
+          - **Не вызывать их из ad-hoc подписанного приложения.**
+          - **Blind syscall sweep 0..558** убивает через `SIGSYS` на `syscall(78)`.
+            Whitelist: `getpid(20)`, `getuid(24)`, `getgid(47)`, `getppid(39)`,
+            `geteuid(25)`, `getegid(43)`, `gettid(286)`, `getpgid(202)`.
+          - `socket()`, `getsockopt()`, `setsockopt()`, `sysctl`, `uname` — **безопасны**.
+
+          ### 3. Сборка — грабли
+
+          - `#include <mach/mach_vm.h>` → **`error: mach_vm.h unsupported`** в iPhoneOS SDK 26.5.
+            Объявлять extern вручную:
+            ```c
+            extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t,
+                mach_vm_size_t, mach_vm_address_t, mach_vm_size_t*);
+            extern kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t,
+                vm_offset_t, mach_msg_type_number_t);
+            extern kern_return_t mach_vm_protect(vm_map_t, mach_vm_address_t,
+                mach_vm_size_t, boolean_t, vm_prot_t);
+            ```
+          - `TCP_KEEPINIT`, `TCP_FASTOPEN_KEY`, `SO_REUSEPORT_LF`, `SO_NO_CHECK` — **не в SDK**.
+            Sweep только по числам.
+          - `@MainActor` + `nonisolated(unsafe) static let shared = Foo()` → ошибка компиляции.
+            Использовать `final class Foo: ObservableObject, @unchecked Sendable`,
+            `nonisolated(unsafe) static let shared = Foo()`, `private init()`.
+
+          ### 4. SwiftUI iOS 27 — что роняет
+
+          - `.overlay(RespringView())` — **никогда**. WKWebView спамит GPU → CA UAF → SIGSEGV.
+          - `List { if cond { Section } else { Section } }` в корне → падает.
+          - `.scaleEffect()` внутри `if` → `_ConditionalContent` ломается.
+          - Мутации `@Published` из `Task { }` → race → UAF. Только `Timer`.
+
+          ### 5. LiveContainer
+
+          `SIGKILL - CODESIGNING` = LC ломает подпись embedded .app на iOS 27.
+          **Ставить IPA напрямую** через Sideloadly / AltStore / TrollStore / ESign.
+          Не через LiveContainer.
+
+          ### 6. Оффсеты (iOS 27.0 / 24A437)
+
+          ```
+          necp_open                      0xFFFFFFF00A4E411C
+          necp_client_action             0xFFFFFFF00A4E5C28
+          necp_client_copy_result        0xFFFFFFF00A4E7BE8
+          necp_client_copy_result_inner  0xFFFFFFF00A4F26F0
+          necp_client_add_flow           0xFFFFFFF00A4E843C
+          necp_client_remove_flow        0xFFFFFFF00A4E93C4
+          necp_client_copy_interface     0xFFFFFFF00A4EAC7C
+          necp_client_sysctl_arena       0xFFFFFFF00A4EB704
+          necp_client_copy_update        0xFFFFFFF00A4EC264
+          necp_get_tlv_at_offset         0xFFFFFFF00A4C2034
+          copyin                         0xFFFFFFF00A368EC0
+          copyout                        0xFFFFFFF00A369A3C
+          kalloc_type                    0xFFFFFFF00A200988
+          kfree_type                     0xFFFFFFF00A201000
+          kalloc_type_necp_flow          0xFFFFFFF007C62E68
+          ```
+          KBASE = `0xFFFFFFF007004000`, slide = `0x3D00000`.
+
+          ### 7. Ghidra / CI
+
+          - Jython 2.7: только 4 пробела. Валидация через `ast.parse`.
+          - Warm = `-process -noanalysis` (1-3 мин). Cold = `-import` (24-90 мин).
+          - Ключи кэша — статические с версией. **Никогда** `hashFiles`.
+          - Символизация: `ipsw kernel symbolicate --signatures symbolicator/kernel/27.0/kexts`.
+          - Kernelcache iOS 27 — **уже Mach-O**. Не декомпрессировать.
+
+          ### 8. YAML
+
+          - **Не пихать C/Swift код в heredoc длиннее 30 строк**. Любая строка с неправильным
+            отступом ломает весь YAML.
+          - Все строки heredoc на 10 пробелах от начала файла.
+          - `set +e` + `FAIL=1`, `grep -q -e "pattern"`.
+          - Один workflow — `fix_and_release.yml`.
+
+          ### 9. Что дальше
+
+          1. **mbuf / socket** — `sendmsg` + `msg_control`, `setsockopt(IPPROTO_*)`, mbuf UAF.
+          2. **IOKit** — `IOSurface`, `IOConnectCallMethod`, `IOHIDEvent`.
+          3. **Ghidra** — `sbappendcontrol`, `m_copydata`, `sock_getsockopt`.
+
+          После 2-3 попыток — менять подход.
+
+          ### 10. Что НЕ делать
+
+          - Не создавать `fixPublished_and_test.yml` / `build_and_release.yml`.
+          - Не пихать C/Swift в heredoc.
+          - Не использовать `hashFiles('kernelcache/**')`.
+          - Не делать blind syscall sweep.
+          - **Не вызывать `proc_info(336)`, `csops(169)`, `task_info` flavor sweep,
+            `mach_port_names` из ad-hoc приложения — SIGKILL CODESIGNING.**
+          - Не мутировать `@` из `Task {}`.
+          - Не класть `RespringView` в дерево SwiftUI.
+          - Не вызывать `al_device_respring`.
+          - Не коммитить `natsuk1.xcodeproj`.
+          - Не забывать `import Combine`.
+          - Не доверять оффсетам без Ghidra.
+          RULES_EOF
+
+      - name: Update README
+        run: |
+          python3 - <<'PY_EOF'
+          import re, os
+          p = "README.md"
+          s = open(p).read() if os.path.exists(p) else "# natsuk1\n"
+          rules = open("/tmp/rules.md").read()
+          ms = "<!-- AUTO-RULES-START -->"
+          me = "<!-- AUTO-RULES-END -->"
+          s = re.sub(re.escape(ms) + r".*?" + re.escape(me), "", s, flags=re.DOTALL)
+          s = s.rstrip() + "\n\n" + ms + "\n" + rules + "\n" + me + "\n"
+          open(p, "w").write(s)
+          print("README size=%d" % len(s))
+          PY_EOF
+          tail -20 README.md
 
       - name: Write necp.c
         run: |
@@ -48,7 +200,6 @@ jobs:
           #include <sys/socket.h>
           #include <sys/utsname.h>
           #include <netinet/in.h>
-          #include <netinet/tcp.h>
           #include <mach/mach.h>
           #include <mach/message.h>
           #include "nk_api.h"
@@ -78,6 +229,7 @@ jobs:
           #define LE(t, ...) lg(t, "- ", __VA_ARGS__)
           #define LW(t, ...) lg(t, "! ", __VA_ARGS__)
           #define LR(t, ...) lg(t, "> ", __VA_ARGS__)
+          #define TRACE(s) LI("TRACE", ">>> " s)
           static int is_kptr(uint64_t v) { return v >= KPTR_MIN && v <= KPTR_MAX; }
           static int nfd(void) { return (int)syscall(SYS_NECP_OPEN, 0); }
           static int nadd_client(int fd, uint8_t uuid[16]) {
@@ -115,17 +267,15 @@ jobs:
               return found;
           }
           static int step_sysinfo(void) {
-              nk_log("");
-              LI("A1", "uname");
+              TRACE("sysinfo");
               struct utsname u;
               if (uname(&u) == 0) {
                   LI("A1", "sysname=%s release=%s version=%s machine=%s",
                      u.sysname, u.release, u.version, u.machine);
               }
               const char *keys[] = {
-                  "kern.osproductversion", "kern.osversion",
-                  "kern.version", "kern.uuid", "kern.hostname",
-                  "kern.ostype", "kern.osrelease", "kern.secure_kernel",
+                  "kern.osproductversion", "kern.osversion", "kern.version",
+                  "kern.uuid", "kern.hostname", "kern.secure_kernel",
                   "hw.machine", "hw.model", "hw.memsize", "hw.ncpu",
                   "hw.cpufamily", "hw.cputype", "hw.cpusubtype", "hw.targettype"
               };
@@ -135,15 +285,10 @@ jobs:
                       LI("A2", "%s = %s", keys[i], val);
                   }
               }
-              uint64_t boot = 0; size_t bs = sizeof(boot);
-              if (sysctlbyname("kern.boottime", &boot, &bs, NULL, 0) == 0) {
-                  LI("A3", "kern.boottime = 0x%llx", (unsigned long long)boot);
-              }
               return 0;
           }
           static int step_necp_recap(void) {
-              nk_log("");
-              LI("B1", "NECP recap op 0x03/0x04/0x10/0x1A");
+              TRACE("necp_recap");
               int fd = nfd();
               if (fd < 0) { LE("B1", "open errno=%d", errno); return -1; }
               uint8_t cu[16]; memset(cu, 0, sizeof(cu));
@@ -156,174 +301,45 @@ jobs:
                   int c = (int)syscall(SYS_NECP_ACTION, fd, ops[i],
                                        (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
                   LI("B1", "op=0x%02x ret=%d", ops[i], c);
-                  if (c > 0) {
+                  if (c > 0 && c < 600) {
                       hexdump("B1H", buf, c, 512);
                       scan_kptr("B1K", buf, c, 8);
                   }
               }
-              int r1 = (int)syscall(SYS_NECP_ACTION, fd, 0x12, (void*)fu, (size_t)16, NULL, (size_t)0);
-              int r2 = (int)syscall(SYS_NECP_ACTION, fd, 0x12, (void*)fu, (size_t)16, NULL, (size_t)0);
-              LI("B2", "remove#1=%d remove#2=%d", r1, r2);
               close(fd);
               return 0;
           }
-          static int step_safe_syscalls(void) {
-              nk_log("");
-              LI("C1", "safe syscall whitelist (read-only)");
-              struct { int nr; const char *name; } list[] = {
-                  {20,  "getpid"},
-                  {24,  "getuid"},
-                  {47,  "getgid"},
-                  {39,  "getppid"},
-                  {25,  "geteuid"},
-                  {43,  "getegid"},
-                  {286, "gettid"},
-                  {202, "getpgid"},
-              };
-              for (size_t i = 0; i < sizeof(list)/sizeof(list[0]); i++) {
-                  errno = 0;
-                  long r = syscall(list[i].nr, 0, 0, 0, 0, 0, 0, 0, 0);
-                  int e = errno;
-                  LI("C1", "syscall %d (%s) r=%ld errno=%d", list[i].nr, list[i].name, r, e);
-              }
-              return 0;
-          }
-          static void sweep_getsockopt(int level, const char *name, int maxopt) {
-              int s = socket(AF_INET, SOCK_STREAM, 0);
-              if (s < 0) return;
-              int hits = 0;
-              for (int opt = 0; opt <= maxopt; opt++) {
-                  uint8_t buf[128]; socklen_t bl = sizeof(buf); memset(buf, 0, sizeof(buf));
-                  int r = getsockopt(s, level, opt, buf, &bl);
-                  if (r == 0 && bl > 4) {
-                      hits++;
-                      LI("DS", "%s level=%d opt=%d bl=%u", name, level, opt, (unsigned)bl);
-                      hexdump("DSH", buf, bl, 128);
-                      int nk = scan_kptr("DSK", buf, bl, 4);
-                      if (nk > 0) LO("DS", "  kptr=%d", nk);
-                  }
-              }
-              LI("DS", "%s level=%d done, hits=%d", name, level, hits);
-              close(s);
-          }
           static int step_getsockopt_sweep(void) {
-              nk_log("");
-              LI("D1", "getsockopt sweeps");
-              sweep_getsockopt(0xffff, "SOL_SOCKET", 300);
-              sweep_getsockopt(0, "IPPROTO_IP", 300);
-              sweep_getsockopt(6, "IPPROTO_TCP", 300);
-              sweep_getsockopt(41, "IPPROTO_IPV6", 200);
-              sweep_getsockopt(1, "IPPROTO_ICMP", 200);
-              sweep_getsockopt(17, "IPPROTO_UDP", 200);
-              return 0;
-          }
-          static int step_setsockopt(void) {
-              nk_log("");
-              LI("D7", "setsockopt probes");
+              TRACE("getsockopt_sweep");
               int levels[] = {0xffff, 0, 6, 41, 1, 17};
-              const char *names[] = {"SOL_SOCKET","IPPROTO_IP","IPPROTO_TCP","IPPROTO_IPV6","IPPROTO_ICMP","IPPROTO_UDP"};
+              const char *names[] = {"SOL_SOCKET","IP","TCP","IPV6","ICMP","UDP"};
               for (size_t li = 0; li < sizeof(levels)/sizeof(levels[0]); li++) {
                   int s = socket(AF_INET, SOCK_STREAM, 0);
-                  if (s < 0) continue;
+                  if (s < 0) { LI("D1", "socket fail level=%d", levels[li]); continue; }
                   int hits = 0;
                   for (int opt = 0; opt <= 200; opt++) {
-                      uint64_t marker = 0xdeadbeefcafebabeULL;
-                      int r = setsockopt(s, levels[li], opt, &marker, 8);
-                      if (r == 0) {
-                          uint8_t buf[128]; socklen_t bl = sizeof(buf); memset(buf, 0, sizeof(buf));
-                          if (getsockopt(s, levels[li], opt, buf, &bl) == 0 && bl > 4) {
-                              hits++;
-                              LI("D7", "%s opt=%d bl=%u", names[li], opt, (unsigned)bl);
-                              hexdump("D7H", buf, bl, 128);
+                      uint8_t buf[128]; socklen_t bl = sizeof(buf); memset(buf, 0, sizeof(buf));
+                      if (getsockopt(s, levels[li], opt, buf, &bl) == 0 && bl > 4) {
+                          hits++;
+                          if (hits <= 5) {
+                              LI("D1", "%s opt=%d bl=%u", names[li], opt, (unsigned)bl);
+                              hexdump("D1H", buf, bl, 128);
+                              scan_kptr("D1K", buf, bl, 4);
                           }
                       }
                   }
-                  LI("D7", "%s done, hits=%d", names[li], hits);
+                  LI("D1", "%s done hits=%d", names[li], hits);
                   close(s);
               }
               return 0;
           }
-          static int step_proc_info(void) {
-              nk_log("");
-              LI("D8", "proc_info flavors");
-              for (int flavor = 1; flavor <= 20; flavor++) {
-                  uint8_t buf[512]; memset(buf, 0, sizeof(buf));
-                  int sz = 0;
-                  long r = syscall(336, getpid(), flavor, buf, sizeof(buf), &sz);
-                  if (r == 0 && sz > 0) {
-                      LI("D8", "flavor=%d sz=%d", flavor, sz);
-                      hexdump("D8H", buf, sz < 512 ? sz : 512, 512);
-                      scan_kptr("D8K", buf, sz < 512 ? sz : 512, 8);
-                  }
-              }
-              return 0;
-          }
-          static int step_csops(void) {
-              nk_log("");
-              LI("D9", "csops flavors");
-              for (int op = 0; op <= 15; op++) {
-                  uint8_t buf[512]; memset(buf, 0, sizeof(buf));
-                  size_t sz = sizeof(buf);
-                  long r = syscall(169, getpid(), op, buf, sz);
-                  if (r == 0) {
-                      LI("D9", "csops op=%d ok", op);
-                      hexdump("D9H", buf, 512, 512);
-                      scan_kptr("D9K", buf, 512, 8);
-                  }
-              }
-              return 0;
-          }
-          static int step_task_info(void) {
-              nk_log("");
-              LI("DA", "task_info flavor sweep");
-              mach_port_t task = mach_task_self();
-              for (int flavor = 1; flavor <= 40; flavor++) {
-                  natural_t count = 0;
-                  kern_return_t kr = task_info(task, flavor, NULL, &count);
-                  if (kr == KERN_SUCCESS && count > 0 && count < 1024) {
-                      size_t bytes = count * sizeof(natural_t);
-                      uint8_t *buf = malloc(bytes);
-                      if (buf) {
-                          memset(buf, 0, bytes);
-                          kr = task_info(task, flavor, (task_info_t)buf, &count);
-                          if (kr == KERN_SUCCESS) {
-                              LI("DA", "flavor=%d count=%d bytes=%zu", flavor, count, bytes);
-                              hexdump("DAH", buf, (int)bytes > 256 ? 256 : (int)bytes, 256);
-                              int nk = scan_kptr("DAK", buf, (int)bytes, 8);
-                              if (nk > 0) LO("DA", "  kptr=%d", nk);
-                          }
-                          free(buf);
-                      }
-                  }
-              }
-              return 0;
-          }
-          static int step_mach_ports(void) {
-              nk_log("");
-              LI("DB", "mach_port_names of self task");
-              mach_port_t task = mach_task_self();
-              mach_port_name_t *names = NULL;
-              mach_msg_type_number_t names_cnt = 0;
-              mach_port_type_t *types = NULL;
-              mach_msg_type_number_t types_cnt = 0;
-              kern_return_t kr = mach_port_names(task, &names, &names_cnt, &types, &types_cnt);
-              LI("DB", "mach_port_names kr=%d count=%u", kr, names_cnt);
-              if (kr == KERN_SUCCESS && names_cnt > 0) {
-                  int shown = names_cnt > 32 ? 32 : names_cnt;
-                  for (int i = 0; i < shown; i++) {
-                      LI("DB", "port[%d] name=0x%x type=0x%x", i, names[i], types[i]);
-                  }
-              }
-              return 0;
-          }
-          static int step_mach_vm_region(void) {
-              nk_log("");
-              LI("DC", "mach_vm_region scan 0x100000000-0x110000000");
+          static int step_vm_region_scan(void) {
+              TRACE("vm_region_scan");
               mach_port_t task = mach_task_self();
               vm_address_t addr = 0x100000000ULL;
-              vm_address_t limit = 0x110000000ULL;
+              vm_address_t limit = 0x108000000ULL;
               int n = 0;
-              while (addr < limit && n < 200) {
+              while (addr < limit && n < 100) {
                   vm_size_t size = 0;
                   vm_region_basic_info_data_64_t info;
                   mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
@@ -331,8 +347,8 @@ jobs:
                   kern_return_t kr = vm_region_64(task, &addr, &size,
                                                   VM_REGION_BASIC_INFO_64,
                                                   (vm_region_info_t)&info, &cnt, &obj);
-                  if (kr != KERN_SUCCESS) break;
-                  if (n < 40) {
+                  if (kr != KERN_SUCCESS) { LI("DC", "stop at 0x%llx kr=%d", (unsigned long long)addr, kr); break; }
+                  if (n < 20) {
                       LI("DC", "0x%llx-0x%llx size=0x%llx prot=%d",
                          (unsigned long long)addr,
                          (unsigned long long)(addr + size),
@@ -342,28 +358,27 @@ jobs:
                   n++;
                   if (size == 0) break;
               }
-              LI("DC", "total regions=%d", n);
+              LI("DC", "total=%d", n);
               return 0;
           }
           static int impl(void) {
               nk_log("");
               nk_log("================================================================");
-              nk_log("natsuk1 v7.1 - RECON (safe, no blind syscall sweep)");
+              nk_log("natsuk1 v7.2 - SAFE RECON (no AMFI triggers)");
               nk_log("iOS 27.0 / iPhone14,5 / 24A437");
               nk_log("================================================================");
               nk_log("");
+              int fd = nfd();
+              if (fd < 0) { LE("PRE", "necp_open errno=%d", errno); return 1; }
+              close(fd);
+              LO("PRE", "necp_open OK");
+
               step_sysinfo();
               step_necp_recap();
-              step_safe_syscalls();
               step_getsockopt_sweep();
-              step_setsockopt();
-              step_proc_info();
-              step_csops();
-              step_task_info();
-              step_mach_ports();
-              step_mach_vm_region();
-              nk_log("");
-              nk_log("======== done ========");
+              step_vm_region_scan();
+
+              TRACE("done");
               return 0;
           }
           int nk_necp_run(void) {
@@ -415,12 +430,27 @@ jobs:
           fi
           REPO="${{ github.repository }}"
           IPA_URL="https://github.com/${REPO}/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v7.1
+          NOTES="natsuk1 v7.2
+
+          Install DIRECTLY, not via LiveContainer.
 
           IPA: ${IPA_URL}
+          AltStore: altstore://install?url=${IPA_URL}
+          Scarlet: scarlet://install?url=${IPA_URL}
+          ESign: esign://install?url=${IPA_URL}
 
           $(git log -5 --pretty=format:'- %h %s')"
           gh release create development natsuk1.ipa \
             --target "${{ github.sha }}" \
             --title "Development" --prerelease --latest=false \
             --notes "$NOTES"
+
+      - name: Commit README
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --cached --quiet; then echo "no README changes"; exit 0; fi
+          git commit -m "docs: auto-update research rules [skip ci]"
+          git push
