@@ -131,17 +131,11 @@ struct AirliftView: View {
         Section {
             if case .pairing = airlift.state {
                 Button(role: .destructive) { airlift.cancelPairing() } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).frame(width: 22)
-                        Text("Cancel Pairing")
-                    }
+                    Text("Cancel Pairing").frame(maxWidth: .infinity, alignment: .leading)
                 }
             } else {
                 Button { airlift.runPairing() } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "antenna.radiowaves.left.and.right").font(.system(size: 16, weight: .semibold)).foregroundStyle(.blue).frame(width: 22)
-                        Text("Start Pairing")
-                    }
+                    Text("Start Pairing").frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -193,37 +187,25 @@ struct AirliftView: View {
 
         Section {
             Button { airlift.runExploit() } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "bolt.fill").font(.system(size: 16, weight: .semibold)).foregroundStyle(.blue).frame(width: 22)
-                    Text("Run Exploit")
-                }
+                Text("Run Exploit").frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(airlift.state == .running || !loopbackVPNUp)
 
             Button(role: .destructive) { airlift.cancelExploit() } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).frame(width: 22)
-                    Text("Cancel Exploit")
-                }
+                Text("Cancel Exploit").frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(airlift.state != .running)
 
             Button { respring() } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "arrow.clockwise").font(.system(size: 16, weight: .semibold)).foregroundStyle(.blue).frame(width: 22)
-                    Text("Respring")
-                }
+                Text("Respring").frame(maxWidth: .infinity, alignment: .leading)
             }
         } header: {
-            Label("Exploit", systemImage: "bolt.shield")
+            Label("Exploit", systemImage: "flame.fill")
         }
 
         Section {
             Button(role: .destructive) { airlift.deletePairing() } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "trash").font(.system(size: 16, weight: .semibold)).frame(width: 22)
-                    Text("Delete Pairing")
-                }
+                Text("Delete Pairing").frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -256,21 +238,13 @@ struct AirliftView: View {
                     copied = false
                 }
             } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(copied ? .green : .blue)
-                        .frame(width: 22)
-                    Text(copied ? "Copied!" : "Copy All")
-                }
+                Text(copied ? "Copied!" : "Copy All")
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(airlift.exploitLog.isEmpty)
 
             Button(role: .destructive) { airlift.clearLog() } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "trash").font(.system(size: 16, weight: .semibold)).frame(width: 22)
-                    Text("Clear")
-                }
+                Text("Clear").frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(airlift.exploitLog.isEmpty)
         } header: {
