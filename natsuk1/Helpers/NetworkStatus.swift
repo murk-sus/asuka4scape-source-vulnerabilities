@@ -1,11 +1,7 @@
 import Foundation
 import Darwin
 
-/// Detects network interfaces (loopback tunnel, Wi-Fi en0).
-/// Ported from SideInstaller — used to pick the right host candidates for
-/// `tunnel_create_rppairing_multihost`.
 enum NetworkStatus {
-
     struct Interface {
         let name: String
         let ipv4: String
@@ -40,77 +36,27 @@ enum NetworkStatus {
         return String(decoding: bytes, as: UTF8.self)
     }
 
-    /// (vpnUp, wifiUp, detail) for UI status display.
     static func summarize(deviceIP: String) -> (vpn: Bool, wifi: Bool, detail: String) {
         let ifs = interfaces()
-        let vpn = isLoopbackTunnelUp(in: ifs, deviceIP: deviceIP)
+        let vpn = loopbackVPNUp()
         let wifi = ifs.contains { $0.name == "en0" }
         let detail = ifs.map { "\($0.name)=\($0.ipv4)" }.joined(separator: ", ")
         return (vpn, wifi, detail)
     }
 
-    static func loopbackTunnelUp(deviceIP: String) -> Bool {
-        isLoopbackTunnelUp(in: interfaces(), deviceIP: deviceIP)
+    static func loopbackVPNUp() -> Bool {
+        for iface in interfaces() {
+            guard isTunnelInterface(iface.name) else { continue }
+            if iface.ipv4.hasPrefix("10.7.0.") { return true }
+        }
+        return false
     }
 
-    private static func isLoopbackTunnelUp(in ifs: [Interface], deviceIP: String) -> Bool {
-        if ifs.contains(where: { isTunnelInterface($0.name) }) {
-            return true
-        }
-        guard let target = ipv4Value(deviceIP) else {
-            return false
-        }
-        if tunnelCarriesRoute(to: deviceIP, in: ifs) == true { return true }
-        return ifs.contains { isTunnelInterface($0.name) && subnet($0, contains: target) }
+    static func isTunnelInterface(_ name: String) -> Bool {
+        name.hasPrefix("utun") || name.hasPrefix("ipsec")
+            || name.hasPrefix("tap") || name.hasPrefix("ppp")
     }
 
-    private static func tunnelCarriesRoute(to deviceIP: String, in ifs: [Interface]) -> Bool? {
-        guard let source = routeSource(to: deviceIP),
-              let iface = ifs.first(where: { $0.ipv4 == source })
-        else { return nil }
-        guard isTunnelInterface(iface.name) else { return false }
-        return routeSource(to: defaultRouteProbe) != source
-    }
-
-    private static let defaultRouteProbe = "203.0.113.1"
-
-    private static func routeSource(to ip: String) -> String? {
-        var remote = sockaddr_in()
-        remote.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        remote.sin_family = sa_family_t(AF_INET)
-        remote.sin_port = in_port_t(UInt16(9).bigEndian)
-        guard ip.withCString({ inet_pton(AF_INET, $0, &remote.sin_addr) }) == 1 else { return nil }
-
-        let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
-        guard fd >= 0 else { return nil }
-        defer { close(fd) }
-
-        let dialled = withUnsafePointer(to: remote) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard dialled == 0 else { return nil }
-
-        var local = sockaddr_in()
-        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let named = withUnsafeMutablePointer(to: &local) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                getsockname(fd, $0, &length)
-            }
-        }
-        guard named == 0, local.sin_addr.s_addr != 0 else { return nil }
-        return withUnsafeMutablePointer(to: &local) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1, numericHost)
-        }
-    }
-
-    static func isOwnAddress(_ deviceIP: String) -> Bool {
-        interfaces().contains { $0.ipv4 == deviceIP }
-    }
-
-    /// Local interface addresses to try when the tunnel listener gives a port but no host.
-    /// Wi-Fi (en0) first, tunnel & loopback excluded.
     static func tunnelHostCandidates() -> [String] {
         let ifs = interfaces().filter {
             !isTunnelInterface($0.name) && !$0.ipv4.hasPrefix("127.")
@@ -119,33 +65,13 @@ enum NetworkStatus {
             .map(\.ipv4)
     }
 
-    static func isTunnelInterface(_ name: String) -> Bool {
-        name.hasPrefix("utun") || name.hasPrefix("ipsec")
-            || name.hasPrefix("tap") || name.hasPrefix("ppp")
-    }
-
-    private static func subnet(_ interface: Interface, contains target: UInt32) -> Bool {
-        guard let address = ipv4Value(interface.ipv4) else { return false }
-        guard let mask = interface.netmask.flatMap(ipv4Value), mask != 0 else {
-            return (address & 0xFFFF_FF00) == (target & 0xFFFF_FF00)
-        }
-        return (address & mask) == (target & mask)
-    }
-
     static func host(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let slash = trimmed.firstIndex(of: "/") else { return trimmed }
         return String(trimmed[..<slash]).trimmingCharacters(in: .whitespaces)
     }
 
-    private static func ipv4Value(_ ip: String) -> UInt32? {
-        let octets = ip.split(separator: ".", omittingEmptySubsequences: false)
-        guard octets.count == 4 else { return nil }
-        var value: UInt32 = 0
-        for octet in octets {
-            guard let byte = UInt8(octet) else { return nil }
-            value = (value << 8) | UInt32(byte)
-        }
-        return value
+    static func isOwnAddress(_ deviceIP: String) -> Bool {
+        interfaces().contains { $0.ipv4 == deviceIP }
     }
 }

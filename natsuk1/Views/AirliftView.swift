@@ -3,24 +3,29 @@ import UIKit
 
 struct AirliftView: View {
     @EnvironmentObject var airlift: AirliftBridge
-    private var localDevVPNUp: Bool {
-        NetworkStatus.interfaces().contains { NetworkStatus.isTunnelInterface($0.name) }
-    }
+    @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()
 
     var body: some View {
         List {
-            if !localDevVPNUp {
+            if !loopbackVPNUp {
                 Section {
                     HStack(spacing: 10) {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                        Text("LocalDevVPN is not active.").font(.subheadline).foregroundStyle(.secondary)
+                        Image(systemName: "wifi.exclamationmark")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Loopback VPN is not active")
+                                .font(.subheadline).fontWeight(.semibold)
+                            Text("Start LocalDevVPN with interface 10.7.0.1")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
 
-            switch airlift.state {
-            case .idle, .pairing: pairingSection
-            case .ready, .running, .done: exploitSection
+            if airlift.hasPairing() {
+                exploitSection
+            } else {
+                pairingSection
             }
 
             Section {
@@ -32,15 +37,17 @@ struct AirliftView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Airlift")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { loopbackVPNUp = NetworkStatus.loopbackVPNUp() }
+        .refreshable { loopbackVPNUp = NetworkStatus.loopbackVPNUp() }
     }
 
     @ViewBuilder
     private var pairingSection: some View {
         Section {
             HStack(spacing: 8) {
-                Image(systemName: "checkmark.shield.fill")
-                    .foregroundStyle(airlift.hasPairing() ? .green : .orange)
-                Text(airlift.hasPairing() ? "Paired" : "Not paired").font(.subheadline.bold())
+                Image(systemName: "link.badge.plus")
+                    .foregroundStyle(.orange)
+                Text("Not paired").font(.subheadline.bold())
             }
             if case .pairing = airlift.state {
                 HStack(spacing: 8) {
@@ -62,14 +69,12 @@ struct AirliftView: View {
                 .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
             }
         } header: {
-            Label("Pairing", systemImage: "antenna.radiowaves.left.and.right")
+            Label("Pairing", systemImage: "link.circle")
         }
 
         Section {
             if case .pairing = airlift.state {
                 Button(role: .destructive) { airlift.cancelPairing() } label: { Text("Cancel Pairing").frame(maxWidth: .infinity) }
-            } else if airlift.hasPairing() {
-                Button(role: .destructive) { airlift.deletePairing() } label: { Text("Delete Pairing").frame(maxWidth: .infinity) }
             } else {
                 Button { airlift.runPairing() } label: { Text("Start Pairing").frame(maxWidth: .infinity) }
             }
@@ -79,6 +84,10 @@ struct AirliftView: View {
     @ViewBuilder
     private var exploitSection: some View {
         Section {
+            HStack {
+                Image(systemName: "link.circle.fill").foregroundStyle(.green)
+                Text("Paired").font(.subheadline.bold())
+            }
             HStack {
                 Text("Target")
                 Spacer()
@@ -90,14 +99,31 @@ struct AirliftView: View {
                     .textInputAutocapitalization(.never)
             }
         } header: {
-            Label("Exploit", systemImage: "scope")
+            Label("Pairing", systemImage: "link.circle")
         }
+
         Section {
-            Button { airlift.runExploit() } label: { Text("Run Exploit") }
-                .disabled(airlift.state == .running || !localDevVPNUp)
-            Button { airlift.respring() } label: { Text("Respring") }
-                .disabled(airlift.state == .running)
-            Button(role: .destructive) { airlift.deletePairing() } label: { Text("Delete Pairing") }
+            Button { airlift.runExploit() } label: {
+                HStack {
+                    Image(systemName: "bolt.fill")
+                    Text("Run Exploit")
+                }
+            }
+            .disabled(airlift.state == .running || !loopbackVPNUp)
+
+            Button { airlift.respring() } label: {
+                HStack {
+                    Image(systemName: "arrow.clockwise")
+                    Text("Respring")
+                }
+            }
+            .disabled(airlift.state == .running)
+        } header: {
+            Label("Exploit", systemImage: "bolt.shield")
+        }
+
+        Section {
+            Button(role: .destructive) { airlift.deletePairing() } label: { Text("Delete Pairing").frame(maxWidth: .infinity) }
         }
     }
 }
