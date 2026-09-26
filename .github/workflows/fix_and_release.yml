@@ -1,4 +1,4 @@
-name: 1 · Fix and Test
+name: Fix and Release
 
 on:
   push:
@@ -9,11 +9,11 @@ permissions:
   contents: write
 
 concurrency:
-  group: fix-test-${{ github.ref }}
+  group: fix-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  fix-and-test:
+  fix-and-release:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
@@ -25,12 +25,16 @@ jobs:
         with:
           xcode-version: "26.5"
 
-      - name: Cleanup
+      - name: Cleanup old workflows
         run: |
-          rm -f .github/workflows/natsuk1.yml .github/workflows/main.yml
+          rm -f .github/workflows/fix_and_test.yml
+          rm -f .github/workflows/build_and_release.yml
+          rm -f .github/workflows/natsuk1.yml
+          rm -f .github/workflows/main.yml
           rm -f NEXTHINT.txt GHIDRA_HINTS.txt
           rm -f *.txt natsuk1-app.tar.gz
           rm -rf Payload
+          ls -la .github/workflows/
 
       - name: Write nk_offsets.h
         run: |
@@ -122,7 +126,6 @@ jobs:
           #define KBASE 0xFFFFFFF007004000ULL
           #define KPTR_MIN 0xFFFFFFF000000000ULL
           #define KPTR_MAX 0xFFFFFFFFFF000000ULL
-          #define SLIDE_FALLBACK 0x3D00000ULL
 
           #define NECP_ADD_CLIENT 0x01
           #define NECP_COPY_RESULT 0x04
@@ -224,7 +227,7 @@ jobs:
 
           static int step_copy_result(void) {
               nk_log("");
-              LI("S1", "copy_result: add_client + add_flow + remove_flow x2 + copy_result");
+              LI("S1", "copy_result: add_client + add_flow + remove x2 + copy_result");
               int fd = nfd();
               if (fd < 0) { LE("S1", "open errno=%d", errno); return -1; }
               uint8_t cu[16]; memset(cu, 0, sizeof(cu));
@@ -275,7 +278,7 @@ jobs:
               }
               if (is_user_va(val)) {
                   LW("S2", "value is user VA: 0x%llx", (unsigned long long)val);
-                  LR("S2", "arena mapped into our address space, not a leak");
+                  LR("S2", "arena mapped into our space, not a leak");
                   LR("S2", "reading 128 bytes...");
                   volatile uint8_t *p = (volatile uint8_t *)(uintptr_t)val;
                   uint8_t local[128];
@@ -575,37 +578,368 @@ jobs:
           }
           EOF
 
-      - name: Patch OverviewView scaleEffect
+      - name: Write OverviewView.swift
         run: |
-          python3 - <<'PYEOF'
-          import sys
-          p = "natsuk1/Views/OverviewView.swift"
-          s = open(p).read()
-          old = 'if state.running { ProgressView().scaleEffect(0.8) }'
-          new = 'ProgressView().opacity(state.running ? 1 : 0)'
-          if old in s:
-              s = s.replace(old, new)
-              open(p, "w").write(s)
-              print("patched OverviewView")
-          else:
-              print("OverviewView scaleEffect not found (already patched?)")
-          PYEOF
+          cat > natsuk1/Views/OverviewView.swift <<'EOF'
+          import SwiftUI
+          import UIKit
 
-      - name: Patch AirliftView scaleEffect
+          struct OverviewView: View {
+              @EnvironmentObject var state: AppState
+              @State private var copied = false
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section {
+                              Button { state.necp_run() } label: {
+                                  HStack {
+                                      Text("Run Exploit")
+                                      Spacer()
+                                      ProgressView().opacity(state.running ? 1 : 0)
+                                  }
+                              }
+                              .disabled(state.running)
+
+                              Button(role: .destructive) { state.cancel() } label: {
+                                  Text("Cancel Exploit").frame(maxWidth: .infinity, alignment: .leading)
+                              }
+                              .disabled(!state.running)
+                          } header: {
+                              Label("Exploit", systemImage: "cpu")
+                          }
+
+                          RuntimeView()
+                              .environmentObject(state)
+
+                          Section {
+                              LogTerminal(text: state.log.isEmpty ? "Awaiting execution." : state.log)
+                          } header: {
+                              Label(state.t("Logs", "Логи"), systemImage: "terminal")
+                          }
+
+                          Section {
+                              Button {
+                                  UIPasteboard.general.string = state.log
+                                  copied = true
+                                  DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                      copied = false
+                                  }
+                              } label: {
+                                  Text(copied ? "Copied!" : state.t("Copy All", "Копировать всё"))
+                                      .frame(maxWidth: .infinity, alignment: .leading)
+                              }
+                              .disabled(state.log.isEmpty)
+
+                              Button(role: .destructive) { state.clear() } label: {
+                                  Text(state.t("Clear", "Очистить"))
+                                      .frame(maxWidth: .infinity, alignment: .leading)
+                              }
+                              .disabled(state.log.isEmpty)
+                          } header: {
+                              Label("Log Actions", systemImage: "document.on.document")
+                          }
+                      }
+                      .listStyle(.insetGrouped)
+                      .navigationTitle("natsuk1")
+                      .navigationBarTitleDisplayMode(.inline)
+                  }
+              }
+          }
+
+          struct StatusDot: View {
+              let status: AppState.Status
+              @State private var pulse = false
+
+              var body: some View {
+                  Image(systemName: "circle.fill")
+                      .font(.system(size: 14))
+                      .foregroundStyle(status.color)
+                      .shadow(color: status.color.opacity(0.85), radius: pulse ? 8 : 4)
+                      .animation(
+                          status == .running
+                              ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
+                              : .default,
+                          value: pulse
+                      )
+                      .onAppear { if status == .running { pulse = true } }
+                      .onChange(of: status) { _, s in pulse = (s == .running) }
+              }
+          }
+
+          struct LogTerminal: View {
+              let text: String
+              var body: some View {
+                  ScrollView {
+                      Text(text)
+                          .font(.system(size: 10, design: .monospaced))
+                          .multilineTextAlignment(.leading)
+                          .foregroundStyle(.primary)
+                          .frame(maxWidth: .infinity, alignment: .leading)
+                  }
+                  .frame(minHeight: 200, maxHeight: 400)
+              }
+          }
+          EOF
+
+      - name: Write AirliftView.swift
         run: |
-          python3 - <<'PYEOF'
-          p = "natsuk1/Views/AirliftView.swift"
-          s = open(p).read()
-          n = s.count(".scaleEffect(")
-          if n == 0:
-              print("AirliftView no scaleEffect to patch")
-              sys.exit(0)
-          import re
-          s = re.sub(r'\.scaleEffect\([^)]*\)', '', s)
-          open(p, "w").write(s)
-          print("patched AirliftView: removed %d scaleEffect" % n)
-          PYEOF
-        continue-on-error: true
+          cat > natsuk1/Views/AirliftView.swift <<'EOF'
+          import SwiftUI
+          import UIKit
+          import Combine
+
+          struct AirliftView: View {
+              @EnvironmentObject var airlift: AirliftBridge
+              @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()
+              @State private var tunnelIP: String? = NetworkStatus.tunnelIP()
+              @State private var deviceIP: String? = NetworkStatus.deviceIP()
+              @State private var copied = false
+
+              private let ticker = Timer.publish(every: 5.0, on: .main, in: .common).autoconnect()
+
+              var body: some View {
+                  List {
+                      networkSection
+                      if airlift.hasPairing() {
+                          exploitSection
+                      } else {
+                          pairingSection
+                      }
+                      logSection
+                      logActionsSection
+                  }
+                  .listStyle(.insetGrouped)
+                  .navigationTitle("Airlift")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .onAppear { refresh() }
+                  .onReceive(ticker) { _ in refresh() }
+                  .refreshable { refresh() }
+              }
+
+              private func refresh() {
+                  DispatchQueue.global(qos: .utility).async {
+                      let vpn = NetworkStatus.loopbackVPNUp()
+                      let tun = NetworkStatus.tunnelIP()
+                      let dev = NetworkStatus.deviceIP()
+                      DispatchQueue.main.async {
+                          if self.loopbackVPNUp != vpn { self.loopbackVPNUp = vpn }
+                          if self.tunnelIP != tun { self.tunnelIP = tun }
+                          if self.deviceIP != dev { self.deviceIP = dev }
+                      }
+                  }
+              }
+
+              @ViewBuilder
+              private var networkSection: some View {
+                  Section {
+                      if loopbackVPNUp {
+                          HStack {
+                              Text("Status")
+                              Spacer()
+                              Text("active")
+                                  .font(.system(size: 12, design: .monospaced))
+                                  .foregroundStyle(.green)
+                          }
+                          if let t = tunnelIP {
+                              HStack {
+                                  Text("Tunnel")
+                                  Spacer()
+                                  Text(t)
+                                      .font(.system(size: 12, design: .monospaced))
+                                      .foregroundStyle(.secondary)
+                              }
+                          }
+                          if let d = deviceIP {
+                              HStack {
+                                  Text("Device")
+                                  Spacer()
+                                  Text(d)
+                                      .font(.system(size: 12, design: .monospaced))
+                                      .foregroundStyle(.secondary)
+                              }
+                          }
+                      } else {
+                          HStack {
+                              Text("Status")
+                              Spacer()
+                              Text("not active")
+                                  .font(.system(size: 12, design: .monospaced))
+                                  .foregroundStyle(.orange)
+                          }
+                          Text("Start LocalDevVPN with interface 10.7.0.x")
+                              .font(.caption)
+                              .foregroundStyle(.secondary)
+                      }
+                  } header: {
+                      Label("Network", systemImage: "network")
+                  }
+              }
+
+              @ViewBuilder
+              private var pairingSection: some View {
+                  Section {
+                      HStack {
+                          Text("State")
+                          Spacer()
+                          Text(pairingStatusText)
+                              .font(.system(size: 12, design: .monospaced))
+                              .foregroundStyle(pairingStatusColor)
+                      }
+                      if case .pairing = airlift.state {
+                          HStack(spacing: 8) {
+                              ProgressView()
+                              Text(airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus)
+                                  .font(.subheadline).foregroundStyle(.secondary)
+                          }
+                      }
+                      if let pin = airlift.pairPIN {
+                          VStack(alignment: .leading, spacing: 8) {
+                              Text("ENTER PIN").font(.caption2.bold()).foregroundStyle(.secondary)
+                              Text(pin).font(.system(size: 34, weight: .black, design: .monospaced))
+                                  .foregroundStyle(.orange)
+                              Button {
+                                  if let url = URL(string: UIApplication.openSettingsURLString) {
+                                      UIApplication.shared.open(url)
+                                  }
+                              } label: {
+                                  Text("Open Settings").frame(maxWidth: .infinity)
+                              }
+                              .buttonStyle(.borderedProminent).tint(.orange)
+                          }
+                          .padding(12)
+                          .background(Color.orange.opacity(0.12),
+                                      in: RoundedRectangle(cornerRadius: 12))
+                      }
+                  } header: {
+                      Label("Pairing", systemImage: "link.circle")
+                  }
+
+                  Section {
+                      if case .pairing = airlift.state {
+                          Button(role: .destructive) { airlift.cancelPairing() } label: {
+                              Text("Cancel Pairing").frame(maxWidth: .infinity, alignment: .leading)
+                          }
+                      } else {
+                          Button { airlift.runPairing() } label: {
+                              Text("Start Pairing").frame(maxWidth: .infinity, alignment: .leading)
+                          }
+                      }
+                  }
+              }
+
+              private var pairingStatusText: String {
+                  switch airlift.state {
+                  case .pairing: return "pairing"
+                  case .ready:   return "paired"
+                  case .running: return "running"
+                  case .done(let ok, _): return ok ? "done" : "failed"
+                  default:       return "idle"
+                  }
+              }
+
+              private var pairingStatusColor: Color {
+                  switch airlift.state {
+                  case .pairing: return .orange
+                  case .ready:   return .green
+                  case .running: return .orange
+                  case .done(let ok, _): return ok ? .green : .red
+                  default:       return .secondary
+                  }
+              }
+
+              @ViewBuilder
+              private var exploitSection: some View {
+                  Section {
+                      HStack {
+                          Text("State")
+                          Spacer()
+                          Text(pairingStatusText)
+                              .font(.system(size: 12, design: .monospaced))
+                              .foregroundStyle(pairingStatusColor)
+                      }
+                      HStack {
+                          Text("Target")
+                          Spacer()
+                          TextField("/var/mobile/Library/SpringBoard", text: Binding(
+                              get: { airlift.target }, set: { airlift.target = $0 }))
+                              .font(.system(size: 12, design: .monospaced))
+                              .multilineTextAlignment(.trailing)
+                              .autocorrectionDisabled()
+                              .textInputAutocapitalization(.never)
+                      }
+                  } header: {
+                      Label("Pairing", systemImage: "link.circle")
+                  }
+
+                  Section {
+                      Button { airlift.runExploit() } label: {
+                          Text("Run Exploit").frame(maxWidth: .infinity, alignment: .leading)
+                      }
+                      .disabled(airlift.state == .running || !loopbackVPNUp)
+
+                      Button(role: .destructive) { airlift.cancelExploit() } label: {
+                          Text("Cancel Exploit").frame(maxWidth: .infinity, alignment: .leading)
+                      }
+                      .disabled(airlift.state != .running)
+
+                      Button { respring() } label: {
+                          Text("Respring").frame(maxWidth: .infinity, alignment: .leading)
+                      }
+                  } header: {
+                      Label("Exploit", systemImage: "cpu")
+                  }
+
+                  Section {
+                      Button(role: .destructive) { airlift.deletePairing() } label: {
+                          Text("Delete Pairing").frame(maxWidth: .infinity, alignment: .leading)
+                      }
+                  }
+              }
+
+              private func respring() {
+                  NotificationCenter.default.post(
+                      name: Notification.Name("natsuk1.respring"),
+                      object: nil
+                  )
+              }
+
+              @ViewBuilder
+              private var logSection: some View {
+                  Section {
+                      LogTerminal(text: airlift.exploitLog.isEmpty
+                                  ? "No output yet."
+                                  : airlift.exploitLog.joined(separator: "\n"))
+                  } header: {
+                      Label("Log", systemImage: "terminal")
+                  }
+              }
+
+              @ViewBuilder
+              private var logActionsSection: some View {
+                  Section {
+                      Button {
+                          UIPasteboard.general.string = airlift.exploitLog.joined(separator: "\n")
+                          copied = true
+                          DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                              copied = false
+                          }
+                      } label: {
+                          Text(copied ? "Copied!" : "Copy All")
+                              .frame(maxWidth: .infinity, alignment: .leading)
+                      }
+                      .disabled(airlift.exploitLog.isEmpty)
+
+                      Button(role: .destructive) { airlift.clearLog() } label: {
+                          Text("Clear").frame(maxWidth: .infinity, alignment: .leading)
+                      }
+                      .disabled(airlift.exploitLog.isEmpty)
+                  } header: {
+                      Label("Log Actions", systemImage: "document.on.document")
+                  }
+              }
+          }
+          EOF
 
       - name: Write offsets JSON
         run: |
@@ -734,21 +1068,27 @@ jobs:
           chk() {
             if eval "$2" >/dev/null 2>&1; then echo "  OK   $1"; else echo "  FAIL $1"; FAIL=1; fi
           }
-          chk "nk_offsets.h"            "test -s natsuk1/Exploit/nk_offsets.h"
-          chk "necp.c"                  "test -s natsuk1/Exploit/necp.c"
-          chk "natsuk1.swift"           "test -s natsuk1/natsuk1.swift"
-          chk "ContentView.swift"       "test -s natsuk1/Views/ContentView.swift"
-          chk "offsets json"            "test -s natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
-          chk "no Group if/else"        "! grep -q -e 'if isSupportedIOS' natsuk1/natsuk1.swift"
-          chk "no NotSupportedView"     "! grep -q -e 'NotSupportedView' natsuk1/natsuk1.swift"
-          chk "no scaleEffect in Overview" "! grep -q -e 'scaleEffect' natsuk1/Views/OverviewView.swift"
-          chk "no scaleEffect in Airlift"  "! grep -q -e 'scaleEffect' natsuk1/Views/AirliftView.swift"
-          chk "NK_SYSENT_BASE"          "grep -q -e 'NK_SYSENT_BASE' natsuk1/Exploit/nk_offsets.h"
-          chk "NK_SYSENT_COUNT"         "grep -q -e 'NK_SYSENT_COUNT' natsuk1/Exploit/nk_offsets.h"
-          chk "step_copy_result"        "grep -q -e 'step_copy_result' natsuk1/Exploit/necp.c"
-          chk "step_sysctl_arena"       "grep -q -e 'step_sysctl_arena' natsuk1/Exploit/necp.c"
-          chk "hexdump"                 "grep -q -e 'hexdump' natsuk1/Exploit/necp.c"
-          chk "scan_kptr"               "grep -q -e 'scan_kptr' natsuk1/Exploit/necp.c"
+          chk "nk_offsets.h"                  "test -s natsuk1/Exploit/nk_offsets.h"
+          chk "necp.c"                        "test -s natsuk1/Exploit/necp.c"
+          chk "natsuk1.swift"                 "test -s natsuk1/natsuk1.swift"
+          chk "ContentView.swift"             "test -s natsuk1/Views/ContentView.swift"
+          chk "OverviewView.swift"            "test -s natsuk1/Views/OverviewView.swift"
+          chk "AirliftView.swift"             "test -s natsuk1/Views/AirliftView.swift"
+          chk "offsets json"                  "test -s natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
+          chk "no Group if/else"              "! grep -q -e 'if isSupportedIOS' natsuk1/natsuk1.swift"
+          chk "no NotSupportedView"           "! grep -q -e 'NotSupportedView' natsuk1/natsuk1.swift"
+          chk "no scaleEffect Overview"       "! grep -q -e 'scaleEffect' natsuk1/Views/OverviewView.swift"
+          chk "no scaleEffect Airlift"        "! grep -q -e 'scaleEffect' natsuk1/Views/AirliftView.swift"
+          chk "no scaleEffect ContentView"    "! grep -q -e 'scaleEffect' natsuk1/Views/ContentView.swift"
+          chk "no scaleEffect natsuk1.swift"  "! grep -q -e 'scaleEffect' natsuk1/natsuk1.swift"
+          chk "NK_SYSENT_BASE"                "grep -q -e 'NK_SYSENT_BASE' natsuk1/Exploit/nk_offsets.h"
+          chk "NK_SYSENT_COUNT"               "grep -q -e 'NK_SYSENT_COUNT' natsuk1/Exploit/nk_offsets.h"
+          chk "step_copy_result"              "grep -q -e 'step_copy_result' natsuk1/Exploit/necp.c"
+          chk "step_sysctl_arena"             "grep -q -e 'step_sysctl_arena' natsuk1/Exploit/necp.c"
+          chk "hexdump"                       "grep -q -e 'hexdump' natsuk1/Exploit/necp.c"
+          chk "scan_kptr"                     "grep -q -e 'scan_kptr' natsuk1/Exploit/necp.c"
+          chk "build_and_release removed"     "! test -f .github/workflows/build_and_release.yml"
+          chk "fix_and_test removed"          "! test -f .github/workflows/fix_and_test.yml"
           python3 -c "import json; json.load(open('natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json'))" || FAIL=1
           echo "  OK   json valid"
           if [ "$FAIL" -ne 0 ]; then echo "VERIFY FAILED"; exit 1; fi
@@ -793,7 +1133,7 @@ jobs:
           NOTES="$(cat <<EOF
           ### natsuk1 — iOS 27.0 (24A437)
 
-          v3.9 — flat view tree (LiveContainer crash fix).
+          v3.9 — flat view tree, no _ConditionalContent, no scaleEffect.
 
           **IPA** \`${IPA_URL}\`
 
@@ -818,5 +1158,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "flat view tree: fix LiveContainer _ConditionalContent crash [skip ci]"
+          git commit -m "fix and release: flat view tree, remove scaleEffect, drop build_and_release [skip ci]"
           git push
