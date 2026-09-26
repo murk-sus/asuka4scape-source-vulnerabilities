@@ -1,85 +1,96 @@
 import SwiftUI
 import UIKit
+import Combine
 
 struct AirliftView: View {
     @EnvironmentObject var airlift: AirliftBridge
     @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()
     @State private var tunnelIP: String? = NetworkStatus.tunnelIP()
     @State private var deviceIP: String? = NetworkStatus.deviceIP()
+    @State private var tick: UInt64 = 0
+
+    private let ticker = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         List {
-            if !loopbackVPNUp {
-                Section {
-                    HStack(spacing: 10) {
-                        Image(systemName: "wifi.exclamationmark")
-                            .foregroundStyle(.orange)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Loopback VPN is not active")
-                                .font(.subheadline).fontWeight(.semibold)
-                            Text("Start LocalDevVPN (10.7.0.1 / 10.7.1.1)")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            } else {
-                Section {
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark.shield.fill")
-                            .foregroundStyle(.green)
-                        Text("Loopback VPN active").font(.subheadline).fontWeight(.semibold)
-                    }
-                    if let t = tunnelIP {
-                        HStack {
-                            Text("Tunnel")
-                            Spacer()
-                            Text(t).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
-                        }
-                    }
-                    if let d = deviceIP {
-                        HStack {
-                            Text("Device")
-                            Spacer()
-                            Text(d).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
-                        }
-                    }
-                } header: {
-                    Label("Network", systemImage: "network")
-                }
-            }
-
+            networkSection
             if airlift.hasPairing() {
                 exploitSection
             } else {
                 pairingSection
             }
-
-            Section {
-                LogTerminal(text: airlift.exploitLog.isEmpty ? "No output yet." : airlift.exploitLog.joined(separator: "\n"))
-            } header: {
-                Label("Log", systemImage: "terminal")
-            }
+            logSection
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Airlift")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { refresh() }
+        .onReceive(ticker) { _ in refresh() }
         .refreshable { refresh() }
+        .id(tick)
     }
 
     private func refresh() {
         loopbackVPNUp = NetworkStatus.loopbackVPNUp()
         tunnelIP = NetworkStatus.tunnelIP()
         deviceIP = NetworkStatus.deviceIP()
+        tick &+= 1
+    }
+
+    @ViewBuilder
+    private var networkSection: some View {
+        if !loopbackVPNUp {
+            Section {
+                HStack(spacing: 10) {
+                    Image(systemName: "wifi.exclamationmark")
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Loopback VPN is not active")
+                            .font(.subheadline).fontWeight(.semibold)
+                        Text("Start LocalDevVPN (10.7.0.1 / 10.7.1.1)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Label("Network", systemImage: "network")
+            }
+        } else {
+            Section {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.shield.fill")
+                        .foregroundStyle(.green)
+                    Text("Loopback VPN active")
+                        .font(.subheadline).fontWeight(.semibold)
+                }
+                if let t = tunnelIP {
+                    HStack {
+                        Text("Tunnel")
+                        Spacer()
+                        Text(t).font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let d = deviceIP {
+                    HStack {
+                        Text("Device")
+                        Spacer()
+                        Text(d).font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Label("Network", systemImage: "network")
+            }
+        }
     }
 
     @ViewBuilder
     private var pairingSection: some View {
         Section {
             HStack(spacing: 8) {
-                Image(systemName: "link.badge.plus")
-                    .foregroundStyle(.orange)
-                Text("Not paired").font(.subheadline.bold())
+                Image(systemName: pairingStatusIcon)
+                    .foregroundStyle(pairingStatusColor)
+                Text(pairingStatusText).font(.subheadline.bold())
             }
             if case .pairing = airlift.state {
                 HStack(spacing: 8) {
@@ -91,14 +102,21 @@ struct AirliftView: View {
             if let pin = airlift.pairPIN {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("ENTER PIN").font(.caption2.bold()).foregroundStyle(.secondary)
-                    Text(pin).font(.system(size: 34, weight: .black, design: .monospaced)).foregroundStyle(.orange)
+                    Text(pin).font(.system(size: 34, weight: .black, design: .monospaced))
+                        .foregroundStyle(.orange)
                     Button {
-                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-                    } label: { Label("Open Settings", systemImage: "arrow.up.forward.app").frame(maxWidth: .infinity) }
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    } label: {
+                        Label("Open Settings", systemImage: "arrow.up.forward.app")
+                            .frame(maxWidth: .infinity)
+                    }
                     .buttonStyle(.borderedProminent).tint(.orange)
                 }
                 .padding(12)
-                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                .background(Color.orange.opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: 12))
             }
         } header: {
             Label("Pairing", systemImage: "link.circle")
@@ -106,10 +124,44 @@ struct AirliftView: View {
 
         Section {
             if case .pairing = airlift.state {
-                Button(role: .destructive) { airlift.cancelPairing() } label: { Text("Cancel Pairing").frame(maxWidth: .infinity) }
+                Button(role: .destructive) { airlift.cancelPairing() } label: {
+                    Text("Cancel Pairing").frame(maxWidth: .infinity)
+                }
             } else {
-                Button { airlift.runPairing() } label: { Text("Start Pairing").frame(maxWidth: .infinity) }
+                Button { airlift.runPairing() } label: {
+                    Text("Start Pairing").frame(maxWidth: .infinity)
+                }
             }
+        }
+    }
+
+    private var pairingStatusText: String {
+        switch airlift.state {
+        case .pairing: return "Pairing…"
+        case .ready:   return "Paired"
+        case .running: return "Exploit running…"
+        case .done(let ok, _): return ok ? "Done" : "Failed"
+        default:       return "Not paired"
+        }
+    }
+
+    private var pairingStatusIcon: String {
+        switch airlift.state {
+        case .pairing: return "hourglass"
+        case .ready:   return "link.circle.fill"
+        case .running: return "bolt.fill"
+        case .done(let ok, _): return ok ? "checkmark.circle.fill" : "xmark.circle.fill"
+        default:       return "link.badge.plus"
+        }
+    }
+
+    private var pairingStatusColor: Color {
+        switch airlift.state {
+        case .pairing: return .orange
+        case .ready:   return .green
+        case .running: return .orange
+        case .done(let ok, _): return ok ? .green : .red
+        default:       return .orange
         }
     }
 
@@ -155,7 +207,20 @@ struct AirliftView: View {
         }
 
         Section {
-            Button(role: .destructive) { airlift.deletePairing() } label: { Text("Delete Pairing").frame(maxWidth: .infinity) }
+            Button(role: .destructive) { airlift.deletePairing() } label: {
+                Text("Delete Pairing").frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var logSection: some View {
+        Section {
+            LogTerminal(text: airlift.exploitLog.isEmpty
+                        ? "No output yet."
+                        : airlift.exploitLog.joined(separator: "\n"))
+        } header: {
+            Label("Log", systemImage: "terminal")
         }
     }
 }
