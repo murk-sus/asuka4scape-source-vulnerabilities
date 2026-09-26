@@ -200,7 +200,7 @@ struct AirliftView: View {
                 Text("Respring").frame(maxWidth: .infinity, alignment: .leading)
             }
         } header: {
-            Label("Exploit", systemImage: "flame.fill")
+            Label("Exploit", systemImage: "cpu")
         }
 
         Section {
@@ -248,7 +248,7 @@ struct AirliftView: View {
             }
             .disabled(airlift.exploitLog.isEmpty)
         } header: {
-            Label("Log Actions", systemImage: "doc.on.clipboard")
+            Label("Log Actions", systemImage: "document.on.document")
         }
     }
 }

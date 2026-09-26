@@ -23,7 +23,7 @@ struct OverviewView: View {
                     }
                     .disabled(!state.running)
                 } header: {
-                    Label("Exploit", systemImage: "flame.fill")
+                    Label("Exploit", systemImage: "cpu")
                 }
 
                 RuntimeView()
@@ -54,7 +54,7 @@ struct OverviewView: View {
                     }
                     .disabled(state.log.isEmpty)
                 } header: {
-                    Label("Log Actions", systemImage: "doc.on.clipboard")
+                    Label("Log Actions", systemImage: "document.on.document")
                 }
             }
             .listStyle(.insetGrouped)

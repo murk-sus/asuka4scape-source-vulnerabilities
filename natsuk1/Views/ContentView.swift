@@ -5,9 +5,9 @@ struct ContentView: View {
     var body: some View {
         TabView {
             OverviewView()
-                .tabItem { Label(state.t("Overview", "Обзор"), systemImage: "bolt.fill") }
+                .tabItem { Label(state.t("Overview", "Обзор"), systemImage: "square.grid.2x2") }
             ToolsView()
-                .tabItem { Label(state.t("Tools", "Инструменты"), systemImage: "wrench.and.screwdriver.fill") }
+                .tabItem { Label(state.t("Tools", "Инструменты"), systemImage: "hammer") }
             SettingsView()
                 .tabItem { Label(state.t("Settings", "Настройки"), systemImage: "gearshape.fill") }
         }

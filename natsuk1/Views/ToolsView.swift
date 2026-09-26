@@ -12,20 +12,20 @@ struct ToolsView: View {
                     NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }
                     NavigationLink { OffsetsView().environmentObject(offsets) } label: { Text("Offsets") }
                 } header: {
-                    Label("Exploit", systemImage: "flame")
+                    Label("Exploit", systemImage: "memorychip")
                 }
 
                 Section {
                     NavigationLink { DeviceInfoView() } label: { Text("Device Info") }
                     Button { state.respring() } label: { Text("Respring") }
                 } header: {
-                    Label("Device", systemImage: "iphone.gen3")
+                    Label("Device", systemImage: "gearshape.2")
                 }
 
                 Section {
                     NavigationLink { PathAccessView() } label: { Text("Path Access") }
                 } header: {
-                    Label("Diagnostics", systemImage: "waveform.path.ecg.rectangle")
+                    Label("Diagnostics", systemImage: "chart.xyaxis.line")
                 }
             }
             .listStyle(.insetGrouped)
