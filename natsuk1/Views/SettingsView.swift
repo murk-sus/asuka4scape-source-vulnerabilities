@@ -48,7 +48,7 @@ struct SettingsView: View {
                     }
                     NavigationLink { AboutView().environmentObject(state) } label: { Text("About") }
                 } header: {
-                    Label("App", systemImage: "square.stack.3d.up")
+                    Label("App", systemImage: "exclamationmark.circle")
                 }
 
                 Section {
@@ -65,14 +65,14 @@ struct SettingsView: View {
                         }
                     }
                 } header: {
-                    Label("Background Keep-Alive", systemImage: "moon.zzz")
+                    Label("Background Keep-Alive", systemImage: "moon.stars")
                 }
 
                 Section {
                     Toggle("Auto Run on Launch", isOn: $auto_run)
                     Toggle("Verbose Output", isOn: $verbose)
                 } header: {
-                    Label("Options", systemImage: "switch.2")
+                    Label("Options", systemImage: "slider.horizontal.3")
                 }
             }
             .listStyle(.insetGrouped)
