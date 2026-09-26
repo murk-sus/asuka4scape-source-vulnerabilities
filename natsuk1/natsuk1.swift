@@ -21,7 +21,10 @@ private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line i
     var bytes: [UInt8] = []
     var p = line
     while p.pointee != 0 { bytes.append(UInt8(bitPattern: p.pointee)); p = p.advanced(by: 1) }
-    LockedBuffer.shared.append(String(decoding: bytes, as: UTF8.self))
+    let _line = String(decoding: bytes, as: UTF8.self)
+    LockedBuffer.shared.append(_line)
+    CrashLog.shared.writeLine(_line)
+    AppState.shared.parseLogLine(_line) /* natsuk1-crashlog-v1 */
 }
 
 private func osVersionString() -> String {
@@ -47,6 +50,7 @@ struct RootView: View {
     @AppStorage("auto_run") private var auto_run = false
     @AppStorage("keep_alive_audio") private var keep_alive_audio = false
     @AppStorage("keep_alive_location") private var keep_alive_location = false
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         UserDefaults.standard.register(defaults: [
@@ -62,6 +66,10 @@ struct RootView: View {
                     .environmentObject(offsets)
                     .environmentObject(airlift)
                     .onAppear {
+                        CrashLog.shared.install()
+                        if let prev = CrashLog.shared.recoverPreviousSession(), !prev.isEmpty {
+                            AppState.shared.previousCrash = prev
+                        }
                         nk_set_log(cCallback)
                         if state.log.isEmpty {
                             state.append("[*] natsuk1 v\(appVersionString())")
@@ -79,6 +87,14 @@ struct RootView: View {
                     }
                     .onChange(of: keep_alive_location) { _, v in
                         if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
+                    }
+                    .sheet(isPresented: $state.showCrashLog) {
+                        CrashLogView().environmentObject(state)
+                    }
+                    .onChange(of: scenePhase) { _, phase in
+                        if phase == .background {
+                            CrashLog.shared.markCleanShutdown()
+                        }
                     }
                     .overlay {
                         if state.show_respring {
@@ -110,6 +126,36 @@ struct NotSupportedView: View {
 }
 
 final class AppState: ObservableObject, @unchecked Sendable {
+    @Published var slide: String = "\u{2014}"
+    @Published var base: String = "\u{2014}"
+    @Published var previousCrash: String? = nil
+    @Published var showCrashLog: Bool = false
+
+    func parseLogLine(_ line: String) {
+        if let v = Self.extractHex(line, keys: ["slide=0x", "SLIDE = 0x", "slide = 0x"]) {
+            if self.slide != v {
+                DispatchQueue.main.async { self.slide = v }
+            }
+        }
+        if let v = Self.extractHex(line, keys: ["base=0x", "BASE = 0x", "base = 0x"]) {
+            if self.base != v {
+                DispatchQueue.main.async { self.base = v }
+            }
+        }
+    }
+
+    private static func extractHex(_ s: String, keys: [String]) -> String? {
+        for k in keys {
+            if let r = s.range(of: k) {
+                var hex = ""
+                for c in s[r.upperBound...] {
+                    if c.isHexDigit { hex.append(c) } else { break }
+                }
+                if !hex.isEmpty { return "0x" + hex }
+            }
+        }
+        return nil
+    }
     nonisolated(unsafe) static let shared = AppState()
     enum Status {
         case idle, running, ok, failed

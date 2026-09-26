@@ -7,6 +7,8 @@ struct OverviewView: View {
     var body: some View {
         NavigationStack {
             List {
+                RuntimeView() /* natsuk1-crashlog-v1 */
+                    .environmentObject(state)
                 Section {
                     Button {
                         state.necp_run()
