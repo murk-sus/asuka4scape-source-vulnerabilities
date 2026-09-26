@@ -2,7 +2,7 @@ import Foundation
 import Combine
 
 final class AirliftBridge: ObservableObject, @unchecked Sendable {
-    nonisolated(unsafe) static let shared = AirliftBridge()
+    static let shared = AirliftBridge()
     enum State: Equatable { case idle, pairing, ready(pairingPath: String), running, done(ok: Bool, message: String) }
 
     @Published private(set) var state: State = .idle

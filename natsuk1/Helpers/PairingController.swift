@@ -6,7 +6,7 @@ import AirliftFFI
 /// and runs `al_pairing_run_host` off the main thread.
 final class PairingController: ObservableObject, @unchecked Sendable {
 
-    nonisolated(unsafe) static let shared = PairingController()
+    static let shared = PairingController()
 
     private let hostName = "natsuk1"
     private let hostModel = "Mac17,7"   // device sees a Mac-like pairing host

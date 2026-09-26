@@ -2,7 +2,7 @@ import Foundation
 import UIKit
 
 final class CrashLog: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = CrashLog()
+    static let shared = CrashLog()
 
     private let queue = DispatchQueue(label: "natsuk1.crashlog")
     private var handle: FileHandle?

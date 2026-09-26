@@ -2,7 +2,7 @@ import Foundation
 import CoreFoundation
 
 final class MobileGestalt: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = MobileGestalt()
+    static let shared = MobileGestalt()
 
     private typealias CopyAnswerFn = @convention(c) (CFString) -> Unmanaged<CFTypeRef>?
     private typealias BoolFn       = @convention(c) (CFString) -> Bool
