@@ -21,19 +21,21 @@ struct AirliftView: View {
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(loopbackVPNUp ? .green : .orange)
                 }
-                HStack {
-                    Text("Tunnel")
-                    Spacer()
-                    Text(tunnelIP ?? "—")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                if let t = tunnelIP {
+                    HStack {
+                        Text("Tunnel")
+                        Spacer()
+                        Text(t).font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                HStack {
-                    Text("Device")
-                    Spacer()
-                    Text(deviceIP ?? "—")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                if let d = deviceIP {
+                    HStack {
+                        Text("Device")
+                        Spacer()
+                        Text(d).font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 if !loopbackVPNUp {
                     Text("Start LocalDevVPN with interface 10.7.0.x")
@@ -52,10 +54,12 @@ struct AirliftView: View {
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(pairingStatusColor)
                 }
-                HStack(spacing: 8) {
-                    ProgressView().opacity(isPairing ? 1 : 0)
-                    Text(airlift.pairingStatus.isEmpty ? "Idle" : airlift.pairingStatus)
-                        .font(.subheadline).foregroundStyle(.secondary)
+                if isPairing {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text(airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus)
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
                 }
                 if let pin = airlift.pairPIN {
                     VStack(alignment: .leading, spacing: 8) {

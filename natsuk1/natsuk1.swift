@@ -183,7 +183,16 @@ final class AppState: ObservableObject, @unchecked Sendable {
             }
         }
     }
-    func respring() { show_respring = true }
+    func respring() {
+        DispatchQueue.main.async {
+            guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                  let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first,
+                  let root = window.rootViewController else { return }
+            let host = UIHostingController(rootView: RespringView().ignoresSafeArea())
+            host.modalPresentationStyle = .fullScreen
+            root.present(host, animated: false)
+        }
+    }
     func clear() { LockedBuffer.shared.clear(); log = "" }
     func cancel() {
         nk_necp_cancel()

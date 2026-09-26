@@ -13,8 +13,7 @@ struct ContentView: View {
         }
         .tint(.accentColor)
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("natsuk1.respring"))) { _ in
-            state.show_respring = true
+            state.respring()
         }
-        .overlay(RespringView().opacity(state.show_respring ? 1 : 0).ignoresSafeArea())
     }
 }
