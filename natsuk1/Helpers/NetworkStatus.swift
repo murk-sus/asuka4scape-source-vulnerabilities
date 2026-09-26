@@ -45,11 +45,32 @@ enum NetworkStatus {
     }
 
     static func loopbackVPNUp() -> Bool {
+        if tunnelIP() != nil { return true }
+        if deviceIP() != nil { return true }
+        return false
+    }
+
+    static func tunnelIP() -> String? {
         for iface in interfaces() {
             guard isTunnelInterface(iface.name) else { continue }
-            if iface.ipv4.hasPrefix("10.7.0.") { return true }
+            if isLoopbackRange(iface.ipv4) { return iface.ipv4 }
         }
-        return false
+        return nil
+    }
+
+    static func deviceIP() -> String? {
+        for iface in interfaces() {
+            if isLoopbackRange(iface.ipv4) && !iface.ipv4.hasPrefix("127.") {
+                return iface.ipv4
+            }
+        }
+        return nil
+    }
+
+    static func isLoopbackRange(_ ip: String) -> Bool {
+        ip.hasPrefix("10.7.0.") || ip.hasPrefix("10.7.1.")
+            || ip.hasPrefix("10.7.2.") || ip.hasPrefix("10.7.3.")
+            || ip.hasPrefix("10.7.")
     }
 
     static func isTunnelInterface(_ name: String) -> Bool {

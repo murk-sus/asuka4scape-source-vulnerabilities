@@ -4,6 +4,8 @@ import UIKit
 struct AirliftView: View {
     @EnvironmentObject var airlift: AirliftBridge
     @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()
+    @State private var tunnelIP: String? = NetworkStatus.tunnelIP()
+    @State private var deviceIP: String? = NetworkStatus.deviceIP()
 
     var body: some View {
         List {
@@ -15,10 +17,34 @@ struct AirliftView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Loopback VPN is not active")
                                 .font(.subheadline).fontWeight(.semibold)
-                            Text("Start LocalDevVPN with interface 10.7.0.1")
+                            Text("Start LocalDevVPN (10.7.0.1 / 10.7.1.1)")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
+                }
+            } else {
+                Section {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.shield.fill")
+                            .foregroundStyle(.green)
+                        Text("Loopback VPN active").font(.subheadline).fontWeight(.semibold)
+                    }
+                    if let t = tunnelIP {
+                        HStack {
+                            Text("Tunnel")
+                            Spacer()
+                            Text(t).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
+                        }
+                    }
+                    if let d = deviceIP {
+                        HStack {
+                            Text("Device")
+                            Spacer()
+                            Text(d).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Label("Network", systemImage: "network")
                 }
             }
 
@@ -37,8 +63,14 @@ struct AirliftView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Airlift")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { loopbackVPNUp = NetworkStatus.loopbackVPNUp() }
-        .refreshable { loopbackVPNUp = NetworkStatus.loopbackVPNUp() }
+        .onAppear { refresh() }
+        .refreshable { refresh() }
+    }
+
+    private func refresh() {
+        loopbackVPNUp = NetworkStatus.loopbackVPNUp()
+        tunnelIP = NetworkStatus.tunnelIP()
+        deviceIP = NetworkStatus.deviceIP()
     }
 
     @ViewBuilder
