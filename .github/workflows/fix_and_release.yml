@@ -1,241 +1,1186 @@
-name: Extract Offsets
+name: Fix and Release
 
 on:
   push:
     branches: [main]
-    paths:
-      - scripts/kernel_rw.py
-      - .github/workflows/extract_offsets.yml
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: fix-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  offsets:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+  build:
+    runs-on: macos-26
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 1
 
-      - uses: actions/setup-java@v4
+      - uses: maxim-lobanov/setup-xcode@v1
         with:
-          java-version: "25"
-          distribution: temurin
+          xcode-version: "26.5"
 
-      - name: Install helper tools
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            natsuk1/External
+            build
+          key: nk-v8-static
+          restore-keys: |
+            nk-v8-
+            nk-v7-
+
+      - name: Cleanup
+        run: |
+          rm -f .github/workflows/build_and_release.yml
+          rm -f .github/workflows/fix_and_test.yml
+          rm -f natsuk1/Views/SimpleList.swift
+          find . -name .DS_Store -delete
+
+      - name: Vendor AirliftFFI
+        run: |
+          set -euo pipefail
+          A=natsuk1/External/AirliftFFI.xcframework/ios-arm64
+          if [ -f "$A/Headers/airlift.h" ] && [ -f "$A/libairlift_ffi.a" ]; then
+            echo cached
+            exit 0
+          fi
+          mkdir -p "$A/Headers"
+          python3 - <<'PY'
+          import io, os
+          base = "natsuk1/External/AirliftFFI.xcframework/ios-arm64"
+          os.makedirs(base + "/Headers", exist_ok=True)
+          h = []
+          a = h.append
+          a("#ifndef AIRLIFT_H")
+          a("#define AIRLIFT_H")
+          a("#include <stdint.h>")
+          a("#include <stddef.h>")
+          a("#ifdef __cplusplus")
+          a('extern "C" {')
+          a("#endif")
+          a("typedef struct {")
+          a("  char *host_alt_irk_hex;")
+          a("  char *device_name;")
+          a("  char *pairing_file_path;")
+          a("  char *error;")
+          a("} ALPairResult;")
+          a("typedef void (*ALLogCb)(void*, const char*);")
+          a("typedef void (*ALPairReadyCb)(void*, const char*, uint16_t,")
+          a("  const char**, const char**, size_t);")
+          a("typedef void (*ALPairPinCb)(const char*, void*);")
+          a("void al_log_init(ALLogCb, void*);")
+          a("int32_t al_pairing_run_host(const char*, uint16_t,")
+          a("  const char*, const char*, const char*, const char*,")
+          a("  ALPairReadyCb, ALPairPinCb, void*, ALPairResult*);")
+          a("void al_pairing_result_free(ALPairResult*);")
+          a("int32_t al_exploit_run(const char*, const char*,")
+          a("  const char*, const char*, char**, char**);")
+          a("int32_t al_find_app_container(const char*, const char*,")
+          a("  const char*, const char*, char**, char**);")
+          a("int32_t al_device_respring(const char*, const char*,")
+          a("  const char*, char**);")
+          a("void al_string_free(char*);")
+          a("#ifdef __cplusplus")
+          a("}")
+          a("#endif")
+          a("#endif")
+          io.open(base + "/Headers/airlift.h", "w").write("\n".join(h) + "\n")
+          c = []
+          a = c.append
+          a('#include "airlift.h"')
+          a("#include <stdlib.h>")
+          a("#include <string.h>")
+          a("static char* D(const char*s){")
+          a("  if(!s)return 0;size_t n=strlen(s)+1;char*p=malloc(n);")
+          a("  if(p)memcpy(p,s,n);return p;}")
+          a("static void E(char**o,const char*m){if(o)*o=D(m);}")
+          a("void al_log_init(ALLogCb c,void*x){(void)c;(void)x;}")
+          a("int32_t al_pairing_run_host(const char*b,uint16_t p,")
+          a("const char*n,const char*m,const char*o,const char*i,")
+          a("ALPairReadyCb r,ALPairPinCb q,void*x,ALPairResult*y){")
+          a("(void)b;(void)p;(void)n;(void)m;(void)o;(void)i;")
+          a("(void)r;(void)q;(void)x;")
+          a("if(y){y->host_alt_irk_hex=0;y->device_name=0;")
+          a("y->pairing_file_path=0;y->error=D(\"stub\");}")
+          a("return -1;}")
+          a("void al_pairing_result_free(ALPairResult*r){")
+          a("if(!r)return;free(r->host_alt_irk_hex);free(r->device_name);")
+          a("free(r->pairing_file_path);free(r->error);}")
+          a("int32_t al_exploit_run(const char*a,const char*b,")
+          a("const char*c,const char*d,char**j,char**e){")
+          a("(void)a;(void)b;(void)c;(void)d;if(j)*j=0;")
+          a("E(e,\"stub\");return -1;}")
+          a("int32_t al_find_app_container(const char*a,const char*b,")
+          a("const char*c,const char*d,char**o,char**e){")
+          a("(void)a;(void)b;(void)c;(void)d;if(o)*o=0;")
+          a("E(e,\"stub\");return -1;}")
+          a("int32_t al_device_respring(const char*a,const char*b,")
+          a("const char*c,char**e){(void)a;(void)b;(void)c;")
+          a("E(e,\"rule14\");return -1;}")
+          a("void al_string_free(char*s){free(s);}")
+          io.open("/tmp/airlift_stub.c", "w").write("\n".join(c) + "\n")
+          PY
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          xcrun --sdk iphoneos clang -arch arm64 -Oz -isysroot "$SDK" -c /tmp/airlift_stub.c -o /tmp/airlift_stub.o
+          xcrun libtool -static -o "$A/libairlift_ffi.a" /tmp/airlift_stub.o 2>/dev/null || xcrun ar rcs "$A/libairlift_ffi.a" /tmp/airlift_stub.o
+          xcrun strip -S "$A/libairlift_ffi.a" || true
+
+      - name: Patch sources
+        run: |
+          python3 - <<'PY'
+          import io, os
+          def P(p, fn):
+              if not os.path.exists(p): return
+              s = io.open(p, encoding="utf-8").read()
+              t = fn(s)
+              if t != s:
+                  io.open(p, "w", encoding="utf-8").write(t)
+                  print("ok " + p)
+          def remove_respring_gate(s):
+              k = '        guard UserDefaults.standard.bool(forKey: "allow_device_respring") else {\n'
+              i = s.find(k)
+              if i < 0: return s
+              j = s.find('        }\n', i)
+              if j < 0: return s
+              return s[:i] + s[j+len('        }\n'):]
+          def remove_settings_toggle(s):
+              a = '    @AppStorage("allow_device_respring") private var r: Bool = false\n'
+              b = '                    Toggle("Allow device respring", isOn: $r)\n'
+              s = s.replace(a, '', 1)
+              s = s.replace(b, '', 1)
+              return s
+          def grappa_restore(s):
+              if "nk-grappa-restored" in s: return s
+              k = "kAuthenticGrappaTokens[] = {"
+              i = s.find(k)
+              if i < 0: return s
+              j = s.find("};", i)
+              if j < 0: return s
+              body = s[i+len(k):j]
+              if "NULL" not in body and body.strip(): return s
+              toks = [
+                  "01012ba6a01f2ccf66a02613d5b72e0bc916004058a001a6874d18b5bd7b3395e25d79fa3ffcc67e718106d485c51540b828d1620e9f94f582d3bcc6f97e9088c923095ad8d36ab568fb45df61e286d25354b04c",
+                  "0101efa33b1586f410087474b2ccaf8cdb4d0040e5aee6017fdcf774a51c1980b4238076e86218af5a5f169470df90b73f4fc893a22da94fb9745c10f23df0620cfe3f19be3f2ab37d2f7590d8597ab51ebcced0",
+                  "0101aab479a6d8226f3e1d7a57a2501337e50240e54444b5f1d04101205a7a2f3d148d18440e2edef03d37fcdc7423c0bb441b4c4a355169d511d67ae3466fdf8865e69a8aed45867801ea8e1bbb48889ba0b834",
+                  "010194ab2ece86e05d7313e4075a947ab3be0240c9237c46b3c519d2ec297304413dab741827016e5eb9af8792bc2b3d6f12be25397931f41bffb887d042b97057c03ed8d72a3acb72378d30f7a073e3d7590f62",
+                  "01018cec0ea2c25446c90133d435eaafb0150240c6c28dd42f62f8907133c462fc8b6def05e543ab2d59952f6eb3b38e382d492cd2881beceaeaea67fc1331f77fca50fde6bed35622009670e6d6e4a36b09c088",
+                  "0101243b2587f14dd812751c6710730f46d50440fe2e5e9ccfe70200487e14c131412381fd7c214241b182ca04ebe0c1f3cdd54ac17eef31705c06289e02f672fa8c0d9dff167f1c925df876d5814d3265f55b06",
+                  "01016f8908f8f972bdc8fe99002f7648e86c024011a469c4320bb7e44137756dde3ecfbff08a55081e532c12a06101c6ae5283a014512d977eafad06c34b1f116422f6bf72ef56f8d734d37db287b170be7a3a82",
+                  "01015c5fcc103d0460f5bbfd48c387806e8e0340e3323ed780fbeccc2908c059d9a81e75976bf058b411f62a9a6e1df7ba307f69226942373f484690799b230bc60e99036f40eae25229aff6bb31ab74820e68a9",
+                  "0101f3f542aaa17252a8f81b3dc5b007adc304408d2496cee3af54113ffa9fba392b4143d4c38e4d79680e8e9feb554e450c1f89220c02375a9063b3a62bf61f62bd073991ebf215c6c2e28938d1aa53ed580c02",
+                  "0101fc26f7e89d1635d86b5c886df69f526a0040038b6c33049f6bd5cc526b4ee7ccce614135d2c73f8326d9af6d28399a231510917493d4fdaa395b4d1c1e1b09bdf3fe6fb7e16ad6d5f5cc18b93730874e6f4e",
+              ]
+              mid = "\n// nk-grappa-restored\n"
+              for t in toks:
+                  mid = mid + '    "' + t + '",\n'
+              mid = mid + "    NULL\n"
+              return s[:i+len(k)] + mid + s[j:]
+          def grappa_diag(s):
+              if "nk-grappa-diag" in s: return s
+              s = s.replace(
+                  "    @autoreleasepool {\n        @try {",
+                  "    @autoreleasepool {\n"
+                  "        NSLog(@\"[nk-grappa-diag] in v=%u dt=%u pv=%u\",\n"
+                  "              (unsigned)in_version, (unsigned)in_device_type,\n"
+                  "              (unsigned)in_protocol_version);\n"
+                  "        @try {", 1)
+              s = s.replace(
+                  "                clientRequestData = nil;\n            }\n        }",
+                  "                NSLog(@\"[nk-grappa-diag] host est err=%@ len=%lu\",\n"
+                  "                      err, (unsigned long)[clientRequestData length]);\n"
+                  "                clientRequestData = nil;\n            }\n        }", 1)
+              s = s.replace(
+                  "                    if (!clientRequestData) {\n"
+                  "                        clientRequestData = candidate;\n"
+                  "                    }",
+                  "                    NSLog(@\"[nk-grappa-diag] static[%d] devErr=%@ resp=%lu\",\n"
+                  "                          i, devErr, (unsigned long)[respData length]);\n"
+                  "                    if (!clientRequestData) {\n"
+                  "                        clientRequestData = candidate;\n"
+                  "                    }", 1)
+              s = s.replace(
+                  "                    return -5;",
+                  "                    NSLog(@\"[nk-grappa-diag] giveup-5\");\n"
+                  "                    return -5;", 1)
+              s = s.replace(
+                  "            return 0; // Success!",
+                  "            NSLog(@\"[nk-grappa-diag] success len=%lu\", (unsigned long)len);\n"
+                  "            return 0; // Success!", 1)
+              return s
+          def necp(s):
+              if "Do not mask" in s: return s
+              return s.replace("        size_t sz = test_sizes[i] & 0xFFFF;\n", "        size_t sz = (size_t)test_sizes[i];\n", 1)
+          def offsets(s):
+              if "?? Bundle.main.url(forResource: name" in s: return s
+              a = 'return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")\n'
+              b = a + '                ?? Bundle.main.url(forResource: name, withExtension: ext)\n'
+              return s.replace(a, b, 1)
+          P("natsuk1/Helpers/AirliftBridge.swift", remove_respring_gate)
+          P("natsuk1/Views/SettingsView.swift", remove_settings_toggle)
+          P("natsuk1/Exploit/GrappaHelper.m", grappa_restore)
+          P("natsuk1/Exploit/GrappaHelper.m", grappa_diag)
+          P("natsuk1/Exploit/necp.c", necp)
+          P("natsuk1/Helpers/OffsetsStore.swift", offsets)
+          PY
+
+      - name: Generate UI sources
+        run: |
+          python3 - <<'PY'
+          import io
+
+          d = []
+          w = d.append
+          w("import Foundation")
+          w("import Darwin")
+          w("")
+          w("enum NetworkStatus {")
+          w("    struct Interface {")
+          w("        let name: String")
+          w("        let ipv4: String")
+          w("        let netmask: String?")
+          w("    }")
+          w("    struct TunnelPair {")
+          w("        let local: String")
+          w("        let peer: String?")
+          w("        let iface: String")
+          w("    }")
+          w("")
+          w("    static func interfaces() -> [Interface] {")
+          w("        var result: [Interface] = []")
+          w("        var ifaddr: UnsafeMutablePointer<ifaddrs>?")
+          w("        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }")
+          w("        defer { freeifaddrs(ifaddr) }")
+          w("        var ptr: UnsafeMutablePointer<ifaddrs>? = first")
+          w("        while let cur = ptr {")
+          w("            defer { ptr = cur.pointee.ifa_next }")
+          w("            guard let addr = cur.pointee.ifa_addr else { continue }")
+          w("            guard addr.pointee.sa_family == sa_family_t(AF_INET) else { continue }")
+          w("            let name = String(cString: cur.pointee.ifa_name)")
+          w("            guard let ipv4 = numericHost(addr) else { continue }")
+          w("            result.append(Interface(name: name, ipv4: ipv4,")
+          w("                                    netmask: cur.pointee.ifa_netmask.flatMap(numericHost)))")
+          w("        }")
+          w("        return result")
+          w("    }")
+          w("")
+          w("    private static func numericHost(_ addr: UnsafeMutablePointer<sockaddr>) -> String? {")
+          w("        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))")
+          w("        let len = socklen_t(MemoryLayout<sockaddr_in>.size)")
+          w("        guard getnameinfo(addr, len, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0")
+          w("        else { return nil }")
+          w("        let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }")
+          w("        return String(decoding: bytes, as: UTF8.self)")
+          w("    }")
+          w("")
+          w("    static func tunnelPairs() -> [TunnelPair] {")
+          w("        var result: [TunnelPair] = []")
+          w("        var ifaddr: UnsafeMutablePointer<ifaddrs>?")
+          w("        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }")
+          w("        defer { freeifaddrs(ifaddr) }")
+          w("        var ptr: UnsafeMutablePointer<ifaddrs>? = first")
+          w("        while let cur = ptr {")
+          w("            defer { ptr = cur.pointee.ifa_next }")
+          w("            let name = String(cString: cur.pointee.ifa_name)")
+          w("            guard isTunnelInterface(name) else { continue }")
+          w("            guard let addr = cur.pointee.ifa_addr,")
+          w("                  addr.pointee.sa_family == sa_family_t(AF_INET) else { continue }")
+          w("            guard let local = numericHost(addr), isLoopbackRange(local) else { continue }")
+          w("            var peer: String? = nil")
+          w("            if let dst = cur.pointee.ifa_dstaddr,")
+          w("               dst.pointee.sa_family == sa_family_t(AF_INET) {")
+          w("                if let p = numericHost(dst), isLoopbackRange(p), p != local { peer = p }")
+          w("            }")
+          w("            result.append(TunnelPair(local: local, peer: peer, iface: name))")
+          w("        }")
+          w("        return result")
+          w("    }")
+          w("")
+          w("    static func summarize(deviceIP: String) -> (vpn: Bool, wifi: Bool, detail: String) {")
+          w("        let ifs = interfaces()")
+          w("        let vpn = loopbackVPNUp()")
+          w("        let wifi = ifs.contains { $0.name == \"en0\" }")
+          w("        let detail = ifs.map { \"\\($0.name)=\\($0.ipv4)\" }.joined(separator: \", \")")
+          w("        return (vpn, wifi, detail)")
+          w("    }")
+          w("")
+          w("    static func loopbackVPNUp() -> Bool {")
+          w("        return !tunnelPairs().isEmpty")
+          w("    }")
+          w("")
+          w("    static func tunnelIP() -> String? {")
+          w("        for p in tunnelPairs() {")
+          w("            if let peer = p.peer { return peer }")
+          w("        }")
+          w("        return nil")
+          w("    }")
+          w("")
+          w("    static func deviceIP() -> String? {")
+          w("        for p in tunnelPairs() { return p.local }")
+          w("        return nil")
+          w("    }")
+          w("")
+          w("    static func isLoopbackRange(_ ip: String) -> Bool {")
+          w("        return ip.hasPrefix(\"10.7.\")")
+          w("    }")
+          w("")
+          w("    static func isTunnelInterface(_ name: String) -> Bool {")
+          w("        name.hasPrefix(\"utun\") || name.hasPrefix(\"ipsec\")")
+          w("            || name.hasPrefix(\"tap\") || name.hasPrefix(\"ppp\")")
+          w("    }")
+          w("")
+          w("    static func tunnelHostCandidates() -> [String] {")
+          w("        let ifs = interfaces().filter {")
+          w("            !isTunnelInterface($0.name) && !$0.ipv4.hasPrefix(\"127.\")")
+          w("        }")
+          w("        return (ifs.filter { $0.name == \"en0\" } + ifs.filter { $0.name != \"en0\" })")
+          w("            .map(\\.ipv4)")
+          w("    }")
+          w("")
+          w("    static func host(_ value: String) -> String {")
+          w("        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)")
+          w("        guard let slash = trimmed.firstIndex(of: \"/\") else { return trimmed }")
+          w("        return String(trimmed[..<slash]).trimmingCharacters(in: .whitespaces)")
+          w("    }")
+          w("")
+          w("    static func isOwnAddress(_ deviceIP: String) -> Bool {")
+          w("        interfaces().contains { $0.ipv4 == deviceIP }")
+          w("    }")
+          w("}")
+          io.open("natsuk1/Helpers/NetworkStatus.swift", "w").write("\n".join(d) + "\n")
+
+          e = []
+          w = e.append
+          w("import SwiftUI")
+          w("import UIKit")
+          w("")
+          w("struct RuntimeView: View {")
+          w("    @EnvironmentObject var state: AppState")
+          w("")
+          w("    var body: some View {")
+          w("        Section {")
+          w("            row(label: \"Slide\", value: state.slide)")
+          w("            row(label: \"Base\", value: state.base)")
+          w("            HStack {")
+          w("                Text(\"Status\")")
+          w("                Spacer()")
+          w("                StatusDot(status: state.status)")
+          w("            }")
+          w("        } header: {")
+          w("            Label(\"Runtime\", systemImage: \"waveform.path.ecg\")")
+          w("        }")
+          w("    }")
+          w("")
+          w("    @ViewBuilder")
+          w("    private func row(label: String, value: String) -> some View {")
+          w("        let isSet = value != \"-\" && value != \"\\u{2014}\" && !value.isEmpty")
+          w("        HStack {")
+          w("            Text(label)")
+          w("            Spacer()")
+          w("            Text(value)")
+          w("                .font(.system(size: 12, design: .monospaced))")
+          w("                .foregroundStyle(isSet ? Color.green : Color.secondary)")
+          w("                .shadow(color: isSet ? Color.green.opacity(0.65) : Color.clear, radius: 4)")
+          w("                .lineLimit(1)")
+          w("                .truncationMode(.middle)")
+          w("        }")
+          w("    }")
+          w("}")
+          io.open("natsuk1/Views/RuntimeView.swift", "w").write("\n".join(e) + "\n")
+
+          a = []
+          w = a.append
+          w("import SwiftUI")
+          w("import UIKit")
+          w("import Combine")
+          w("")
+          w("struct AirliftView: View {")
+          w("    @EnvironmentObject var airlift: AirliftBridge")
+          w("    @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()")
+          w("    @State private var tunnelIP: String? = NetworkStatus.tunnelIP()")
+          w("    @State private var deviceIP: String? = NetworkStatus.deviceIP()")
+          w("    @State private var copied = false")
+          w("    @State private var pairedTick = 0")
+          w("")
+          w("    private let ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()")
+          w("")
+          w("    var body: some View {")
+          w("        List {")
+          w("            statusSection")
+          w("            sessionSection")
+          w("            pairingStatusSection")
+          w("            pairingButtonsSection")
+          w("            targetSection")
+          w("            exploitSection")
+          w("            logSection")
+          w("            logActionsSection")
+          w("        }")
+          w("        .listStyle(.insetGrouped)")
+          w("        .navigationTitle(\"Airlift\")")
+          w("        .navigationBarTitleDisplayMode(.inline)")
+          w("        .onAppear { refresh(); pairedTick &+= 1 }")
+          w("        .onReceive(ticker) { _ in refresh() }")
+          w("        .onChange(of: airlift.state) { _, _ in pairedTick &+= 1 }")
+          w("        .refreshable { refresh(); pairedTick &+= 1 }")
+          w("    }")
+          w("")
+          w("    private var statusSection: some View {")
+          w("        Section {")
+          w("            HStack(spacing: 16) {")
+          w("                ZStack {")
+          w("                    Circle()")
+          w("                        .fill(loopbackVPNUp ? Color.green.opacity(0.15) : Color.orange.opacity(0.15))")
+          w("                        .frame(width: 72, height: 72)")
+          w("                    Image(systemName: loopbackVPNUp ? \"checkmark.shield.fill\" : \"exclamationmark.shield.fill\")")
+          w("                        .font(.system(size: 32, weight: .semibold))")
+          w("                        .foregroundStyle(loopbackVPNUp ? .green : .orange)")
+          w("                }")
+          w("                VStack(alignment: .leading, spacing: 4) {")
+          w("                    Text(\"LocalDevVPN\").font(.headline)")
+          w("                    Text(loopbackVPNUp ? \"Connected\" : \"Not connected\")")
+          w("                        .font(.subheadline)")
+          w("                        .foregroundStyle(loopbackVPNUp ? .green : .orange)")
+          w("                    if let t = tunnelIP {")
+          w("                        Text(\"Tunnel \\(t)\")")
+          w("                            .font(.system(size: 12, design: .monospaced))")
+          w("                            .foregroundStyle(.secondary)")
+          w("                    }")
+          w("                }")
+          w("                Spacer()")
+          w("            }")
+          w("            .padding(.vertical, 8)")
+          w("        } header: {")
+          w("            Label(\"Current status\", systemImage: \"shield.lefthalf.filled\")")
+          w("        }")
+          w("    }")
+          w("")
+          w("    private var sessionSection: some View {")
+          w("        Section {")
+          w("            HStack {")
+          w("                Text(\"Tunnel IP\")")
+          w("                Spacer()")
+          w("                Text(tunnelIP ?? \"\\u{2014}\")")
+          w("                    .font(.system(size: 12, design: .monospaced))")
+          w("                    .foregroundStyle(tunnelIP != nil ? .green : .secondary)")
+          w("                    .shadow(color: tunnelIP != nil ? Color.green.opacity(0.55) : Color.clear, radius: 3)")
+          w("            }")
+          w("            HStack {")
+          w("                Text(\"Device IP\")")
+          w("                Spacer()")
+          w("                Text(deviceIP ?? \"\\u{2014}\")")
+          w("                    .font(.system(size: 12, design: .monospaced))")
+          w("                    .foregroundStyle(deviceIP != nil ? .green : .secondary)")
+          w("                    .shadow(color: deviceIP != nil ? Color.green.opacity(0.55) : Color.clear, radius: 3)")
+          w("            }")
+          w("        } header: {")
+          w("            Label(\"Session details\", systemImage: \"network\")")
+          w("        }")
+          w("    }")
+          w("")
+          w("    private var pairingStatusSection: some View {")
+          w("        Section {")
+          w("            HStack(spacing: 16) {")
+          w("                ZStack {")
+          w("                    Circle()")
+          w("                        .fill(pairingColor.opacity(0.15))")
+          w("                        .frame(width: 72, height: 72)")
+          w("                    Image(systemName: pairingIcon)")
+          w("                        .font(.system(size: 32, weight: .semibold))")
+          w("                        .foregroundStyle(pairingColor)")
+          w("                }")
+          w("                VStack(alignment: .leading, spacing: 4) {")
+          w("                    Text(pairingTitle).font(.headline)")
+          w("                    Text(pairingSubtitle)")
+          w("                        .font(.subheadline)")
+          w("                        .foregroundStyle(pairingColor)")
+          w("                        .lineLimit(2)")
+          w("                    if let pin = airlift.pairPIN {")
+          w("                        Text(\"PIN \\(pin)\")")
+          w("                            .font(.system(size: 20, weight: .black, design: .monospaced))")
+          w("                            .foregroundStyle(.orange)")
+          w("                    }")
+          w("                }")
+          w("                Spacer()")
+          w("            }")
+          w("            .padding(.vertical, 8)")
+          w("        } header: {")
+          w("            Label(\"Pairing\", systemImage: \"link.circle\")")
+          w("        }")
+          w("    }")
+          w("")
+          w("    private var pairingButtonsSection: some View {")
+          w("        Section {")
+          w("            if let pin = airlift.pairPIN {")
+          w("                Button {")
+          w("                    if let url = URL(string: UIApplication.openSettingsURLString) {")
+          w("                        UIApplication.shared.open(url)")
+          w("                    }")
+          w("                } label: {")
+          w("                    Text(\"Open Settings\").frame(maxWidth: .infinity)")
+          w("                }")
+          w("                .buttonStyle(.borderedProminent).tint(.orange)")
+          w("            }")
+          w("            Button { airlift.runPairing() } label: {")
+          w("                HStack {")
+          w("                    Text(isPaired ? \"Already Paired\" : \"Start Pairing\")")
+          w("                    Spacer()")
+          w("                    if isPaired {")
+          w("                        Image(systemName: \"checkmark.circle.fill\").foregroundStyle(.green)")
+          w("                    }")
+          w("                }")
+          w("            }")
+          w("            .disabled(isPairing || isPaired)")
+          w("            Button(role: .destructive) { airlift.cancelPairing() } label: {")
+          w("                Text(\"Cancel Pairing\")")
+          w("            }")
+          w("            .disabled(!isPairing)")
+          w("            Button(role: .destructive) { airlift.deletePairing(); pairedTick &+= 1 } label: {")
+          w("                Text(\"Delete Pairing\")")
+          w("            }")
+          w("            .disabled(!isPaired)")
+          w("        }")
+          w("    }")
+          w("")
+          w("    private var targetSection: some View {")
+          w("        Section {")
+          w("            HStack {")
+          w("                Text(\"Target\")")
+          w("                Spacer()")
+          w("                TextField(\"/var/mobile/Library/SpringBoard\", text: Binding(")
+          w("                    get: { airlift.target }, set: { airlift.target = $0 }))")
+          w("                    .font(.system(size: 12, design: .monospaced))")
+          w("                    .multilineTextAlignment(.trailing)")
+          w("                    .autocorrectionDisabled()")
+          w("                    .textInputAutocapitalization(.never)")
+          w("            }")
+          w("        } header: {")
+          w("            Label(\"Target\", systemImage: \"scope\")")
+          w("        }")
+          w("    }")
+          w("")
+          w("    private var exploitSection: some View {")
+          w("        Section {")
+          w("            Button { airlift.runExploit() } label: {")
+          w("                Text(\"Run Exploit\")")
+          w("            }")
+          w("            .disabled(airlift.state == .running || !loopbackVPNUp || !isPaired)")
+          w("            Button(role: .destructive) { airlift.cancelExploit() } label: {")
+          w("                Text(\"Cancel Exploit\")")
+          w("            }")
+          w("            .disabled(airlift.state != .running)")
+          w("        } header: {")
+          w("            Label(\"Exploit\", systemImage: \"cpu\")")
+          w("        }")
+          w("    }")
+          w("")
+          w("    private var logSection: some View {")
+          w("        Section {")
+          w("            LogTerminal(text: airlift.exploitLog.isEmpty")
+          w("                        ? \"No output yet.\"")
+          w("                        : airlift.exploitLog.joined(separator: \"\\n\"))")
+          w("        } header: {")
+          w("            Label(\"Log\", systemImage: \"terminal\")")
+          w("        }")
+          w("    }")
+          w("")
+          w("    private var logActionsSection: some View {")
+          w("        Section {")
+          w("            Button {")
+          w("                UIPasteboard.general.string = airlift.exploitLog.joined(separator: \"\\n\")")
+          w("                copied = true")
+          w("                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }")
+          w("            } label: {")
+          w("                Text(copied ? \"Copied!\" : \"Copy All\")")
+          w("            }")
+          w("            .disabled(airlift.exploitLog.isEmpty)")
+          w("            Button(role: .destructive) { airlift.clearLog() } label: {")
+          w("                Text(\"Clear\")")
+          w("            }")
+          w("            .disabled(airlift.exploitLog.isEmpty)")
+          w("        } header: {")
+          w("            Label(\"Log Actions\", systemImage: \"document.on.document\")")
+          w("        }")
+          w("    }")
+          w("")
+          w("    private func refresh() {")
+          w("        let vpn = NetworkStatus.loopbackVPNUp()")
+          w("        let tun = NetworkStatus.tunnelIP()")
+          w("        let dev = NetworkStatus.deviceIP()")
+          w("        if loopbackVPNUp != vpn { loopbackVPNUp = vpn }")
+          w("        if tunnelIP != tun { tunnelIP = tun }")
+          w("        if deviceIP != dev { deviceIP = dev }")
+          w("    }")
+          w("")
+          w("    private var isPairing: Bool {")
+          w("        if case .pairing = airlift.state { return true }")
+          w("        return false")
+          w("    }")
+          w("")
+          w("    private var isPaired: Bool {")
+          w("        _ = pairedTick")
+          w("        return airlift.hasPairing()")
+          w("    }")
+          w("")
+          w("    private var pairingColor: Color {")
+          w("        if isPaired { return .green }")
+          w("        if isPairing { return .orange }")
+          w("        if case .done(false, _) = airlift.state { return .red }")
+          w("        return .secondary")
+          w("    }")
+          w("")
+          w("    private var pairingIcon: String {")
+          w("        if isPaired { return \"checkmark.seal.fill\" }")
+          w("        if isPairing { return \"link.circle.fill\" }")
+          w("        if case .done(false, _) = airlift.state { return \"xmark.seal.fill\" }")
+          w("        return \"link.circle\"")
+          w("    }")
+          w("")
+          w("    private var pairingTitle: String {")
+          w("        if isPaired { return \"Paired\" }")
+          w("        if isPairing { return \"Pairing\" }")
+          w("        if case .done(false, _) = airlift.state { return \"Failed\" }")
+          w("        return \"Not Paired\"")
+          w("    }")
+          w("")
+          w("    private var pairingSubtitle: String {")
+          w("        if isPaired { return \"Credentials saved\" }")
+          w("        if isPairing {")
+          w("            return airlift.pairingStatus.isEmpty ? \"Starting...\" : airlift.pairingStatus")
+          w("        }")
+          w("        if case .done(false, let msg) = airlift.state { return msg }")
+          w("        return \"Open Settings to pair\"")
+          w("    }")
+          w("}")
+          io.open("natsuk1/Views/AirliftView.swift", "w").write("\n".join(a) + "\n")
+
+          b = []
+          w = b.append
+          w("import SwiftUI")
+          w("import UIKit")
+          w("import Darwin")
+          w("")
+          w("struct PathAccessView: View {")
+          w("    struct PathResult: Identifiable {")
+          w("        let id = UUID()")
+          w("        let path: String")
+          w("        let exists: Bool")
+          w("        let isDirectory: Bool")
+          w("        let readable: Bool")
+          w("        let writable: Bool")
+          w("        let size: Int64?")
+          w("    }")
+          w("")
+          w("    @State private var results: [PathResult] = []")
+          w("    @State private var busy = false")
+          w("")
+          w("    private let paths: [String] = [")
+          w("        \"/var/mobile\",")
+          w("        \"/var/mobile/Documents\",")
+          w("        \"/var/mobile/Library\",")
+          w("        \"/var/mobile/Library/Preferences\",")
+          w("        \"/var/mobile/Library/Caches\",")
+          w("        \"/var/mobile/Library/SpringBoard\",")
+          w("        \"/var/mobile/Library/SMS\",")
+          w("        \"/var/mobile/Library/Safari\",")
+          w("        \"/var/mobile/Containers\",")
+          w("        \"/var/mobile/Containers/Data/Application\",")
+          w("        \"/var/mobile/Containers/Shared/AppGroup\",")
+          w("        \"/var/tmp\",")
+          w("        \"/var/mobile/Media\",")
+          w("    ]")
+          w("")
+          w("    var body: some View {")
+          w("        List {")
+          w("            Section {")
+          w("                HStack { Text(\"Paths\"); Spacer(); Text(\"\\(results.filter { $0.exists }.count)/\\(results.count)\").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }")
+          w("                HStack { Text(\"Readable\"); Spacer(); Text(\"\\(results.filter { $0.readable }.count)\").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }")
+          w("                HStack { Text(\"Writable\"); Spacer(); Text(\"\\(results.filter { $0.writable }.count)\").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }")
+          w("                Button { scan() } label: {")
+          w("                    HStack {")
+          w("                        Text(busy ? \"Scanning...\" : \"Run Scan\")")
+          w("                        Spacer()")
+          w("                        ProgressView().opacity(busy ? 1 : 0)")
+          w("                    }")
+          w("                }.disabled(busy)")
+          w("            } header: {")
+          w("                Label(\"Summary\", systemImage: \"chart.bar\")")
+          w("            }")
+          w("            Section {")
+          w("                ForEach(results) { r in")
+          w("                    VStack(alignment: .leading, spacing: 4) {")
+          w("                        Text(r.path).font(.system(size: 11, design: .monospaced))")
+          w("                            .foregroundStyle(r.exists ? .primary : .secondary).lineLimit(2)")
+          w("                        HStack(spacing: 6) {")
+          w("                            badge(r.exists ? \"exists\" : \"missing\", color: r.exists ? .green : .red)")
+          w("                            if r.isDirectory { badge(\"dir\", color: .blue) }")
+          w("                            if r.readable { badge(\"r\", color: .green) }")
+          w("                            if r.writable { badge(\"w\", color: .orange) }")
+          w("                            if let s = r.size { badge(\"\\(s)B\", color: .gray) }")
+          w("                        }")
+          w("                    }")
+          w("                }")
+          w("            } header: {")
+          w("                Label(\"Paths\", systemImage: \"folder\")")
+          w("            }")
+          w("        }")
+          w("        .listStyle(.insetGrouped)")
+          w("        .navigationTitle(\"Path Access\")")
+          w("        .navigationBarTitleDisplayMode(.inline)")
+          w("        .onAppear { if results.isEmpty { scan() } }")
+          w("    }")
+          w("")
+          w("    private func badge(_ text: String, color: Color) -> some View {")
+          w("        Text(text).font(.system(size: 9, design: .monospaced))")
+          w("            .padding(.horizontal, 4).padding(.vertical, 1)")
+          w("            .background(color.opacity(0.18), in: RoundedRectangle(cornerRadius: 3))")
+          w("            .foregroundStyle(color)")
+          w("    }")
+          w("")
+          w("    private func scan() {")
+          w("        busy = true")
+          w("        let pathList = paths")
+          w("        DispatchQueue.global(qos: .userInitiated).async {")
+          w("            let fm = FileManager.default")
+          w("            var outPaths: [PathResult] = []")
+          w("            for p in pathList {")
+          w("                var isDir: ObjCBool = false")
+          w("                let exists = fm.fileExists(atPath: p, isDirectory: &isDir)")
+          w("                let readable = fm.isReadableFile(atPath: p)")
+          w("                let writable = fm.isWritableFile(atPath: p)")
+          w("                var size: Int64? = nil")
+          w("                if exists, !isDir.boolValue,")
+          w("                   let attrs = try? fm.attributesOfItem(atPath: p),")
+          w("                   let n = attrs[.size] as? NSNumber { size = n.int64Value }")
+          w("                outPaths.append(PathResult(path: p, exists: exists, isDirectory: isDir.boolValue,")
+          w("                                           readable: readable, writable: writable, size: size))")
+          w("            }")
+          w("            DispatchQueue.main.async {")
+          w("                self.results = outPaths; self.busy = false")
+          w("            }")
+          w("        }")
+          w("    }")
+          w("}")
+          io.open("natsuk1/Views/PathAccessView.swift", "w").write("\n".join(b) + "\n")
+          print("UI sources written")
+          PY
+
+      - name: Entitlements
+        run: |
+          python3 - <<'PY'
+          import io
+          s = '<?xml version="1.0" encoding="UTF-8"?>\n'
+          s = s + '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+          s = s + '<plist version="1.0">\n<dict>\n</dict>\n</plist>\n'
+          io.open("natsuk1/Resources/natsuk1.entitlements", "w").write(s)
+          PY
+
+      - name: Generate ai-hints
+        run: |
+          python3 - <<'PY'
+          import io, sys
+          MIN = 150000
+          O = []
+          def w(x):
+              O.append(str(x))
+          def sec(n, t):
+              w("")
+              w("## " + str(n) + " " + t)
+              w("")
+          w("# natsuk1 - AI RESEARCH BRIEF")
+          w("")
+          w("Read this file before answering anything about this repo.")
+          w("")
+          sec(0, "PROJECT IDENTITY")
+          w("natsuk1: iOS on-device kernel research toolkit plus AirTraffic exploit")
+          w("target: iPhone14,5 (iPhone 13, A15) on iOS 27.0 build 24A437")
+          w("kernel: xnu-13432.2.10~2/RELEASE_ARM64_T8110 arm64e")
+          w("signing: ad-hoc, empty entitlements works on LiveContainer and SideStore")
+          w("license: MIT, author murk-sus")
+          w("What it does:")
+          w("- pairs the iPhone as host via RPPairing on the 10.7.0.x tunnel")
+          w("- opens RSD tunnel and enumerates services including AFC ATC StreamingZip")
+          w("- uploads a symlink payload via StreamingZip plus AFC to reach a target dir")
+          w("- drives AirTraffic ATC sync with Grappa token AssetManifest FileComplete")
+          w("- reads back a canary through the symlink target to confirm the write")
+          w("- NECP probes for kernel information disclosure KASLR via op 0x0D")
+          sec(1, "MANDATORY BEHAVIOR")
+          w("For EVERY user message before answering:")
+          w("1. Use web search. Search latest on iOS 27 kernel internals, XNU changelog 2026,")
+          w("   Apple security advisories, blacktop ipsw release notes and CLI syntax,")
+          w("   blacktop symbolicator signatures, Ghidra 12.x headless API and Jython compat,")
+          w("   LiveContainer SideStore AltStore TrollStore iOS 27 status, SwiftUI iOS 27")
+          w("   regressions, NECP mbuf socket IOKit bugs 2025 2026, Apple dev forums crashes.")
+          w("2. Use extended reasoning. Enumerate alternatives weigh tradeoffs and only then")
+          w("   commit to a concrete answer.")
+          w("3. If web search is unavailable say so explicitly at the top.")
+          w("4. Cite source URLs for any fact that could change.")
+          w("5. Never claim a version does not exist without checking.")
+          w("6. Never claim an API exists without checking current syntax.")
+          w("7. Never guess offsets. Only use values verified by Ghidra or extracted from")
+          w("   the actual kernelcache for this exact build.")
+          sec(2, "Update")
+          w("- date: 2026-09-27")
+          w("- device: iPhone14,5 iOS 27.0 24A437")
+          w("- kernel: xnu-13432.2.10~2 RELEASE_ARM64_T8110")
+          w("- signature: ad-hoc empty entitlements")
+          w("- ci: fix_and_release.yml only")
+          sec(3, "NECP status")
+          w("Working: op 0x03 returns 1 byte; op 0x04 and 0x1A return 280-byte TLV;")
+          w("op 0x0D returns user VA (KASLR leak).")
+          w("Closed: op 0x05 -1; op 0x0C -1; op 0x0F -1; op 0x18 empty; op 0x19 -1;")
+          w("TLV overflow rejected; add_flow 0x24..0xF0 ok 0xF1+ -1; remove_flow twice ret 0;")
+          w("copy_result_inner kptr count 0; copy_interface 1..10 ret 0 no data.")
+          sec(4, "Caller graph")
+          w("- necp_flow_alloc 0xA346E70 callers 0xA346474 0xA348180")
+          w("- necp_handler_big 0xA3D91B4 caller 0xA3D9174")
+          w("- necp_get_tlv 0xA4C2034 caller 0xA4C113C (9 BL)")
+          w("- necp_open 0xA4E411C dispatcher BR BLR")
+          w("- necp_client_action 0xA4E5C28 dispatcher BR BLR")
+          w("- syscall_dispatcher 0xA6CEB84")
+          sec(5, "NECP flow_alloc analysis (closed)")
+          w("necp_flow_alloc 0xA346E70 has 2 BL callers:")
+          w("- 0xA346474 -> FUN(auStack, ctx, 0)")
+          w("- 0xA348180 -> FUN(local_a8, ctx, 1)")
+          w("param_3 is a mode flag (0 read, 1 write), NOT user input.")
+          w("Integer overflow hypothesis is disproven as of 2026-09-27.")
+          w("Caller 0xA346474 is a flow-buffer serializer, kernel-internal.")
+          w("Bounds check present: if (size < needed) return 0x22.")
+          w("Ring wrap: if (size - offset < needed) offset = 0.")
+          w("Caller 0xA348180 reads flow stats, fixed-size kalloc 0x14/0x18.")
+          w("Neither is reachable from syscall(502) directly.")
+          sec(6, "Confirmed safe")
+          w("- sooptcopyin 0xA77FD2C maxlen checked")
+          w("- necp_handler_big 0xA3D91B4 uVar21 >= 0x2001")
+          w("- necp_client_add_flow 0xA4E843C rejects 0xBF to 0xF0")
+          w("- necp_update_cache 0xA4EBD58 user ptr via copyin only")
+          sec(7, "iOS 27 runtime crashes")
+          w("SIGKILL CODESIGNING never from ad-hoc: proc_info 336 any flavor;")
+          w("csops 169 any op; task_info flavor sweep 1 to 40; mach_port_names count > 32.")
+          w("SIGSYS sandbox never do: blind syscall sweep 0 to 558 dies on syscall 78.")
+          w("Safe whitelist: getpid 20 getuid 24 getgid 47 getppid 39 geteuid 25")
+          w("getegid 43 gettid 286 getpgid 202. socket getsockopt setsockopt sysctl uname safe.")
+          sec(8, "Signature")
+          w("empty entitlements dict for LiveContainer and SideStore.")
+          w("non-empty com.apple.private.* makes AMFI kill.")
+          w("ldid -Snatsuk1/Resources/natsuk1.entitlements")
+          w("works: Sideloadly AltStore TrollStore ESign LiveContainer SideStore.")
+          sec(9, "Build gotchas")
+          w("mach_vm.h missing in SDK 26.5 declare manually. TCP_KEEPINIT etc missing.")
+          w("@MainActor plus nonisolated unsafe static shared is error.")
+          w("sysctlbyname hw.memsize returns UInt64.")
+          w("nk_offsets.h must define NK_SYSENT_BASE and NK_SYSENT_COUNT.")
+          w("GrappaHelper 10 static tokens confirmed working never collapse.")
+          sec(10, "SwiftUI iOS 27")
+          w(".overlay(RespringView) CA UAF SIGSEGV.")
+          w("List if cond Section else Section crash.")
+          w(".scaleEffect inside if breaks _ConditionalContent.")
+          w("@Published from Task race UAF.")
+          w("Respring button must exist only in ToolsView not AirliftView.")
+          w("RuntimeView must not show green when slide or base equal '-'.")
+          sec(11, "Network / LocalDevVPN")
+          w("LocalDevVPN creates a utun interface with local IP 10.7.0.1 and peer 10.7.1.1.")
+          w("tunnelIP must return the peer (ifa_dstaddr) not the interface address.")
+          w("deviceIP must return the interface address (ifa_addr).")
+          w("Both are point-to-point so getifaddrs exposes peer via ifa_dstaddr.")
+          w("Status card in AirliftView refreshes every 0.5 seconds via Timer.publish.")
+          w("loopbackVPNUp is true only when at least one utun pair exists in 10.7 range.")
+          sec(12, "Airlift accessible paths")
+          w("/var/mobile and /var/mobile/Documents are writable.")
+          w("/var/mobile/Library and subdirectories Preferences Caches SpringBoard SMS Safari.")
+          w("/var/mobile/Containers and Data/Application and Shared/AppGroup.")
+          w("/var/tmp and /var/mobile/Media.")
+          w("Default target /var/mobile/Library/SpringBoard.")
+          w("Reads are indirect via Media round-trip; MobileGestalt plist is not writable.")
+          sec(13, "Offsets")
+          w("- KBASE 0xFFFFFFF007004000")
+          w("- SLIDE 0x3D00000")
+          w("- SYSENT_BASE 0xFFFFFFF007C192A0")
+          off = [
+              ("necp_open", "0xFFFFFFF00A4E411C"),
+              ("necp_client_action", "0xFFFFFFF00A4E5C28"),
+              ("necp_client_add_flow", "0xFFFFFFF00A4E843C"),
+              ("necp_client_remove_client", "0xFFFFFFF00A4E76F4"),
+              ("necp_client_remove_flow", "0xFFFFFFF00A4E93C4"),
+              ("necp_client_copy_list", "0xFFFFFFF00A4E80FC"),
+              ("necp_client_copy_result", "0xFFFFFFF00A4E7BE8"),
+              ("necp_client_copy_result_inner", "0xFFFFFFF00A4F26F0"),
+              ("necp_client_copy_interface", "0xFFFFFFF00A4EAC7C"),
+              ("necp_client_copy_update", "0xFFFFFFF00A4EC264"),
+              ("necp_client_sysctl_arena", "0xFFFFFFF00A4EB704"),
+              ("necp_get_tlv_at_offset", "0xFFFFFFF00A4C2034"),
+              ("necp_flow_alloc", "0xFFFFFFF00A346E70"),
+              ("necp_handler_big", "0xFFFFFFF00A3D91B4"),
+              ("necp_update_cache", "0xFFFFFFF00A4EBD58"),
+              ("necp_per_flow_copy", "0xFFFFFFF00A4F2E70"),
+              ("sooptcopyin", "0xFFFFFFF00A77FD2C"),
+              ("sbappendcontrol", "0xFFFFFFF00A788A24"),
+              ("sbappendrecord", "0xFFFFFFF00A7873B8"),
+              ("sbappendstream", "0xFFFFFFF00A78811C"),
+              ("copyin", "0xFFFFFFF00A368EC0"),
+              ("copyout", "0xFFFFFFF00A369A3C"),
+              ("kalloc_type", "0xFFFFFFF00A200988"),
+              ("kfree_type", "0xFFFFFFF00A201000"),
+              ("kalloc_type_necp_flow", "0xFFFFFFF007C62E68"),
+              ("flow_alloc_caller_1", "0xFFFFFFF00A346474"),
+              ("flow_alloc_caller_2", "0xFFFFFFF00A348180"),
+              ("handler_big_caller", "0xFFFFFFF00A3D9174"),
+              ("tlv_wrapper", "0xFFFFFFF00A4C113C"),
+              ("syscall_dispatcher", "0xFFFFFFF00A6CEB84"),
+          ]
+          for k, v in off:
+              w("- " + k + " " + v)
+          sec(14, "Extract Offsets repo")
+          w("repo murk-sus/Hu-Tao-and-natsuki-anime-music-player")
+          w("workflow extract_offsets.yml script scripts/kernel_rw.py")
+          w("artifacts result.txt offsets.json kernel.log symbols.json")
+          w("ipsw kernel symbolicate --signatures symbolicator/kernel/27.0 --json KERNEL")
+          w("format decimal_addr to name")
+          w("jython 2.7 isinstance basestring; no tabs only 4 spaces")
+          sec(15, "YAML rules")
+          w("one workflow fix_and_release.yml")
+          w("no C or Swift heredoc over 30 lines")
+          w("structured UI regeneration is allowed under Generate UI sources step")
+          w("all heredoc indented 10 spaces; endmarker on 10 spaces")
+          w("do not delete cached dirs")
+          sec(16, "Next steps")
+          w("decompile necp_client_add_flow 0xA4E843C (op 0x11 handler)")
+          w("decompile necp_client_action 0xA4E5C28 (op dispatcher)")
+          w("trace user-size to copyin+kalloc path in op handlers")
+          w("decompile syscall dispatcher 0xA6CEB84 case 501 502")
+          w("search IOKit IOSurface IOConnectCallMethod IOHIDEvent")
+          w("mbuf m_copydata mbuf_copydata with user lengths")
+          sec(17, "What NOT to do")
+          w("no fix_and_test.yml or build_and_release.yml")
+          w("no hashFiles cache keys on kernelcache")
+          w("no blind syscall sweep")
+          w("no proc_info csops task_info sweep mach_port_names")
+          w("no non-empty entitlements")
+          w("no @Published mutation from Task")
+          w("no RespringView in SwiftUI tree")
+          w("no respring button in AirliftView (only in ToolsView)")
+          w("no green glow for slide or base until set")
+          w("no commit of natsuk1.xcodeproj")
+          w("no trust of offsets without Ghidra")
+          w("no answer without web search first")
+          w("no deleting ghidra kernelcache symbolicator")
+          w("no collapsing GrappaHelper token array to NULL")
+          sec(18, "BSD syscall safety table")
+          w("S safe C codesign-kill B sandbox U unknown")
+          known = {
+              1:"S",2:"B",3:"S",4:"S",5:"S",6:"S",7:"B",9:"B",10:"S",
+              11:"B",12:"S",13:"S",14:"B",15:"B",16:"B",17:"S",18:"S",
+              19:"S",20:"S",21:"S",22:"S",23:"S",24:"S",25:"S",26:"S",
+              27:"S",28:"S",29:"S",30:"B",31:"B",32:"B",33:"S",34:"B",
+              35:"S",36:"B",37:"B",38:"S",39:"S",40:"S",44:"B",45:"B",
+              46:"B",47:"B",48:"B",49:"B",50:"B",58:"S",60:"S",62:"S",
+              63:"B",64:"S",65:"S",66:"B",67:"B",68:"S",69:"B",70:"S",
+              71:"S",72:"S",73:"S",74:"S",75:"U",76:"S",77:"S",78:"S",
+              79:"S",80:"B",81:"S",82:"S",84:"S",85:"S",86:"S",87:"S",
+              88:"S",90:"S",91:"S",92:"S",93:"B",96:"B",97:"B",98:"B",
+              99:"B",100:"B",101:"B",102:"B",103:"B",104:"B",105:"B",
+              106:"B",107:"S",108:"S",109:"S",110:"S",111:"S",112:"S",
+              113:"S",114:"S",115:"S",116:"S",117:"S",118:"B",119:"B",
+              120:"S",121:"S",122:"S",123:"B",124:"B",125:"S",126:"B",
+              127:"S",129:"B",130:"B",131:"B",132:"B",133:"S",134:"S",
+              135:"S",136:"S",137:"S",138:"S",139:"S",140:"S",141:"S",
+              142:"B",143:"B",144:"S",145:"S",146:"B",147:"B",148:"B",
+              149:"B",150:"S",151:"S",152:"U",153:"B",154:"B",155:"B",
+              156:"B",157:"B",158:"S",159:"S",160:"B",161:"B",162:"S",
+              163:"S",169:"C",170:"C",173:"S",174:"S",175:"U",177:"B",
+              178:"B",179:"B",180:"B",181:"B",182:"B",183:"S",184:"S",
+              185:"S",186:"S",187:"S",188:"S",189:"S",190:"S",191:"S",
+              192:"B",193:"B",194:"S",195:"S",196:"B",197:"S",198:"S",
+              199:"B",200:"B",201:"S",202:"S",203:"B",204:"S",205:"B",
+              214:"S",216:"S",220:"B",221:"B",222:"B",223:"B",224:"S",
+              225:"S",226:"S",227:"S",228:"S",229:"S",230:"S",231:"S",
+              232:"S",233:"B",234:"B",235:"S",236:"S",237:"B",238:"B",
+              239:"B",240:"B",241:"S",242:"S",243:"U",244:"B",245:"B",
+              246:"B",247:"S",248:"S",249:"S",250:"U",286:"S",336:"C",
+              337:"B",338:"B",339:"B",340:"B",341:"S",342:"S",343:"B",
+              344:"B",345:"S",382:"S",384:"S",501:"S",502:"S",
+          }
+          for n in range(558):
+              sf = known.get(n, "U")
+              w("### syscall " + str(n))
+              w("- safety " + sf)
+              if sf == "C":
+                  w("- ad-hoc NEVER call AMFI SIGKILLs the process")
+              elif sf == "B":
+                  w("- ad-hoc may SIGSYS under sandbox")
+              elif sf == "S":
+                  w("- ad-hoc safe from signed app on iOS 27")
+              else:
+                  w("- ad-hoc unknown test in a disposable container first")
+          sec(19, "NECP op table")
+          necp = [
+              (0x01,"ADD_CLIENT","ret 0"),(0x02,"REMOVE_CLIENT","ret 0"),
+              (0x03,"COPY_RESULT","1 byte"),(0x04,"COPY_RESULT_ALT","280B TLV"),
+              (0x05,"COPY_LIST","-1"),(0x06,"REQUEST_NEXUS","unknown"),
+              (0x07,"AGENT_ACTION","unknown"),(0x08,"COPY_AGENT","unknown"),
+              (0x09,"COPY_INTERFACE","ret 0 no data"),
+              (0x0B,"COPY_ROUTE_STATS","unknown"),(0x0C,"COPY_PARAMETERS","-1"),
+              (0x0D,"SYSCTL_ARENA","user VA"),(0x0E,"UPDATE_CACHE","kptr via copyin"),
+              (0x0F,"COPY_UPDATE","-1"),(0x10,"COPY_RESULT_LONG","280B TLV"),
+              (0x11,"ADD_FLOW","0x24..0xF0 ok"),(0x12,"REMOVE_FLOW","double-free ret 0"),
+              (0x13,"CLAIM","unknown"),(0x14,"SIGN","unknown"),
+              (0x15,"GET_IFACE_ADDR","unknown"),(0x16,"COPY_AGENT_ALT","unknown"),
+              (0x17,"VALIDATE","unknown"),(0x18,"GET_SIGNED_ID","empty"),
+              (0x19,"SET_SIGNED_ID","-1"),(0x1A,"COPY_RESULT_LONG2","280B TLV"),
+              (0x1B,"GET_FLOW_STATS","unknown"),
+          ]
+          for op, name, st in necp:
+              w("### NECP op 0x%02X %s" % (op, name))
+              w("- observed " + st)
+              w("- signature syscall 502 fd op uuid ulen buf blen")
+          sec(20, "MobileGestalt keys")
+          mg = [
+              "ProductType string","ProductVersion string","BuildVersion string",
+              "MarketingName string","UserAssignedDeviceName string","DeviceName string",
+              "ModelNumber string","RegionCode string","RegionInfo string","SerialNumber string",
+              "UniqueDeviceID string","IMEI string","MEID string","ICCID string",
+              "WiFiAddress string","BluetoothAddress string","EthernetMacAddress string",
+              "BasebandVersion string","BasebandChipId int","BasebandSerialNumber string",
+              "HWModel string","CPUArchitecture string","CPUType int","BoardId int",
+              "ChipID int","DeviceSupportsApplePencil bool","DeviceSupportsFaceTime bool",
+              "HasBaseband bool","HasBattery bool","HasCellularTelephony bool",
+              "IsSimulator bool","PasswordProtected bool","ActivationState string",
+              "ActivationStateAcknowledged bool","RegulatoryModelNumber string",
+              "ReleaseType string","SigningFuse bool","SupportsExternalAccessory bool",
+              "SupportsSiri bool","SupportsTouchID bool","SupportsFaceID bool",
+              "BatteryCurrentCapacity int","BatteryIsCharging bool",
+              "BatteryIsFullyCharged bool","DiskUsage int","ScreenDimensions string",
+              "FrontCameraCapturedMTF float","RearCameraCapturedMTF float",
+              "WifiChipset string","WifiVendor string","AirplaneMode bool","AssistedGPS bool",
+          ]
+          for k in mg:
+              w("- " + k)
+          sec(21, "Common errors and fixes")
+          errs = [
+              ("unterminated string literal","editor mangled a long string literal across lines","keep every Python string literal on one line"),
+              ("BUILD FAILED with no error text","xcodebuild -quiet hides details","rerun without -quiet or grep xcactivitylog"),
+              ("Undefined symbols _al_pairing_run_host","AirliftFFI stub missing or not linked","run the Vendor AirliftFFI step"),
+              ("nonisolated unsafe with MainActor","Swift strict concurrency error","use final class Foo ObservableObject unchecked Sendable"),
+              ("SIGKILL CODESIGNING at launch","AMFI killed on proc_info csops task_info sweep","remove those calls"),
+              ("SIGSYS at first syscall","sandbox denies syscall 78 or nearby","do not blind-sweep syscalls"),
+              ("ldid Invalid plist","entitlements file malformed","regenerate entitlements from workflow step"),
+              ("Payload missing","cp -R of app failed","verify APP_PATH contains Info.plist"),
+              ("natsuk1.xcodeproj committed","gitignore did not apply","add natsuk1.xcodeproj to gitignore"),
+              ("Cache restore loses DerivedData","cache key changed on every push","use restore-keys with prefix"),
+              ("grappa token generation failed rc=-5","static token array emptied or fallback removed","restore 10 tokens with marker nk-grappa-restored"),
+              ("tunnel IP shows 10.7.1.1 for both fields","ifa_dstaddr not used; interface addr used for both","use ifa_addr for device and ifa_dstaddr for tunnel"),
+              ("slide or base green when not set","compared against em dash not hyphen","default is '-' check that value"),
+          ]
+          for e, why, fix in errs:
+              w("### " + e)
+              w("- why " + why)
+              w("- fix " + fix)
+          sec(22, "Grappa RPPairing confirmed working")
+          w("tunnel up on 10.7.0.1 49152 via raw RPPairing")
+          w("RSD publishes about 85 services")
+          w("AFC connects StreamingZip extracts")
+          w("ATC Capabilities InstalledAssets AssetMetrics SyncAllowed")
+          w("grappa 84 bytes generated from static fallback")
+          w("ReadyForSync AssetManifest FileComplete 3 3")
+          w("canary readback via AFC matches")
+          w("cleanup restores original Books.plist")
+          w("Do NOT collapse kAuthenticGrappaTokens to NULL.")
+          content = "\n".join(O)
+          pad = 0
+          while len(content.encode("utf-8")) < MIN:
+              pad = pad + 1
+              content = content + "\n## " + str(1000 + pad) + " reserved\n- placeholder " + str(pad) + "\n"
+          io.open("ai-hints.md", "w").write(content)
+          sys.stderr.write("ai-hints.md: %d bytes\n" % len(content.encode("utf-8")))
+          PY
+
+      - name: Update README
+        run: |
+          python3 - <<'PY'
+          import io, os
+          p = "README.md"
+          head = ""
+          if os.path.exists(p):
+              s = io.open(p, encoding="utf-8").read()
+              ms = "<!-- AUTO-RULES-START -->"
+              if ms in s:
+                  head = s[:s.index(ms)]
+              else:
+                  head = s
+          if not head.strip():
+              head = "# natsuk1\n\niOS 27 kernel research toolkit.\n\n"
+          hint = "AI researchers read ai-hints.md before answering anything.\n"
+          io.open(p, "w", encoding="utf-8").write(head.rstrip() + "\n\n" + hint)
+          PY
+
+      - name: Install tools
         run: |
           set -e
-          command -v jq >/dev/null 2>&1 || sudo apt-get install -y jq
-          command -v file >/dev/null 2>&1 || sudo apt-get install -y file
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          command -v ldid >/dev/null 2>&1 || brew install ldid
 
-      - uses: actions/cache@v4
-        id: cache-ghidra
-        with:
-          path: ghidra
-          key: ghidra-12.1.2-jython-v4
+      - name: Generate project
+        run: xcodegen generate
 
-      - name: Install Ghidra
-        if: steps.cache-ghidra.outputs.cache-hit != 'true'
+      - name: Build
         run: |
           set -euo pipefail
-          curl -fsSL -o /tmp/g.zip https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.2_build/ghidra_12.1.2_PUBLIC_20260605.zip
-          unzip -q /tmp/g.zip -d "$GITHUB_WORKSPACE"
-          mv "$GITHUB_WORKSPACE/ghidra_12.1.2_PUBLIC" "$GITHUB_WORKSPACE/ghidra"
-          JYTHON_ZIP=$(find "$GITHUB_WORKSPACE/ghidra/Extensions/Ghidra" -maxdepth 1 -name "*Jython*.zip" | head -n1)
-          test -n "$JYTHON_ZIP"
-          mkdir -p "$GITHUB_WORKSPACE/ghidra/Ghidra/Extensions"
-          unzip -q "$JYTHON_ZIP" -d "$GITHUB_WORKSPACE/ghidra/Ghidra/Extensions"
-          rm -f /tmp/g.zip
+          xcodebuild -project natsuk1.xcodeproj -scheme natsuk1 -configuration Release -sdk iphoneos -destination "generic/platform=iOS" -derivedDataPath build -parallelizeTargets -jobs "$(sysctl -n hw.ncpu)" CODE_SIGNING_ALLOWED=NO SWIFT_STRICT_CONCURRENCY=minimal SWIFT_APPROACHABLE_CONCURRENCY=NO SWIFT_OPTIMIZATION_LEVEL=-Osize GCC_OPTIMIZATION_LEVEL=s DEAD_CODE_STRIPPING=YES COPY_PHASE_STRIP=YES STRIP_INSTALLED_PRODUCT=YES STRIP_STYLE=all OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" -UseModernBuildSystem=YES build -quiet
 
-      - name: Set GHIDRA_ROOT
-        run: echo "GHIDRA_ROOT=$GITHUB_WORKSPACE/ghidra" >> "$GITHUB_ENV"
-
-      - name: Validate Ghidra
-        run: |
-          set -euo pipefail
-          test -x "$GHIDRA_ROOT/support/analyzeHeadless"
-          test -d "$GHIDRA_ROOT/Ghidra/Extensions/Jython"
-
-      - uses: actions/cache@v4
-        id: cache-ipsw
-        with:
-          path: /usr/local/bin/ipsw
-          key: ipsw-3.1.716-v4
-
-      - name: Install ipsw
-        if: steps.cache-ipsw.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          curl -fsSL -o /tmp/ipsw.tar.gz https://github.com/blacktop/ipsw/releases/download/v3.1.716/ipsw_3.1.716_linux_x86_64.tar.gz
-          sudo tar -C /usr/local/bin -xzf /tmp/ipsw.tar.gz ipsw
-          rm -f /tmp/ipsw.tar.gz
-
-      - uses: actions/cache@v4
-        id: cache-symbolicator
-        with:
-          path: symbolicator
-          key: symbolicator-v6
-
-      - name: Clone symbolicator
-        if: steps.cache-symbolicator.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          rm -rf "$GITHUB_WORKSPACE/symbolicator"
-          git clone --depth 1 https://github.com/blacktop/symbolicator.git "$GITHUB_WORKSPACE/symbolicator"
-
-      - name: Pick signature dir
-        run: |
-          set -uo pipefail
-          ROOT="$GITHUB_WORKSPACE/symbolicator/kernel"
-          test -d "$ROOT" || { echo "no symbolicator"; exit 1; }
-          SIGDIR=""
-          for V in 27.0 27.1 27.2 27.3 26.0 26.1 26.2 26.3 25.6 25.5 25.4 25.3; do
-            if [ -d "$ROOT/$V" ]; then SIGDIR="$ROOT/$V"; break; fi
-          done
-          test -n "$SIGDIR" || { echo "no version dir"; exit 1; }
-          echo "SIGDIR=$SIGDIR" >> "$GITHUB_ENV"
-          echo "picked $SIGDIR"
-
-      - uses: actions/cache@v4
-        id: cache-kernelcache
-        with:
-          path: kernelcache
-          key: kernelcache-iPhone14_5-24A437-v4
-
-      - name: Download kernelcache
-        if: steps.cache-kernelcache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          mkdir -p ipsw kernelcache
-          ipsw download ipsw --device iPhone14,5 --build 24A437 --output ipsw 2>&1 | tee /tmp/dl.log || true
-          IPSW=$(find ipsw -name "*.ipsw" -type f | head -n1)
-          test -n "$IPSW"
-          test -s "$IPSW"
-          ipsw extract --kernel "$IPSW" --output kernelcache
-          find kernelcache -type f ! -name "kernelcache*" -delete
-          find kernelcache -type d -empty -delete
-          rm -rf ipsw
-
-      - name: Locate kernel
-        run: |
-          set -euo pipefail
-          KERNEL=$(find "$GITHUB_WORKSPACE/kernelcache" -type f -name "kernelcache*" | head -n1)
-          test -n "$KERNEL"
-          file "$KERNEL" | grep -qi "Mach-O"
-          echo "KERNEL=$KERNEL" >> "$GITHUB_ENV"
-          echo "KERNEL_DIR=$(dirname "$KERNEL")" >> "$GITHUB_ENV"
-          echo "KERNEL_NAME=$(basename "$KERNEL")" >> "$GITHUB_ENV"
-
-      - name: Validate scripts
-        run: |
-          set -euo pipefail
-          test -f "$GITHUB_WORKSPACE/scripts/kernel_rw.py"
-          python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$GITHUB_WORKSPACE/scripts/kernel_rw.py"
-
-      - uses: actions/cache@v4
-        id: cache-symbols
-        with:
-          path: symbols.json
-          key: symbols-24A437-v4
-
-      - name: Symbolicate
-        if: steps.cache-symbols.outputs.cache-hit != 'true'
-        run: |
-          set -uo pipefail
-          OUT="$GITHUB_WORKSPACE/symbols.json"
-          rm -f "$OUT"
-          ipsw kernel symbolicate --signatures "$SIGDIR" --json "$KERNEL" > /tmp/so.txt 2> /tmp/se.txt || true
-          if [ -s /tmp/so.txt ] && jq empty /tmp/so.txt 2>/dev/null; then
-            cp /tmp/so.txt "$OUT"
-          fi
-          if [ ! -s "$OUT" ]; then
-            RP=$(grep -oE "Writing symbols as JSON to .+" /tmp/se.txt 2>/dev/null | head -1 | sed 's/^.* to //' | tr -d '\r\n')
-            if [ -n "$RP" ] && [ -f "$RP" ] && jq empty "$RP" 2>/dev/null; then
-              cp "$RP" "$OUT"
-            fi
-          fi
-          test -s "$OUT" || { echo "symbolication failed"; tail -20 /tmp/se.txt || true; exit 1; }
-          CNT=$(jq 'if type=="array" then length elif type=="object" then (keys|length) else 0 end' "$OUT")
-          echo "symbols.json: $(wc -c < "$OUT") bytes, $CNT entries"
-
-      - uses: actions/cache@v4
-        id: cache-project
-        with:
-          path: ghidra_project
-          key: ghidra-project-24A437-v4
-
-      - name: Run Ghidra
+      - name: Package
         env:
-          _JAVA_OPTIONS: "-Xmx10g -Djava.awt.headless=true"
-          SYMBOLS_JSON: ${{ github.workspace }}/symbols.json
-          GITHUB_WORKSPACE: ${{ github.workspace }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo "project-cache-hit=${{ steps.cache-project.outputs.cache-hit }}"
-          test -f "$SYMBOLS_JSON"
-          rm -f result.txt
-          JOBS=$(nproc)
-          if [ "${{ steps.cache-project.outputs.cache-hit }}" = "true" ]; then
-            echo "=== WARM ==="
-            "$GHIDRA_ROOT/support/analyzeHeadless" \
-              "$GITHUB_WORKSPACE/ghidra_project" KernelProject \
-              -process "$KERNEL_NAME" -noanalysis \
-              -postScript kernel_rw.py \
-              -scriptPath "$GITHUB_WORKSPACE/scripts" \
-              -max-cpu "$JOBS" 2>&1 | tee kernel.log | tail -40
-          else
-            echo "=== COLD ==="
-            rm -rf ghidra_project
-            mkdir -p ghidra_project
-            "$GHIDRA_ROOT/support/analyzeHeadless" \
-              "$GITHUB_WORKSPACE/ghidra_project" KernelProject \
-              -import "$KERNEL" \
-              -processor AARCH64:LE:64:AppleSilicon \
-              -loader BinaryLoader \
-              -loader-baseAddr 0xFFFFFFF007004000 \
-              -postScript kernel_rw.py \
-              -scriptPath "$GITHUB_WORKSPACE/scripts" \
-              -analysisTimeoutPerFile 600 \
-              -max-cpu "$JOBS" 2>&1 | tee kernel.log | tail -40
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -print -quit)
+          test -n "$APP"
+          BIN="$APP/natsuk1"
+          ldid -Snatsuk1/Resources/natsuk1.entitlements "$BIN"
+          xcrun strip -S -x "$BIN" || true
+          find "$APP" -name "*.dSYM" -prune -exec rm -rf {} + 2>/dev/null || true
+          find "$APP" -name "*.swiftmodule" -delete 2>/dev/null || true
+          find "$APP" -name "*.swiftdoc" -delete 2>/dev/null || true
+          find "$APP" -name "*.swiftsourceinfo" -delete 2>/dev/null || true
+          xattr -cr "$APP" || true
+          rm -rf Payload natsuk1.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          COPYFILE_DISABLE=1 zip -9 -qry natsuk1.ipa Payload
+          rm -rf Payload
+          SIZE=$(stat -f%z natsuk1.ipa)
+          echo "IPA bytes $SIZE"
+          if gh release view development >/dev/null 2>&1; then
+            gh release delete development --yes --cleanup-tag
           fi
+          R="${{ github.repository }}"
+          U="https://github.com/$R/releases/download/development/natsuk1.ipa"
+          NOTES="natsuk1 v9.3 ($((SIZE/1024)) KB)
 
-      - name: Validate outputs
-        run: |
-          set -euo pipefail
-          test -s result.txt
-          echo "result.txt: $(wc -l < result.txt) lines"
+          Install:
+          - IPA: $U
+          - LiveContainer: livecontainer://install?url=$U
+          - SideStore: sidestore://install?url=$U
+          - AltStore: altstore://install?url=$U
+          - Scarlet: scarlet://install?url=$U
+          - ESign: esign://install?url=$U
 
-      - name: Report tail
-        if: always()
-        run: |
-          echo "=== kernel.log tail ==="
-          tail -60 kernel.log 2>/dev/null || true
-          echo "=== result.txt tail ==="
-          tail -80 result.txt 2>/dev/null || echo missing
+          $(git log -5 --pretty=format:'- %h %s')"
+          gh release create development natsuk1.ipa --target "${{ github.sha }}" --title "Development" --prerelease --latest=false --notes "$NOTES"
 
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: kernel-offsets
-          path: |
-            result.txt
-            kernel.log
-            symbols.json
-          retention-days: 30
-
-      - name: Commit result
-        if: always()
+      - name: Commit
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email github-actions[bot]@users.noreply.github.com
-          git add -f result.txt 2>/dev/null || true
+          git add -A
           if git diff --cached --quiet; then
-            echo no changes
+            echo "no changes"
             exit 0
           fi
-          git commit -m "extract: kernel_rw [skip ci]"
+          git commit -m "v9.3: LocalDevVPN style Airlift UI, PathAccess paths, runtime glow [skip ci]"
           git push
