@@ -88,9 +88,7 @@ struct RootView: View {
                     .onChange(of: keep_alive_location) { _, v in
                         if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
                     }
-                    .sheet(isPresented: $state.showCrashLog) {
-                        CrashLogView().environmentObject(state)
-                    }
+                    /* natsuk1-no-crashui */
                     .onChange(of: scenePhase) { _, phase in
                         if phase == .background {
                             CrashLog.shared.markCleanShutdown()

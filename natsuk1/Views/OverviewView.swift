@@ -19,7 +19,7 @@ struct OverviewView: View {
                     }
                     .disabled(state.running)
                 } header: {
-                    Label("Kernel Read Write", systemImage: "cpu")
+                    Label("Exploit", systemImage: "cpu")
                 }
 
                 RuntimeView()
