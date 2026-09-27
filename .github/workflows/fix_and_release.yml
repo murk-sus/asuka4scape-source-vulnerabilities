@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v9-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v9-
+          key: nk-v10-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v10-
 
       - name: Install tools
         run: |
@@ -262,7 +262,7 @@ jobs:
           import SwiftUI
 
           struct CarrierLabView: View {
-              @StateObject private var clState = CarrierLabState.shared
+              @ObservedObject private var clState = CarrierLabState.shared
               @State private var logText: String = ""
               @State private var busy: Bool = false
               @State private var showInstall = false
@@ -394,9 +394,46 @@ jobs:
           SWIFT_EOF
           cut -c 11- /tmp/cl_view.swift > natsuk1/CarrierLab/CarrierLabView.swift
 
-          grep -q 'CarrierLabView' natsuk1/Views/ToolsView.swift || \
-            sed -i '' 's|NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }|NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }\n                    NavigationLink { CarrierLabView() } label: { Text("CarrierLab") }|' \
-            natsuk1/Views/ToolsView.swift
+          cat > /tmp/tools_view.swift <<'SWIFT_EOF'
+          import SwiftUI
+
+          struct ToolsView: View {
+              @EnvironmentObject var state: AppState
+              @EnvironmentObject var airlift: AirliftBridge
+              @EnvironmentObject var offsets: OffsetsStore
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section {
+                              NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }
+                              NavigationLink { CarrierLabView() } label: { Text("CarrierLab") }
+                              NavigationLink { OffsetsView().environmentObject(offsets) } label: { Text("Offsets") }
+                          } header: {
+                              Label("Exploit", systemImage: "memorychip")
+                          }
+
+                          Section {
+                              NavigationLink { DeviceInfoView() } label: { Text("Device Info") }
+                              Button { state.respring() } label: { Text("Respring") }
+                          } header: {
+                              Label("Device", systemImage: "gearshape.2")
+                          }
+
+                          Section {
+                              NavigationLink { PathAccessView() } label: { Text("Path Access") }
+                          } header: {
+                              Label("Diagnostics", systemImage: "chart.xyaxis.line")
+                          }
+                      }
+                      .listStyle(.insetGrouped)
+                      .navigationTitle("Tools")
+                      .navigationBarTitleDisplayMode(.large)
+                  }
+              }
+          }
+          SWIFT_EOF
+          cut -c 11- /tmp/tools_view.swift > natsuk1/Views/ToolsView.swift
 
           if [ -f docs/ai-hints.md ] && ! grep -q '## CARRIERLAB' docs/ai-hints.md; then
             printf '\n## CARRIERLAB\n\n' >> docs/ai-hints.md
@@ -414,7 +451,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "feat: CarrierLab [skip ci]"
+            git commit -m "feat: CarrierLab, rewrite ToolsView deterministically [skip ci]"
             git push
           fi
 
