@@ -49,37 +49,28 @@ jobs:
           rm -f natsuk1/Exploit/NECP/necp.c
           rmdir natsuk1/Exploit/NECP 2>/dev/null || true
 
-          if [ -f natsuk1/Exploit/Core/nk_api.c ]; then
-            perl -i -pe 's/return nk_necp_run\(\);/return nk_run();/' natsuk1/Exploit/Core/nk_api.c
-            perl -i -ne 'print unless /nk_necp_cancel/' natsuk1/Exploit/Core/nk_api.c
-          fi
-          if [ -f natsuk1/Exploit/Core/nk_api.h ]; then
-            perl -i -ne 'print unless /^\s*int nk_necp_run\(void\);\s*$/ || /^\s*void nk_necp_cancel\(void\);\s*$/' natsuk1/Exploit/Core/nk_api.h
-          fi
+          for f in natsuk1/Exploit/Core/nk_api.c natsuk1/Exploit/Core/nk_api.h; do
+            [ -f "$f" ] && sed -i '' '/nk_necp_cancel/d' "$f"
+            [ -f "$f" ] && sed -i '' 's/nk_necp_run()/nk_run()/g' "$f"
+          done
 
           printf '%s\n' '#ifndef NK_OFFSETS_H' '#define NK_OFFSETS_H' '#define NK_KERNEL_BASE                0xFFFFFFF007004000ULL' '#define NK_SYSENT_BASE                0xFFFFFFF007C192A0ULL' '#define NK_SYSENT_COUNT               558' '#endif' > natsuk1/Exploit/Core/nk_offsets.h
 
-          find natsuk1 -name '*.swift' -exec perl -i -ne 'print unless /nk_necp_cancel\(\);/' {} +
-          find natsuk1 -name '*.swift' -exec perl -i -pe 's/nk_necp_run\(\)/nk_run()/g' {} +
+          find natsuk1 -name '*.swift' -exec sed -i '' '/nk_necp_cancel()/d' {} +
+          find natsuk1 -name '*.swift' -exec sed -i '' 's/nk_necp_run()/nk_run()/g' {} +
 
-          if [ -f natsuk1/App/natsuk1.swift ]; then
-            perl -i -ne 'print unless /\@Published var previousCrash:/ || /\@Published var showCrashLog:/ || /CrashLog\.shared\.recoverPreviousSession\(\)/' natsuk1/App/natsuk1.swift
-          fi
+          sed -i '' '/previousCrash/d; /showCrashLog/d; /recoverPreviousSession/d' natsuk1/App/natsuk1.swift 2>/dev/null || true
 
-          if [ -f natsuk1/Helpers/CrashLog.swift ]; then
-            perl -0777 -i -pe 's/\n    func recoverPreviousSession\(\)[^{]*\{.*?\n    \}\n/\n/gs' natsuk1/Helpers/CrashLog.swift
-            perl -0777 -i -pe 's/\n    func clearPreviousCrash\(\)[^{]*\{.*?\n    \}\n/\n/gs' natsuk1/Helpers/CrashLog.swift
-          fi
+          perl -0777 -i -pe 's/\n    func recoverPreviousSession\(\)[^{]*\{.*?\n    \}\n/\n/gs' natsuk1/Helpers/CrashLog.swift 2>/dev/null || true
+          perl -0777 -i -pe 's/\n    func clearPreviousCrash\(\)[^{]*\{.*?\n    \}\n/\n/gs' natsuk1/Helpers/CrashLog.swift 2>/dev/null || true
 
-          if [ -f natsuk1/Helpers/AirliftBridge.swift ]; then
-            perl -0777 -i -pe 's/\n    func respring\(\) \{.*?\n    \}\n/\n/gs' natsuk1/Helpers/AirliftBridge.swift
-            perl -0777 -i -pe 's/\n    func findContainer\(bundleID: String\) async -> String\? \{.*?\n    \}\n/\n/gs' natsuk1/Helpers/AirliftBridge.swift
-          fi
+          perl -0777 -i -pe 's/\n    func respring\(\) \{.*?\n    \}\n/\n/gs' natsuk1/Helpers/AirliftBridge.swift 2>/dev/null || true
+          perl -0777 -i -pe 's/\n    func findContainer\(bundleID: String\) async -> String\? \{.*?\n    \}\n/\n/gs' natsuk1/Helpers/AirliftBridge.swift 2>/dev/null || true
 
           NS=natsuk1/Helpers/NetworkStatus.swift
           if [ -f "$NS" ]; then
             perl -0777 -i -pe 's/Interface\(name: name, ipv4: ipv4,\s*\n\s*netmask:[^\n]*?\)\)\)/Interface(name: name, ipv4: ipv4)/g' "$NS"
-            perl -i -ne 'print unless /^\s+let netmask:\s*String\?$/' "$NS"
+            sed -i '' '/let netmask:/d' "$NS"
             perl -0777 -i -pe 's/\n\s*static func summarize\(deviceIP:[^\n]*\{.*?\n\s*\}\n/\n/gs' "$NS" || true
             perl -0777 -i -pe 's/\n\s*static func tunnelHostCandidates\([^\n]*\{.*?\n\s*\}\n/\n/gs' "$NS" || true
             perl -0777 -i -pe 's/\n\s*static func host\(_ value:[^\n]*\{.*?\n\s*\}\n/\n/gs' "$NS" || true
@@ -88,26 +79,33 @@ jobs:
 
           perl -0777 -i -pe 's/\n\s*static func full\(\)[^\n]*\{.*?\n\s*\}\n/\n/gs' natsuk1/Helpers/DeviceName.swift 2>/dev/null || true
           perl -0777 -i -pe 's/\n\s*nonisolated static var activeVersion:[^\n]*\{.*?\n\s*\}\n/\n/gs' natsuk1/Helpers/OffsetsStore.swift 2>/dev/null || true
-          perl -i -pe 's/row\("Identifier", machineID\(\)\)/row("Identifier", DeviceName.machineID())/' natsuk1/Views/DeviceInfoView.swift 2>/dev/null || true
+          sed -i '' 's/row("Identifier", machineID())/row("Identifier", DeviceName.machineID())/' natsuk1/Views/DeviceInfoView.swift 2>/dev/null || true
 
-          AV=natsuk1/Views/AirliftView.swift
-          if [ -f "$AV" ]; then
-            perl -i -pe 's/if airlift\.pairPIN != nil \{/if let pin = airlift.pairPIN {/' "$AV"
+          sed -i '' 's/if airlift\.pairPIN != nil {/if let pin = airlift.pairPIN {/' natsuk1/Views/AirliftView.swift 2>/dev/null || true
+
+          sed -i '' '/^natsuk1-app\.tar\.gz$/d; /^natsuk1\.ipa$/d; /^reference\/$/d' .gitignore 2>/dev/null || true
+          sed -i '' '/necp\.c.*probes/d' docs/architecture.md 2>/dev/null || true
+
+          if [ -f docs/ai-hints.md ]; then
+            sed -i '' '/^## NECP STATUS$/,/^## IOKIT STATUS$/d' docs/ai-hints.md 2>/dev/null || true
+            sed -i '' '/^## IOKIT STATUS$/,/^## BSD SYSCALL STATUS$/d' docs/ai-hints.md 2>/dev/null || true
+            sed -i '' '/^## BSD SYSCALL STATUS$/,/^## NEW SURFACE/d' docs/ai-hints.md 2>/dev/null || true
+            sed -i '' '/^## NEW SURFACE$/,/^## WHAT A PRIMITIVE LOOKS LIKE$/d' docs/ai-hints.md 2>/dev/null || true
+            sed -i '' '/^## TAINT METHOD$/,/^## HOW TO WRITE GHIDRA/d' docs/ai-hints.md 2>/dev/null || true
+            sed -i '' '/^## HOW TO WRITE GHIDRA/,/^## WORKFLOW$/d' docs/ai-hints.md 2>/dev/null || true
+            sed -i '' '/^## LOGGING FOR EXPLOIT$/,/^## COMMON ERRORS/d' docs/ai-hints.md 2>/dev/null || true
+            sed -i '' '/^## COMMON ERRORS/,/^## GRAPPA/d' docs/ai-hints.md 2>/dev/null || true
+            sed -i '' '/^## GRAPPA/,/^## UI \/ SWIFTUI/d' docs/ai-hints.md 2>/dev/null || true
+            sed -i '' '/^## NEXT STEPS$/,/^## WHAT NOT TO DO$/d' docs/ai-hints.md 2>/dev/null || true
+            sed -i '' '/^## WHAT NOT TO DO$/,$d' docs/ai-hints.md 2>/dev/null || true
           fi
 
-          if [ -f .gitignore ]; then
-            perl -i -ne 'print unless /^natsuk1-app\.tar\.gz$/ || /^natsuk1\.ipa$/ || /^reference\/$/' .gitignore
-          fi
-
-          perl -i -ne 'print unless /necp\.c.*probes/i' docs/architecture.md 2>/dev/null || true
-
-          if [ -f docs/ai-hints.md ] && ! grep -q 'NECP REMOVAL' docs/ai-hints.md; then
-            printf '\n## NECP REMOVAL AND SWIFT OPTIONAL BINDING\n\n' >> docs/ai-hints.md
-            printf -- '- NECP is fully closed on iOS 27, removed from repo entirely.\n' >> docs/ai-hints.md
-            printf -- '- Do not restore nk_necp_run or nk_necp_cancel in nk_api.\n' >> docs/ai-hints.md
-            printf -- '- All Swift call sites of nk_necp_cancel must be deleted, not renamed.\n' >> docs/ai-hints.md
-            printf -- '- Keep if let pin = airlift.pairPIN intact, Text uses pin.\n' >> docs/ai-hints.md
-            printf -- '- Never rewrite it to if airlift.pairPIN != nil.\n' >> docs/ai-hints.md
+          if ! grep -q 'CODE AND WORKFLOW STYLE' docs/ai-hints.md 2>/dev/null; then
+            printf '\n## CODE AND WORKFLOW STYLE\n\n' >> docs/ai-hints.md
+            printf -- '- No comments in code or workflows.\n' >> docs/ai-hints.md
+            printf -- '- Keep Cleanup idempotent with sed and perl.\n' >> docs/ai-hints.md
+            printf -- '- Never rewrite if let pin = airlift.pairPIN.\n' >> docs/ai-hints.md
+            printf -- '- Remove nk_necp_cancel lines with sed, do not rename.\n' >> docs/ai-hints.md
           fi
 
           oxipng -o max --strip safe natsuk1/Resources/Assets.xcassets/AppIcon.appiconset/1024x1024.png 2>/dev/null || true
