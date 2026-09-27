@@ -60,6 +60,9 @@ struct CarrierLabView: View {
                     Text("CarrierLab never creates a pairing file. Open Tools / Airlift, run Start Pairing, then return here.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Text("If Airlift works but CarrierLab says RPPairing-only, you need a merged lockdown+RPPairing file with DeviceCertificate. Generate it via pymobiledevice3 remote pair on Mac.")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
                 }
             }
         }

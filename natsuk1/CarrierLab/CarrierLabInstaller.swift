@@ -45,6 +45,8 @@ final class CarrierLabInstaller: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
             return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"), detail: "missing")
         }
+        let pre = bridge.probe()
+        guard pre.ok else { return pre }
         let s = CarrierLabState.Session(
             status: .placing,
             startedAt: Date(),
