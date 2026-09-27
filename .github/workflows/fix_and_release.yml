@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v44-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v44-
+          key: nk-v45-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v45-
 
       - name: Install tools
         run: |
@@ -147,6 +147,7 @@ jobs:
                   ASSETCATALOG_COMPILER_OPTIMIZATION: space
                   ENABLE_ONLY_ACTIVE_RESOURCES: YES
           PROJECT_EOF
+
       - name: Write PairingGenerator
         run: |
           set -euo pipefail
@@ -201,6 +202,7 @@ jobs:
               }
           }
           PAIRING_EOF
+
       - name: Write CarrierLabBridge
         run: |
           set -euo pipefail
@@ -336,6 +338,7 @@ jobs:
               }
           }
           BRIDGE_EOF
+
       - name: Write CarrierLabInstaller
         run: |
           set -euo pipefail
@@ -454,6 +457,7 @@ jobs:
               }
           }
           INSTALLER_EOF
+
       - name: Commit
         run: |
           set -euo pipefail
@@ -463,7 +467,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: pass-through pairing, inject_folder, no lockdown gate [skip ci]"
+            git commit -m "fix: pass-through pairing, inject_folder [skip ci]"
             git push
           fi
 
@@ -531,7 +535,7 @@ jobs:
           gh release view development >/dev/null 2>&1 && gh release delete development --yes --cleanup-tag || true
           R="${{ github.repository }}"
           IPA="https://github.com/$R/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v44.0 ($((SIZE/1024)) KB)
+          NOTES="natsuk1 v45.0 ($((SIZE/1024)) KB)
 
           **Install**
 
