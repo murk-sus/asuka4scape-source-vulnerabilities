@@ -10,6 +10,10 @@ options:
 configs:
   Debug: debug
   Release: release
+packages:
+  idevice:
+    url: https://github.com/jkcoxson/idevice
+    from: "0.1.54"
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -80,6 +84,7 @@ targets:
       - sdk: WebKit.framework
       - sdk: AVFoundation.framework
       - sdk: CoreLocation.framework
+      - package: idevice
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit
