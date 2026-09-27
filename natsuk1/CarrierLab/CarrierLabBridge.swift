@@ -37,8 +37,8 @@ final class CarrierLabBridge: @unchecked Sendable {
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
         let candidates = [
-            docs.appendingPathComponent("natsuk1_pairing.plist"),
             docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing"),
+            docs.appendingPathComponent("natsuk1_pairing.plist"),
             docs.appendingPathComponent("pairingFile.plist"),
         ]
         for url in candidates {
