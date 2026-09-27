@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct CarrierLabView: View {
     @ObservedObject private var clState = CarrierLabState.shared
@@ -6,6 +7,7 @@ struct CarrierLabView: View {
 
     @State private var slotText: String = ""
     @State private var sourceInfo: String = ""
+    @State private var copied = false
 
     private let ticker = Timer.publish(every: 5.0, on: .main, in: .common).autoconnect()
 
@@ -16,9 +18,10 @@ struct CarrierLabView: View {
             resourcesSection
             targetsSection
             statusSection
-            actionsSection
-            logSection
-        }
+                      actionsSection
+                      logSection
+                      logActionsSection
+                  }
         .listStyle(.insetGrouped)
         .navigationTitle("CarrierLab")
         .navigationBarTitleDisplayMode(.inline)
@@ -179,6 +182,24 @@ struct CarrierLabView: View {
                 }
                 .frame(minHeight: 120, maxHeight: 300)
             } header: { Label("Log", systemImage: "terminal") }
+        }
+    }
+
+    @ViewBuilder
+    private var logActionsSection: some View {
+        if !clState.logText.isEmpty {
+            Section {
+                Button {
+                    UIPasteboard.general.string = clState.logText
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                } label: {
+                    Text(copied ? "Copied" : "Copy All")
+                }
+                Button(role: .destructive) { clState.clearLog() } label: {
+                    Text("Clear")
+                }
+            } header: { Label("Log Actions", systemImage: "document.on.document") }
         }
     }
 

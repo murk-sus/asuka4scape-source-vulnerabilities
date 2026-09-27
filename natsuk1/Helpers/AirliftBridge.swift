@@ -100,29 +100,35 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { ctrl.start() }
 
-            self.statusTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] t in
-                guard let self = self else { t.invalidate(); return }
-                ticks += 1
-                self.setStatus(ctrl.pairingStatus)
-                self.setPIN(ctrl.pairingPIN)
+                    var finishing = false
+                    self.statusTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] t in
+                        guard let self = self else { t.invalidate(); return }
+                        ticks += 1
+                        self.setStatus(ctrl.pairingStatus)
+                        self.setPIN(ctrl.pairingPIN)
 
-                if ctrl.running {
-                    sawRunning = true
-                    idleTicks = 0
-                } else {
-                    idleTicks += 1
-                }
+                        if ctrl.running {
+                            sawRunning = true
+                            idleTicks = 0
+                        } else {
+                            idleTicks += 1
+                        }
 
-                let startedThenStopped = sawRunning && !ctrl.running
-                let neverStarted = !sawRunning && idleTicks > 50
-                let gaveUp = ticks > 1800
+                        if !finishing {
+                            let startedThenStopped = sawRunning && !ctrl.running
+                            let neverStarted = !sawRunning && idleTicks > 50
+                            let gaveUp = ticks > 3600
+                            if startedThenStopped || neverStarted || gaveUp {
+                                finishing = true
+                                self.finishPairing(path: path, mtimeBefore: mtimeBefore, neverStarted: neverStarted)
+                            }
+                        }
 
-                if startedThenStopped || neverStarted || gaveUp {
-                    t.invalidate()
-                    self.statusTimer = nil
-                    self.finishPairing(path: path, mtimeBefore: mtimeBefore, neverStarted: neverStarted)
-                }
-            }
+                        if !self.pairingBusy {
+                            t.invalidate()
+                            self.statusTimer = nil
+                        }
+                    }
         }
     }
 
@@ -138,15 +144,19 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
             let mtime = AirliftBridge.fileMTime(path)
             let fresh = mtime != nil && mtime != mtimeBefore
             if kind.hasRemotePairing && fresh {
-                self.setStatus("Minting lockdown record...")
-                do {
-                    try self.generateMerged(rppPath: path)
-                    self.setState(.ready(pairingPath: path))
-                    self.setStatus("Pairing file ready")
-                } catch {
-                    self.setState(.idle)
-                    self.setStatus("Failed: \(error.localizedDescription)")
-                }
+                        self.setStatus("Minting lockdown record...")
+                        do {
+                            try self.generateMerged(rppPath: path)
+                            self.setState(.ready(pairingPath: path))
+                            self.setStatus("Pairing file ready")
+                        } catch {
+                            self.setState(.idle)
+                            if LockdownPair.cancelled {
+                                self.setStatus("Cancelled")
+                            } else {
+                                self.setStatus("Failed: \(error.localizedDescription)")
+                            }
+                        }
             } else {
                 self.setState(.idle)
                 self.setStatus("No new pairing record was written. \(PairingController.shared.pairingStatus)")
@@ -165,15 +175,16 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
     }
 
     func cancelPairing() {
+        PairingGenerator.cancelMinting()
         PairingController.shared.softCancel()
+        pairingBusy = false
         DispatchQueue.main.async {
             self.statusTimer?.invalidate()
             self.statusTimer = nil
+            self.state = .idle
+            self.pairingStatus = "Cancelled"
+            self.pairPIN = nil
         }
-        pairingBusy = false
-        setState(.idle)
-        setStatus("")
-        setPIN(nil)
     }
 
     func deletePairing() {

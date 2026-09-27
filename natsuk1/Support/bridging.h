@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include "nk_api.h"
 #include "GrappaHelper.h"
-#include "airlift.h"
 #include "idevice_shim.h"
 
 #endif
