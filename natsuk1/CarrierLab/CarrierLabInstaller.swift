@@ -7,8 +7,7 @@ final class CarrierLabInstaller: @unchecked Sendable {
     private let bridge = CarrierLabBridge.shared
 
     struct CheckResult {
-        let airliftOK: Bool
-        let airliftMessage: String
+        let probe: CarrierLabBridge.ProbeResult
         let carrierRootExists: Bool
         let bundleLinksExists: Bool
         let resourcesBundled: Bool
@@ -16,27 +15,32 @@ final class CarrierLabInstaller: @unchecked Sendable {
         let status: CarrierLabState.Status
     }
 
+    func carrierBundleURL() -> URL {
+        Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/CarrierLab.bundle")
+    }
+    func docomoBundleURL() -> URL {
+        Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/Docomo_jp.bundle")
+    }
+
     func check() throws -> CheckResult {
         let fm = FileManager.default
-        let (ok, msg) = bridge.probe()
+        let probe = bridge.probe()
+        let carrierBundle = carrierBundleURL()
         let root = bridge.carrierRootPath()
         let links = bridge.bundleLinksPath()
-        let bundle = Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/CarrierLab.bundle")
         return CheckResult(
-            airliftOK: ok,
-            airliftMessage: msg,
+            probe: probe,
             carrierRootExists: fm.fileExists(atPath: root),
             bundleLinksExists: fm.fileExists(atPath: links),
-            resourcesBundled: fm.fileExists(atPath: bundle.path),
+            resourcesBundled: fm.fileExists(atPath: carrierBundle.path),
             backupPresent: state.hasBackup(),
             status: state.session?.status ?? .clean
         )
     }
 
     func install() throws {
-        let bundleRoot = Bundle.main.bundleURL.appendingPathComponent("CarrierAssets")
-        let carrierBundle = bundleRoot.appendingPathComponent("CarrierLab.bundle")
-        let docomoBundle = bundleRoot.appendingPathComponent("Docomo_jp.bundle")
+        let carrierBundle = carrierBundleURL()
+        let docomoBundle = docomoBundleURL()
         guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
             throw NSError(domain: "carrierlab", code: 3,
                           userInfo: [NSLocalizedDescriptionKey: "CarrierLab.bundle отсутствует в бандле"])
@@ -44,12 +48,6 @@ final class CarrierLabInstaller: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
             throw NSError(domain: "carrierlab", code: 3,
                           userInfo: [NSLocalizedDescriptionKey: "Docomo_jp.bundle отсутствует в бандле"])
-        }
-
-        let (ok, msg) = bridge.probe()
-        guard ok else {
-            throw NSError(domain: "carrierlab", code: 4,
-                          userInfo: [NSLocalizedDescriptionKey: "Airlift недоступен: \(msg)"])
         }
 
         let s = CarrierLabState.Session(
@@ -62,19 +60,33 @@ final class CarrierLabInstaller: @unchecked Sendable {
             aliases: nil)
         state.save(s)
 
-        do {
-            try bridge.writeFile(source: carrierBundle.path,
-                                 target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
-            var done = s
-            done.status = .placed
-            state.save(done)
-        } catch {
+        let r1 = try bridge.writeFile(
+            source: carrierBundle.path,
+            target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
+        guard r1.ok else {
             var bad = s
             bad.status = .failed
-            bad.lastError = error.localizedDescription
+            bad.lastError = r1.message
             state.save(bad)
-            throw error
+            throw NSError(domain: "carrierlab", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey: r1.message])
         }
+
+        let r2 = try bridge.writeFile(
+            source: docomoBundle.path,
+            target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
+        guard r2.ok else {
+            var bad = s
+            bad.status = .failed
+            bad.lastError = r2.message
+            state.save(bad)
+            throw NSError(domain: "carrierlab", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey: r2.message])
+        }
+
+        var done = s
+        done.status = .placed
+        state.save(done)
     }
 
     func reload() throws {
@@ -82,10 +94,14 @@ final class CarrierLabInstaller: @unchecked Sendable {
             throw NSError(domain: "carrierlab", code: 2,
                           userInfo: [NSLocalizedDescriptionKey: "Нечего перечитывать. Сначала Install."])
         }
-        let docomoBundle = Bundle.main.bundleURL
-            .appendingPathComponent("CarrierAssets/Docomo_jp.bundle")
-        try bridge.writeFile(source: docomoBundle.path,
-                             target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
+        let r = try bridge.writeFile(
+            source: docomoBundleURL().path,
+            target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
+        guard r.ok else {
+            throw NSError(domain: "carrierlab", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey: r.message])
+        }
+        _ = s
     }
 
     func finish() throws {
@@ -95,7 +111,5 @@ final class CarrierLabInstaller: @unchecked Sendable {
         state.save(done)
     }
 
-    func reset() throws {
-        state.clear()
-    }
+    func reset() throws { state.clear() }
 }

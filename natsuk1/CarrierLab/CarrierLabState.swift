@@ -41,16 +41,32 @@ final class CarrierLabState: ObservableObject, @unchecked Sendable {
     }
 
     func save(_ s: Session) {
-        session = s
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        enc.dateEncodingStrategy = .iso8601
-        if let d = try? enc.encode(s) { try? d.write(to: stateURL, options: .atomic) }
+        let apply = {
+            self.session = s
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            enc.dateEncodingStrategy = .iso8601
+            if let d = try? enc.encode(s) {
+                try? d.write(to: self.stateURL, options: .atomic)
+            }
+        }
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.async(execute: apply)
+        }
     }
 
     func clear() {
-        session = nil
-        try? FileManager.default.removeItem(at: stateURL)
+        let apply = {
+            self.session = nil
+            try? FileManager.default.removeItem(at: self.stateURL)
+        }
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.async(execute: apply)
+        }
     }
 
     func hasBackup() -> Bool {
