@@ -47,6 +47,7 @@ final class CarrierLabInstaller: @unchecked Sendable {
         }
         let pre = bridge.probe()
         guard pre.ok else { return pre }
+
         let s = CarrierLabState.Session(
             status: .placing,
             startedAt: Date(),
@@ -57,7 +58,10 @@ final class CarrierLabInstaller: @unchecked Sendable {
             aliases: nil)
         state.save(s)
 
-        let r1 = bridge.writeFile(source: carrierBundle.path, target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
+        let r1 = bridge.injectFolder(
+            sourceFolder: carrierBundle.path,
+            targetFolder: bridge.bundleLinksPath(),
+            folderName: "CarrierLab.bundle")
         if !r1.ok {
             var bad = s
             bad.status = .failed
@@ -65,7 +69,11 @@ final class CarrierLabInstaller: @unchecked Sendable {
             state.save(bad)
             return r1
         }
-        let r2 = bridge.writeFile(source: docomoBundle.path, target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
+
+        let r2 = bridge.injectFolder(
+            sourceFolder: docomoBundle.path,
+            targetFolder: bridge.carrierRootPath(),
+            folderName: "Docomo_jp.bundle")
         if !r2.ok {
             var bad = s
             bad.status = .failed
@@ -73,6 +81,7 @@ final class CarrierLabInstaller: @unchecked Sendable {
             state.save(bad)
             return r2
         }
+
         var done = s
         done.status = .placed
         state.save(done)
@@ -84,7 +93,10 @@ final class CarrierLabInstaller: @unchecked Sendable {
             return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."), detail: "no session")
         }
         _ = s
-        return bridge.writeFile(source: docomoBundleURL().path, target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
+        return bridge.injectFolder(
+            sourceFolder: docomoBundleURL().path,
+            targetFolder: bridge.carrierRootPath(),
+            folderName: "Docomo_jp.bundle")
     }
 
     func finish() {

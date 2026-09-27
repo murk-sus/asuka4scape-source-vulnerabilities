@@ -7,9 +7,11 @@ options:
   groupSortPosition: top
   projectFormat: xcode15_0
   generateEmptyDirectories: false
+
 configs:
   Debug: debug
   Release: release
+
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -19,6 +21,7 @@ settings:
     CLANG_MODULES_AUTOLINK: NO
     CLANG_ENABLE_OBJC_ARC: YES
     ENABLE_BITCODE: NO
+    CODE_SIGN_IDENTITY: ""
     CODE_SIGNING_REQUIRED: NO
     CODE_SIGNING_ALLOWED: NO
     ENABLE_USER_SCRIPT_SANDBOXING: NO
@@ -55,6 +58,7 @@ settings:
       STRIPFLAGS: "-S -x"
       COPY_PHASE_STRIP: YES
       LLVM_LTO: NO
+
 targets:
   natsuk1:
     type: application
@@ -90,7 +94,7 @@ targets:
         SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h
         OTHER_SWIFT_FLAGS: "$(inherited) -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks"
         OTHER_CFLAGS: -fno-autolink -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
-        OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a -ObjC
+        OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a -lc++ -ObjC
         HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/Exploit/Core $(SRCROOT)/natsuk1/Exploit/Airlift $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/Headers"
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: NO
