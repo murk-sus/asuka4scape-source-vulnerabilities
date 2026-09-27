@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v40-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v40-
+          key: nk-v41-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v41-
 
       - name: Install tools
         run: |
@@ -161,7 +161,7 @@ jobs:
                   OTHER_SWIFT_FLAGS: "$(inherited) -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks"
                   OTHER_CFLAGS: -fno-autolink -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
                   OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a -ObjC
-                  HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/Exploit/Core $(SRCROOT)/natsuk1/Exploit/Airlift $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/ @Headers"
+                  HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/Exploit/Core $(SRCROOT)/natsuk1/Exploit/Airlift $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/Headers"
                   TARGETED_DEVICE_FAMILY: "1"
                   GENERATE_INFOPLIST_FILE: NO
                   ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -176,8 +176,9 @@ jobs:
           cat > natsuk1/Helpers/PairingGenerator.swift <<'SWIFT_EOF'
           import Foundation
 
-          final class PairingGenerator:unchecked Sendable {
+          final class PairingGenerator {
               static let shared = PairingGenerator()
+              private init() {}
 
               enum GeneratorError: LocalizedError {
                   case lockdownFailed(String)
@@ -193,10 +194,7 @@ jobs:
                   }
               }
 
-              func generateMergedPairing(
-                  rppPath: String,
-                  outputPath: String
-              ) throws {
+              func generateMergedPairing(rppPath: String, outputPath: String) throws {
                   guard let rppData = try? Data(contentsOf: URL(fileURLWithPath: rppPath)) else {
                       throw GeneratorError.lockdownFailed("cannot read RPP file")
                   }
@@ -250,365 +248,6 @@ jobs:
           }
           SWIFT_EOF
 
-      - name: Write AirliftBridge
-        run: |
-          set -euo pipefail
-          cat > natsuk1/Helpers/AirliftBridge.swift <<'SWIFT_EOF'
-          import Foundation
-          import Combine
-
-          final class AirliftBridge: ObservableObject, @unchecked Sendable {
-              static let shared = AirliftBridge()
-              enum State: Equatable { case idle, pairing, ready(pairingPath: String), running, done(ok: Bool, message: String) }
-
-              @Published private(set) var state: State = .idle
-              @Published private(set) var pairPIN: String? = nil
-              @Published private(set) var pairingStatus: String = ""
-              @Published private(set) var exploitLog: [String] = []
-              @Published var target: String = "/var/mobile/Library/SpringBoard"
-              private var loggedLines: [String] = []
-
-              private init() {
-                  al_log_init({ _, msg in
-                      guard let msg = msg else { return }
-                      let line = String(cString: msg)
-                      DispatchQueue.main.async { AirliftBridge.shared.appendLog(line) }
-                  }, nil)
-              }
-
-              private func appendLog(_ s: String) {
-                  DispatchQueue.main.async {
-                      self.loggedLines.append(s)
-                      if self.loggedLines.count > 800 { self.loggedLines.removeFirst(self.loggedLines.count - 600) }
-                      self.exploitLog = self.loggedLines
-                  }
-              }
-
-              func clearLog() {
-                  DispatchQueue.main.async {
-                      self.loggedLines.removeAll()
-                      self.exploitLog = []
-                  }
-              }
-
-              func pairingFilePath() -> String { PairingController.pairingFilePath() }
-
-              func hasPairing() -> Bool {
-                  let p = pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: p) else { return false }
-                  let size = (try? FileManager.default.attributesOfItem(atPath: p)[.size] as? Int) ?? 0
-                  return size > 0
-              }
-
-              private func setState(_ s: State) { DispatchQueue.main.async { self.state = s } }
-              private func setStatus(_ s: String) { DispatchQueue.main.async { self.pairingStatus = s } }
-              private func setPIN(_ p: String?) { DispatchQueue.main.async { self.pairPIN = p } }
-
-              func runPairing() {
-                  guard !hasPairing() else {
-                      setState(.ready(pairingPath: pairingFilePath()))
-                      return
-                  }
-                  setState(.pairing)
-                  setStatus("Starting host...")
-                  setPIN(nil)
-                  let ctrl = PairingController.shared
-                  Task {
-                      do {
-                          let path = try await ctrl.startAndWait()
-                          self.setState(.ready(pairingPath: path))
-                          self.setStatus("Paired")
-                          self.setPIN(nil)
-                          try? self.generateMerged(rppPath: path)
-                      } catch is CancellationError {
-                          self.setState(.idle)
-                          self.setStatus("Cancelled")
-                      } catch {
-                          self.setState(.idle)
-                          self.setStatus("Failed: \(error.localizedDescription)")
-                      }
-                  }
-                  Task {
-                      var iterations = 0
-                      while iterations < 900 {
-                          let status = ctrl.pairingStatus
-                          let pin = ctrl.pairingPIN
-                          let running = ctrl.running
-                          self.setStatus(status)
-                          self.setPIN(pin)
-                          if !running { break }
-                          try? await Task.sleep(nanoseconds: 200_000_000)
-                          iterations += 1
-                      }
-                  }
-              }
-
-              private func generateMerged(rppPath: String) throws {
-                  let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                  let out = docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing")
-                  try PairingGenerator.shared.generateMergedPairing(
-                      rppPath: rppPath,
-                      outputPath: out.path
-                  )
-              }
-
-              func cancelPairing() {
-                  PairingController.shared.softCancel()
-                  setState(.idle)
-                  setStatus("")
-                  setPIN(nil)
-              }
-
-              func deletePairing() {
-                  let fm = FileManager.default
-                  let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                  let candidates = [
-                      docs.appendingPathComponent("natsuk1_pairing.plist"),
-                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing"),
-                      docs.appendingPathComponent("pairingFile.plist"),
-                  ]
-                  for url in candidates {
-                      if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
-                  }
-                  if let custom = PairingController.customPairingFilePath, fm.fileExists(atPath: custom) {
-                      try? fm.removeItem(atPath: custom)
-                  }
-                  PairingController.customPairingFilePath = nil
-                  if let files = try? fm.contentsOfDirectory(atPath: docs.path) {
-                      for f in files {
-                          guard f.hasSuffix(".plist") || f.hasSuffix(".mobilepairing") || f.hasSuffix(".mobilepair") else { continue }
-                          try? fm.removeItem(at: docs.appendingPathComponent(f))
-                      }
-                  }
-                  UserDefaults.standard.removeObject(forKey: "natsuk1PairingHostAltIRK")
-                  UserDefaults.standard.removeObject(forKey: "natsuk1PairingPath")
-                  setState(.idle)
-                  setStatus("")
-                  setPIN(nil)
-              }
-
-              func runExploit() {
-                  let pairingPath = pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: pairingPath) else {
-                      setState(.done(ok: false, message: "No pairing file"))
-                      return
-                  }
-                  setState(.running)
-                  DispatchQueue.main.async {
-                      self.loggedLines.removeAll()
-                      self.exploitLog = []
-                  }
-                  let t = target
-                  let bridge = self
-                  bridge.appendLog("[exploit] path=\(pairingPath) target=\(t)")
-                  Task.detached {
-                      var outJson: UnsafeMutablePointer<CChar>? = nil
-                      var outError: UnsafeMutablePointer<CChar>? = nil
-                      let rc: Int32 = pairingPath.withCString { pc in
-                          t.withCString { tc in
-                              al_exploit_run(pc, tc, nil, nil, &outJson, &outError)
-                          }
-                      }
-                      let jsonStr = outJson.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-                      let errStr = outError.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-                      if rc == 0 {
-                          let msg = jsonStr ?? "OK"
-                          bridge.appendLog("[exploit] ok: \(msg)")
-                          bridge.setState(.done(ok: true, message: msg))
-                      } else {
-                          let msg = errStr ?? "rc=\(rc)"
-                          bridge.appendLog("[exploit] fail: \(msg)")
-                          bridge.setState(.done(ok: false, message: msg))
-                      }
-                  }
-              }
-
-              func cancelExploit() {
-                  appendLog("[exploit] cancel requested")
-                  setState(.done(ok: false, message: "cancelled"))
-              }
-
-              func respring() {
-                  let pairingPath = pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: pairingPath) else {
-                      appendLog("[respring] no pairing file")
-                      return
-                  }
-                  let bridge = self
-                  Task.detached {
-                      var outError: UnsafeMutablePointer<CChar>? = nil
-                      let rc: Int32 = pairingPath.withCString { pc in
-                          al_device_respring(pc, nil, nil, &outError)
-                      }
-                      let errStr = outError.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-                      if rc == 0 {
-                          bridge.appendLog("[respring] ok")
-                      } else {
-                          bridge.appendLog("[respring] rc=\(rc) \(errStr ?? "")")
-                      }
-                  }
-              }
-
-              func findContainer(bundleID: String) async -> String? {
-                  let pairingPath = pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: pairingPath) else { return nil }
-                  return await withCheckedContinuation { cont in
-                      DispatchQueue.global(qos: .userInitiated).async {
-                          var outContainer: UnsafeMutablePointer<CChar>? = nil
-                          var outError: UnsafeMutablePointer<CChar>? = nil
-                          let rc: Int32 = pairingPath.withCString { pc in
-                              bundleID.withCString { bc in
-                                  al_find_app_container(pc, bc, nil, nil, &outContainer, &outError)
-                              }
-                          }
-                          let containerStr = outContainer.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-                          if let p = outError { al_string_free(p) }
-                          if rc == 0, let c = containerStr { cont.resume(returning: c) }
-                          else { cont.resume(returning: nil) }
-                      }
-                  }
-              }
-          }
-          SWIFT_EOF
-
-      - name: Write CarrierLabBridge
-        run: |
-          set -euo pipefail
-          mkdir -p natsuk1/CarrierLab
-          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'SWIFT_EOF'
-          import Foundation
-
-          final class CarrierLabBridge: @unchecked Sendable {
-              static let shared = CarrierLabBridge()
-
-              enum ProbeState {
-                  case ok
-                  case noVPN
-                  case noPairing
-                  case pairingRPPOnly
-                  case pairingInvalid
-                  case ffiFailed(String)
-              }
-
-              struct ProbeResult {
-                  let state: ProbeState
-                  let detail: String
-                  var ok: Bool { if case .ok = state { return true }; return false }
-                  var message: String {
-                      switch state {
-                      case .ok: return "ready"
-                      case .noVPN: return "No loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
-                      case .noPairing: return "No pairing file. Open Tools / Airlift and run Start Pairing."
-                      case .pairingRPPOnly: return "Pairing file is RPPairing-only. Re-run Start Pairing in Airlift to regenerate merged file."
-                      case .pairingInvalid: return detail
-                      case .ffiFailed(let s): return s
-                      }
-                  }
-              }
-
-              private let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
-              private let bundleLinks = "/var/mobile/Library/Carrier Bundles"
-              private let expectedLockdownKeys = ["DeviceCertificate", "HostCertificate", "RootCertificate", "HostID", "SystemBUID"]
-
-              func carrierRootPath() -> String { carrierRoot }
-              func bundleLinksPath() -> String { bundleLinks }
-
-              private func findPairingFile() -> String? {
-                  let fm = FileManager.default
-                  let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                  let candidates = [
-                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing"),
-                      docs.appendingPathComponent("natsuk1_pairing.plist"),
-                      docs.appendingPathComponent("pairingFile.plist"),
-                  ]
-                  for url in candidates {
-                      if fm.fileExists(atPath: url.path) {
-                          let size = (try? fm.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-                          if size > 0 { return url.path }
-                      }
-                  }
-                  let controller = PairingController.pairingFilePath()
-                  if fm.fileExists(atPath: controller) {
-                      let size = (try? fm.attributesOfItem(atPath: controller)[.size] as? Int) ?? 0
-                      if size > 0 { return controller }
-                  }
-                  if let e = try? fm.contentsOfDirectory(atPath: docs.path) {
-                      for f in e where f.hasSuffix(".plist") || f.hasSuffix(".mobilepairing") || f.hasSuffix(".mobilepair") {
-                          let p = docs.appendingPathComponent(f).path
-                          let size = (try? fm.attributesOfItem(atPath: p)[.size] as? Int) ?? 0
-                          if size > 100 { return p }
-                      }
-                  }
-                  let nested = docs.appendingPathComponent("Data/Application")
-                  if let e = try? fm.contentsOfDirectory(atPath: nested.path) {
-                      for sub in e {
-                          let inner = nested.appendingPathComponent(sub).appendingPathComponent("Documents/natsuk1_pairing.plist")
-                          if fm.fileExists(atPath: inner.path) {
-                              let size = (try? fm.attributesOfItem(atPath: inner.path)[.size] as? Int) ?? 0
-                              if size > 0 { return inner.path }
-                          }
-                      }
-                  }
-                  return nil
-              }
-
-              private func validatePairingFile(_ path: String) -> (Bool, String, Bool) {
-                  let fm = FileManager.default
-                  guard fm.fileExists(atPath: path) else { return (false, "missing", false) }
-                  let attrs = try? fm.attributesOfItem(atPath: path)
-                  let size = (attrs?[.size] as? Int) ?? 0
-                  if size < 50 { return (false, "Pairing file too small (\(size) bytes).", false) }
-                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
-                      return (false, "Pairing file unreadable.", false)
-                  }
-                  guard let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
-                        let dict = obj as? [String: Any] else {
-                      return (false, "Pairing file not a plist (\(size) bytes).", false)
-                  }
-                  if dict.isEmpty { return (false, "Pairing plist empty.", false) }
-                  var lockdownCount = 0
-                  for k in expectedLockdownKeys where dict[k] != nil { lockdownCount += 1 }
-                  let hasLockdown = lockdownCount >= 3
-                  return (true, "Pairing ok (\(size) bytes, \(dict.count) keys, lockdown=\(lockdownCount))", hasLockdown)
-              }
-
-              func probe() -> ProbeResult {
-                  if !NetworkStatus.loopbackVPNUp() { return ProbeResult(state: .noVPN, detail: "no loopback VPN") }
-                  guard let pairing = findPairingFile() else {
-                      return ProbeResult(state: .noPairing, detail: "missing")
-                  }
-                  let (ok, msg, hasLockdown) = validatePairingFile(pairing)
-                  if !ok { return ProbeResult(state: .pairingInvalid, detail: msg) }
-                  if !hasLockdown { return ProbeResult(state: .pairingRPPOnly, detail: msg) }
-                  return ProbeResult(state: .ok, detail: msg)
-              }
-
-              func writeFile(source: String, target: String) -> ProbeResult {
-                  let pre = probe()
-                  guard pre.ok else { return pre }
-                  let pairingPath = findPairingFile() ?? ""
-                  guard !pairingPath.isEmpty else {
-                      return ProbeResult(state: .noPairing, detail: "no pairing path")
-                  }
-                  var outJson: UnsafeMutablePointer<CChar>? = nil
-                  var outErr: UnsafeMutablePointer<CChar>? = nil
-                  var rc: Int32 = -1
-                  pairingPath.withCString { pc in
-                      source.withCString { sc in
-                          target.withCString { tc in
-                              rc = al_exploit_run(pc, tc, nil, nil, &outJson, &outErr)
-                          }
-                      }
-                  }
-                  let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
-                  if let p = outJson { al_string_free(p) }
-                  if let p = outErr { al_string_free(p) }
-                  if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
-                  return ProbeResult(state: .ok, detail: "ok")
-              }
-          }
-          SWIFT_EOF
-
       - name: Commit
         run: |
           set -euo pipefail
@@ -618,7 +257,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: on-device merged pairing via idevice-ffi, restore PIN [skip ci]"
+            git commit -m "fix: PairingGenerator without Sendable annotation [skip ci]"
             git push
           fi
 
