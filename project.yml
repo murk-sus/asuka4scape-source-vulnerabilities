@@ -66,6 +66,7 @@ targets:
     platform: iOS
     sources:
       - path: natsuk1/App
+      - path: natsuk1/CarrierLab
       - path: natsuk1/Exploit
       - path: natsuk1/Helpers
       - path: natsuk1/Views
