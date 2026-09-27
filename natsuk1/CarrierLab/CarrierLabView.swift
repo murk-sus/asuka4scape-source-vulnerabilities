@@ -1,7 +1,7 @@
 ftUI
 
 rierLabView: View {
-Object private var clState = CarrierLabState.shared
+vedObject private var clState = CarrierLabState.shared
  private var logText: String = ""
  private var busy: Bool = false
  private var showInstall = false
