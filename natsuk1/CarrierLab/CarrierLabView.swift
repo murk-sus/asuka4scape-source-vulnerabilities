@@ -47,7 +47,7 @@ struct CarrierLabView: View {
                     Label("Pairing is done in Airlift only", systemImage: "info.circle")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Text("CarrierLab never creates a pairing file. Open Tools → Airlift, run Start Pairing, then return here.")
+                    Text("CarrierLab never creates a pairing file. Open Tools -> Airlift, run Start Pairing, then return here.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -94,10 +94,8 @@ struct CarrierLabView: View {
     private var actionsSection: some View {
         Section {
             Button { runCheck() } label: { Text("Check") }.disabled(clState.busy)
-            Button { runInstall() } label: { Text("Install") }
-                .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
-            Button { runReload() } label: { Text("Reload") }
-                .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+            Button { runInstall() } label: { Text("Install") }.disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+            Button { runReload() } label: { Text("Reload") }.disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
             Button { runFinish() } label: { Text("Finish") }.disabled(clState.busy)
             Button(role: .destructive) { runReset() } label: { Text("Reset") }.disabled(clState.busy)
         } header: { Label("Actions", systemImage: "wrench") }

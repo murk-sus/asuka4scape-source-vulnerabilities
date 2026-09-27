@@ -46,7 +46,7 @@ final class CarrierLabState: ObservableObject, @unchecked Sendable {
     }
 
     func save(_ s: Session) {
-        let write = {
+        DispatchQueue.main.async {
             self.session = s
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -55,17 +55,13 @@ final class CarrierLabState: ObservableObject, @unchecked Sendable {
                 try? d.write(to: self.stateURL, options: .atomic)
             }
         }
-        if Thread.isMainThread { write() }
-        else { DispatchQueue.main.async(execute: write) }
     }
 
     func clear() {
-        let write = {
+        DispatchQueue.main.async {
             self.session = nil
             try? FileManager.default.removeItem(at: self.stateURL)
         }
-        if Thread.isMainThread { write() }
-        else { DispatchQueue.main.async(execute: write) }
     }
 
     func hasBackup() -> Bool {
@@ -74,41 +70,29 @@ final class CarrierLabState: ObservableObject, @unchecked Sendable {
     }
 
     func setAirlift(ok: Bool, message: String) {
-        let write = {
+        DispatchQueue.main.async {
             self.airliftOK = ok
             self.airliftMessage = message
         }
-        if Thread.isMainThread { write() }
-        else { DispatchQueue.main.async(execute: write) }
     }
 
     func setResources(_ ok: Bool) {
-        let write = { self.resourcesOK = ok }
-        if Thread.isMainThread { write() }
-        else { DispatchQueue.main.async(execute: write) }
+        DispatchQueue.main.async { self.resourcesOK = ok }
     }
 
     func setBusy(_ v: Bool) {
-        let write = { self.busy = v }
-        if Thread.isMainThread { write() }
-        else { DispatchQueue.main.async(execute: write) }
+        DispatchQueue.main.async { self.busy = v }
     }
 
     func appendLog(_ s: String) {
-        let write = {
+        DispatchQueue.main.async {
             self.logText += s + "\n"
-            if self.logText.count > 20000 {
-                self.logText = String(self.logText.suffix(15000))
-            }
+            if self.logText.count > 20000 { self.logText = String(self.logText.suffix(15000)) }
         }
-        if Thread.isMainThread { write() }
-        else { DispatchQueue.main.async(execute: write) }
     }
 
     func clearLog() {
-        let write = { self.logText = "" }
-        if Thread.isMainThread { write() }
-        else { DispatchQueue.main.async(execute: write) }
+        DispatchQueue.main.async { self.logText = "" }
     }
 
     func backupURL() -> URL { backupDir }

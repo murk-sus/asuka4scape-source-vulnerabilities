@@ -40,12 +40,10 @@ final class CarrierLabInstaller: @unchecked Sendable {
         let carrierBundle = carrierBundleURL()
         let docomoBundle = docomoBundleURL()
         guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
-            return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle missing"),
-                                                detail: "missing")
+            return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle missing"), detail: "missing")
         }
         guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
-            return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"),
-                                                detail: "missing")
+            return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"), detail: "missing")
         }
         let s = CarrierLabState.Session(
             status: .placing,
@@ -57,8 +55,7 @@ final class CarrierLabInstaller: @unchecked Sendable {
             aliases: nil)
         state.save(s)
 
-        let r1 = bridge.writeFile(source: carrierBundle.path,
-                                  target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
+        let r1 = bridge.writeFile(source: carrierBundle.path, target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
         if !r1.ok {
             var bad = s
             bad.status = .failed
@@ -66,8 +63,7 @@ final class CarrierLabInstaller: @unchecked Sendable {
             state.save(bad)
             return r1
         }
-        let r2 = bridge.writeFile(source: docomoBundle.path,
-                                  target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
+        let r2 = bridge.writeFile(source: docomoBundle.path, target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
         if !r2.ok {
             var bad = s
             bad.status = .failed
@@ -83,12 +79,10 @@ final class CarrierLabInstaller: @unchecked Sendable {
 
     func reload() -> CarrierLabBridge.ProbeResult {
         guard let s = state.session, s.status == .placed || s.status == .finished else {
-            return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."),
-                                                detail: "no session")
+            return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."), detail: "no session")
         }
         _ = s
-        return bridge.writeFile(source: docomoBundleURL().path,
-                                target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
+        return bridge.writeFile(source: docomoBundleURL().path, target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
     }
 
     func finish() {

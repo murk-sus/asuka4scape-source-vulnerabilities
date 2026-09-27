@@ -14,17 +14,12 @@ final class CarrierLabBridge: @unchecked Sendable {
     struct ProbeResult {
         let state: ProbeState
         let detail: String
-
-        var ok: Bool {
-            if case .ok = state { return true }
-            return false
-        }
-
+        var ok: Bool { if case .ok = state { return true }; return false }
         var message: String {
             switch state {
             case .ok: return "ready"
             case .noVPN: return "no loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
-            case .noPairing: return "no pairing file. Open Tools → Airlift, run Start Pairing."
+            case .noPairing: return "no pairing file. Open Tools -> Airlift, run Start Pairing."
             case .pairingInvalid: return detail
             case .ffiFailed(let s): return s
             }
@@ -37,43 +32,29 @@ final class CarrierLabBridge: @unchecked Sendable {
     func carrierRootPath() -> String { carrierRoot }
     func bundleLinksPath() -> String { bundleLinks }
 
-    // Read-only. Never writes or regenerates the pairing file.
     private func validatePairingFile(_ path: String) -> (Bool, String) {
         let fm = FileManager.default
-        guard fm.fileExists(atPath: path) else {
-            return (false, "missing")
-        }
+        guard fm.fileExists(atPath: path) else { return (false, "missing") }
         let attrs = try? fm.attributesOfItem(atPath: path)
         let size = (attrs?[.size] as? Int) ?? 0
-        if size < 200 {
-            return (false, "pairing file damaged (\(size) bytes). Re-pair in Tools → Airlift.")
-        }
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
-            return (false, "pairing file unreadable")
-        }
-        guard let plist = try? PropertyListSerialization.propertyList(
-            from: data, options: [], format: nil) as? [String: Any] else {
-            return (false, "pairing file corrupt: not a plist (\(size) bytes). Re-pair in Tools → Airlift.")
+        if size < 200 { return (false, "pairing file damaged (\(size) bytes). Re-pair in Tools -> Airlift.") }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return (false, "pairing file unreadable") }
+        guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
+            return (false, "pairing file corrupt: not a plist (\(size) bytes). Re-pair in Tools -> Airlift.")
         }
         let keys = ["UDID", "DeviceCertificate", "HostCertificate", "RootCertificate", "HostID"]
         var hits = 0
         for k in keys where plist[k] != nil { hits += 1 }
-        if hits < 2 {
-            return (false, "pairing file invalid: only \(hits) of 5 keys present. Re-pair in Tools → Airlift.")
-        }
+        if hits < 2 { return (false, "pairing file invalid: only \(hits) of 5 keys present. Re-pair in Tools -> Airlift.") }
         return (true, "pairing ok (\(size) bytes, \(hits) keys)")
     }
 
     func probe() -> ProbeResult {
-        if !NetworkStatus.loopbackVPNUp() {
-            return ProbeResult(state: .noVPN, detail: "no loopback VPN")
-        }
+        if !NetworkStatus.loopbackVPNUp() { return ProbeResult(state: .noVPN, detail: "no loopback VPN") }
         let pairing = PairingController.pairingFilePath()
         let (pairOk, pairMsg) = validatePairingFile(pairing)
         if !pairOk {
-            if pairMsg == "missing" {
-                return ProbeResult(state: .noPairing, detail: pairMsg)
-            }
+            if pairMsg == "missing" { return ProbeResult(state: .noPairing, detail: pairMsg) }
             return ProbeResult(state: .pairingInvalid, detail: pairMsg)
         }
         let tmp = NSTemporaryDirectory() + "/carrierlab-probe-\(UUID().uuidString).txt"
@@ -90,10 +71,7 @@ final class CarrierLabBridge: @unchecked Sendable {
         if let p = outJson { al_string_free(p) }
         if let p = outErr { al_string_free(p) }
         try? FileManager.default.removeItem(atPath: tmp)
-        if rc != 0 {
-            return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg),
-                               detail: errMsg)
-        }
+        if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
         return ProbeResult(state: .ok, detail: "ready")
     }
 
@@ -111,10 +89,7 @@ final class CarrierLabBridge: @unchecked Sendable {
         let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
         if let p = outJson { al_string_free(p) }
         if let p = outErr { al_string_free(p) }
-        if rc != 0 {
-            return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg),
-                               detail: errMsg)
-        }
+        if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
         return ProbeResult(state: .ok, detail: "ok")
     }
 }
