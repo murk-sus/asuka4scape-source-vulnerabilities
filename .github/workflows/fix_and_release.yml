@@ -51,6 +51,7 @@ jobs:
 
           if [ -f natsuk1/Exploit/Core/nk_api.c ]; then
             perl -i -pe 's/return nk_necp_run\(\);/return nk_run();/' natsuk1/Exploit/Core/nk_api.c
+            perl -i -ne 'print unless /nk_necp_cancel/' natsuk1/Exploit/Core/nk_api.c
           fi
           if [ -f natsuk1/Exploit/Core/nk_api.h ]; then
             perl -i -ne 'print unless /^\s*int nk_necp_run\(void\);\s*$/ || /^\s*void nk_necp_cancel\(void\);\s*$/' natsuk1/Exploit/Core/nk_api.h
@@ -58,9 +59,10 @@ jobs:
 
           printf '%s\n' '#ifndef NK_OFFSETS_H' '#define NK_OFFSETS_H' '#define NK_KERNEL_BASE                0xFFFFFFF007004000ULL' '#define NK_SYSENT_BASE                0xFFFFFFF007C192A0ULL' '#define NK_SYSENT_COUNT               558' '#endif' > natsuk1/Exploit/Core/nk_offsets.h
 
+          find natsuk1 -name '*.swift' -exec perl -i -ne 'print unless /nk_necp_cancel\(\);/' {} +
+          find natsuk1 -name '*.swift' -exec perl -i -pe 's/nk_necp_run\(\)/nk_run()/g' {} +
+
           if [ -f natsuk1/App/natsuk1.swift ]; then
-            perl -i -pe 's/nk_necp_run\(\)/nk_run()/g' natsuk1/App/natsuk1.swift
-            perl -i -ne 'print unless /^\s*nk_necp_cancel\(\);\s*$/' natsuk1/App/natsuk1.swift
             perl -i -ne 'print unless /\@Published var previousCrash:/ || /\@Published var showCrashLog:/ || /CrashLog\.shared\.recoverPreviousSession\(\)/' natsuk1/App/natsuk1.swift
           fi
 
@@ -99,21 +101,13 @@ jobs:
 
           perl -i -ne 'print unless /necp\.c.*probes/i' docs/architecture.md 2>/dev/null || true
 
-          if [ -f docs/ai-hints.md ] && ! grep -q 'FIX AND RELEASE WORKFLOW' docs/ai-hints.md; then
-            printf '\n## FIX AND RELEASE WORKFLOW\n\n' >> docs/ai-hints.md
-            printf 'Single workflow `.github/workflows/fix_and_release.yml`.\n\n' >> docs/ai-hints.md
-            printf 'Rules learned the hard way:\n\n' >> docs/ai-hints.md
-            printf -- '- Never put Python or heredoc over 30 lines inside a run block.\n' >> docs/ai-hints.md
-            printf -- '- Use short perl one-liners for multi-line edits.\n' >> docs/ai-hints.md
-            printf -- '- Every mutation must be idempotent.\n' >> docs/ai-hints.md
-            printf -- '- Commit only if git diff is non-empty, and use skip ci.\n' >> docs/ai-hints.md
-            printf -- '- Release notes carry exactly one https link (direct IPA).\n\n' >> docs/ai-hints.md
-            printf 'Fixes applied automatically by the workflow:\n\n' >> docs/ai-hints.md
-            printf -- '- NetworkStatus: drop netmask field and argument.\n' >> docs/ai-hints.md
-            printf -- '- AirliftView: if let pin = airlift.pairPIN must stay intact.\n' >> docs/ai-hints.md
-            printf -- '- DeviceInfoView: use DeviceName.machineID().\n' >> docs/ai-hints.md
-            printf -- '- DeviceName.full(), OffsetsStore.activeVersion removed as dead.\n' >> docs/ai-hints.md
-            printf -- '- NECP removed entirely (closed).\n' >> docs/ai-hints.md
+          if [ -f docs/ai-hints.md ] && ! grep -q 'NECP REMOVAL' docs/ai-hints.md; then
+            printf '\n## NECP REMOVAL AND SWIFT OPTIONAL BINDING\n\n' >> docs/ai-hints.md
+            printf -- '- NECP is fully closed on iOS 27, removed from repo entirely.\n' >> docs/ai-hints.md
+            printf -- '- Do not restore nk_necp_run or nk_necp_cancel in nk_api.\n' >> docs/ai-hints.md
+            printf -- '- All Swift call sites of nk_necp_cancel must be deleted, not renamed.\n' >> docs/ai-hints.md
+            printf -- '- Keep if let pin = airlift.pairPIN intact, Text uses pin.\n' >> docs/ai-hints.md
+            printf -- '- Never rewrite it to if airlift.pairPIN != nil.\n' >> docs/ai-hints.md
           fi
 
           oxipng -o max --strip safe natsuk1/Resources/Assets.xcassets/AppIcon.appiconset/1024x1024.png 2>/dev/null || true
@@ -124,7 +118,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "chore: drop NECP, remove dead code [skip ci]"
+            git commit -m "chore: drop NECP, fix optional binding [skip ci]"
             git push
           fi
 
