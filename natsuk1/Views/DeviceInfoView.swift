@@ -38,6 +38,7 @@ struct DeviceInfoView: View {
             Text(value)
                 .font(.system(.body, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .shadow(color: Color.secondary.opacity(0.25), radius: 1)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }

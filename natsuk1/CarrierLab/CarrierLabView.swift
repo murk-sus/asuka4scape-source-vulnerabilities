@@ -34,6 +34,7 @@ struct CarrierLabView: View {
                     Text(clState.airliftOK ? "Connected" : "Not ready")
                         .font(.subheadline)
                         .foregroundStyle(clState.airliftOK ? .green : .orange)
+                        .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.35), radius: 2)
                     if !clState.airliftOK {
                         Text(clState.airliftMessage)
                             .font(.footnote)
@@ -70,6 +71,7 @@ struct CarrierLabView: View {
                 Spacer()
                 Text(clState.resourcesOK ? "Bundled" : "Missing")
                     .foregroundStyle(clState.resourcesOK ? .green : .red)
+                    .shadow(color: (clState.resourcesOK ? Color.green : Color.red).opacity(0.35), radius: 2)
             }
         } header: { Label("Resources", systemImage: "shippingbox") }
     }
@@ -82,6 +84,7 @@ struct CarrierLabView: View {
                 Text(statusText)
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(statusColor)
+                    .shadow(color: statusColor.opacity(0.35), radius: 2)
             }
             if let s = clState.session {
                 HStack {

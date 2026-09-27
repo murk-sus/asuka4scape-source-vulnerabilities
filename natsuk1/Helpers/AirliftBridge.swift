@@ -151,7 +151,6 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
     }
 
     func cancelExploit() {
-        nk_necp_cancel()
         appendLog("[exploit] cancel requested")
         setState(.done(ok: false, message: "cancelled"))
     }

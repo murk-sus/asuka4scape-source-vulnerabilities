@@ -47,14 +47,16 @@ struct PathAccessView: View {
                     Spacer()
                     Text("\(results.filter { $0.readable }.count)")
                         .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.green)
+                        .shadow(color: Color.green.opacity(0.35), radius: 2)
                 }
                 HStack {
                     Text("Writable")
                     Spacer()
                     Text("\(results.filter { $0.writable }.count)")
                         .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.orange)
+                        .shadow(color: Color.orange.opacity(0.35), radius: 2)
                 }
                 Button { scan() } label: {
                     HStack {
@@ -95,6 +97,7 @@ struct PathAccessView: View {
             .padding(.vertical, 1)
             .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
             .foregroundStyle(color)
+            .shadow(color: color.opacity(0.25), radius: 1)
     }
 
     private func scan() {

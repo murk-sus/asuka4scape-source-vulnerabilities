@@ -43,6 +43,7 @@ struct AirliftView: View {
                     Text(loopbackVPNUp ? "Connected" : "Not connected")
                         .font(.subheadline)
                         .foregroundStyle(loopbackVPNUp ? .green : .orange)
+                        .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.35), radius: 2)
                 }
                 Spacer()
             }
@@ -58,6 +59,7 @@ struct AirliftView: View {
                 Text(tunnelIP ?? "\u{2014}")
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(tunnelIP != nil ? .green : .secondary)
+                    .shadow(color: tunnelIP != nil ? Color.green.opacity(0.35) : Color.clear, radius: 2)
             }
             HStack {
                 Text("Device IP")
@@ -65,6 +67,7 @@ struct AirliftView: View {
                 Text(deviceIP ?? "\u{2014}")
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(deviceIP != nil ? .green : .secondary)
+                    .shadow(color: deviceIP != nil ? Color.green.opacity(0.35) : Color.clear, radius: 2)
             }
         } header: { Label("Session details", systemImage: "network") }
     }
@@ -83,6 +86,7 @@ struct AirliftView: View {
                         Text(pairingSubtitle)
                             .font(.subheadline)
                             .foregroundStyle(pairingColor)
+                            .shadow(color: pairingColor.opacity(0.35), radius: 2)
                             .lineLimit(3)
                     }
                     Spacer()
@@ -98,6 +102,7 @@ struct AirliftView: View {
             HStack(spacing: 6) {
                 Image(systemName: "lock.shield.fill")
                     .foregroundStyle(.orange)
+                    .shadow(color: Color.orange.opacity(0.35), radius: 2)
                 Text("Enter this PIN in Settings")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -107,6 +112,7 @@ struct AirliftView: View {
                     Text(String(ch))
                         .font(.system(size: 32, weight: .semibold, design: .rounded))
                         .foregroundStyle(.orange)
+                        .shadow(color: Color.orange.opacity(0.35), radius: 2)
                         .frame(width: 44, height: 56)
                         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
