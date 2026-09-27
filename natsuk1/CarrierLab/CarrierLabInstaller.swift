@@ -18,6 +18,7 @@ final class CarrierLabInstaller: @unchecked Sendable {
     func carrierBundleURL() -> URL {
         Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/CarrierLab.bundle")
     }
+
     func docomoBundleURL() -> URL {
         Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/Docomo_jp.bundle")
     }
@@ -25,14 +26,11 @@ final class CarrierLabInstaller: @unchecked Sendable {
     func check() throws -> CheckResult {
         let fm = FileManager.default
         let probe = bridge.probe()
-        let carrierBundle = carrierBundleURL()
-        let root = bridge.carrierRootPath()
-        let links = bridge.bundleLinksPath()
         return CheckResult(
             probe: probe,
-            carrierRootExists: fm.fileExists(atPath: root),
-            bundleLinksExists: fm.fileExists(atPath: links),
-            resourcesBundled: fm.fileExists(atPath: carrierBundle.path),
+            carrierRootExists: fm.fileExists(atPath: bridge.carrierRootPath()),
+            bundleLinksExists: fm.fileExists(atPath: bridge.bundleLinksPath()),
+            resourcesBundled: fm.fileExists(atPath: carrierBundleURL().path),
             backupPresent: state.hasBackup(),
             status: state.session?.status ?? .clean
         )
@@ -43,11 +41,11 @@ final class CarrierLabInstaller: @unchecked Sendable {
         let docomoBundle = docomoBundleURL()
         guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
             throw NSError(domain: "carrierlab", code: 3,
-                          userInfo: [NSLocalizedDescriptionKey: "CarrierLab.bundle отсутствует в бандле"])
+                          userInfo: [NSLocalizedDescriptionKey: "CarrierLab.bundle missing from app bundle"])
         }
         guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
             throw NSError(domain: "carrierlab", code: 3,
-                          userInfo: [NSLocalizedDescriptionKey: "Docomo_jp.bundle отсутствует в бандле"])
+                          userInfo: [NSLocalizedDescriptionKey: "Docomo_jp.bundle missing from app bundle"])
         }
 
         let s = CarrierLabState.Session(
@@ -60,9 +58,8 @@ final class CarrierLabInstaller: @unchecked Sendable {
             aliases: nil)
         state.save(s)
 
-        let r1 = try bridge.writeFile(
-            source: carrierBundle.path,
-            target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
+        let r1 = bridge.writeFile(source: carrierBundle.path,
+                                  target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
         guard r1.ok else {
             var bad = s
             bad.status = .failed
@@ -72,9 +69,8 @@ final class CarrierLabInstaller: @unchecked Sendable {
                           userInfo: [NSLocalizedDescriptionKey: r1.message])
         }
 
-        let r2 = try bridge.writeFile(
-            source: docomoBundle.path,
-            target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
+        let r2 = bridge.writeFile(source: docomoBundle.path,
+                                  target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
         guard r2.ok else {
             var bad = s
             bad.status = .failed
@@ -92,11 +88,10 @@ final class CarrierLabInstaller: @unchecked Sendable {
     func reload() throws {
         guard let s = state.session, s.status == .placed || s.status == .finished else {
             throw NSError(domain: "carrierlab", code: 2,
-                          userInfo: [NSLocalizedDescriptionKey: "Нечего перечитывать. Сначала Install."])
+                          userInfo: [NSLocalizedDescriptionKey: "Nothing to reload. Install first."])
         }
-        let r = try bridge.writeFile(
-            source: docomoBundleURL().path,
-            target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
+        let r = bridge.writeFile(source: docomoBundleURL().path,
+                                 target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
         guard r.ok else {
             throw NSError(domain: "carrierlab", code: 4,
                           userInfo: [NSLocalizedDescriptionKey: r.message])
@@ -111,5 +106,7 @@ final class CarrierLabInstaller: @unchecked Sendable {
         state.save(done)
     }
 
-    func reset() throws { state.clear() }
+    func reset() throws {
+        state.clear()
+    }
 }

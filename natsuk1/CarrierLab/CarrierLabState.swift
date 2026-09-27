@@ -41,7 +41,7 @@ final class CarrierLabState: ObservableObject, @unchecked Sendable {
     }
 
     func save(_ s: Session) {
-        let apply = {
+        DispatchQueue.main.async {
             self.session = s
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -50,22 +50,12 @@ final class CarrierLabState: ObservableObject, @unchecked Sendable {
                 try? d.write(to: self.stateURL, options: .atomic)
             }
         }
-        if Thread.isMainThread {
-            apply()
-        } else {
-            DispatchQueue.main.async(execute: apply)
-        }
     }
 
     func clear() {
-        let apply = {
+        DispatchQueue.main.async {
             self.session = nil
             try? FileManager.default.removeItem(at: self.stateURL)
-        }
-        if Thread.isMainThread {
-            apply()
-        } else {
-            DispatchQueue.main.async(execute: apply)
         }
     }
 

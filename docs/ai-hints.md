@@ -304,3 +304,14 @@ CarrierLab UI wraps AirLift file writes to /var/mobile/Library/Carrier Bundles.
 - AirLift probe must distinguish: no VPN / no pairing / too-small pairing / FFI error.
 - Read hints before every workflow change. Remove dead steps each run.
 - No comments in code or workflows.
+
+## USER RULES 2026-09
+
+- All code, strings and comments in English only.
+- Match existing style: @unchecked Sendable, DispatchQueue.main.async, no @MainActor, no Task { @MainActor }.
+- Never mutate @Published from background. Always DispatchQueue.main.async in setters.
+- Do not touch AirliftBridge.swift or PairingController.swift without explicit request.
+- No "type INSTALL" style confirmations. Buttons act immediately.
+- CarrierLab probe must distinguish: no VPN / no pairing / too-small pairing / FFI error.
+- Read this file before every workflow change. Remove dead steps on every run.
+- project.yml is written in full via cat heredoc, never sed/perl patched.

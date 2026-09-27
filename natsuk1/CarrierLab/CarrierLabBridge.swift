@@ -13,13 +13,16 @@ final class CarrierLabBridge: @unchecked Sendable {
 
     struct ProbeResult {
         let state: ProbeState
-        var ok: Bool { if case .ok = state { return true }; return false }
+        var ok: Bool {
+            if case .ok = state { return true }
+            return false
+        }
         var message: String {
             switch state {
-            case .ok: return "Airlift готов"
-            case .noVPN: return "Нет loopback VPN. Включите LocalDevVPN или SideStore WireGuard."
-            case .noPairing: return "Нет pairing-файла. Откройте Airlift → Start Pairing."
-            case .pairingTooSmall(let n): return "Pairing-файл повреждён (\(n) байт). Перепарьте в Airlift."
+            case .ok: return "ready"
+            case .noVPN: return "no loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
+            case .noPairing: return "no pairing file. Open Airlift and start pairing."
+            case .pairingTooSmall(let n): return "pairing file damaged (\(n) bytes). Re-pair in Airlift."
             case .ffiFailed(let s): return s
             }
         }
@@ -43,7 +46,6 @@ final class CarrierLabBridge: @unchecked Sendable {
         if size < 200 {
             return ProbeResult(state: .pairingTooSmall(size))
         }
-
         let tmp = NSTemporaryDirectory() + "/carrierlab-probe-\(UUID().uuidString).txt"
         try? "probe".data(using: .utf8)?.write(to: URL(fileURLWithPath: tmp))
         var outJson: UnsafeMutablePointer<CChar>? = nil
@@ -64,9 +66,9 @@ final class CarrierLabBridge: @unchecked Sendable {
         return ProbeResult(state: .ok)
     }
 
-    func writeFile(source: String, target: String) throws -> ProbeResult {
-        let result = probe()
-        guard result.ok else { return result }
+    func writeFile(source: String, target: String) -> ProbeResult {
+        let pre = probe()
+        guard pre.ok else { return pre }
         var outJson: UnsafeMutablePointer<CChar>? = nil
         var outErr: UnsafeMutablePointer<CChar>? = nil
         var rc: Int32 = -1
