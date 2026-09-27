@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build:
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v5
         with:
@@ -30,14 +30,38 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v12-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v12-
+          key: nk-v14-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v14-
 
       - name: Install tools
         run: |
           set -e
           command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
           command -v ldid     >/dev/null 2>&1 || brew install ldid
+
+      - name: Fetch carrier assets
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Resources/CarrierAssets/CarrierLab.bundle/signatures
+          mkdir -p natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/signatures
+          BASE="https://raw.githubusercontent.com/VCTGomes/ios-carrier-bundle/cecd5594349df0bf51723a247028bad5f40a7965/carrier-bundles/27.0-24A437.V53_V54_V57OS"
+          fetch() {
+            curl -fsSL "$BASE/$1" -o "natsuk1/Resources/CarrierAssets/$1"
+          }
+          fetch "CarrierLab.bundle/Info.plist"
+          fetch "CarrierLab.bundle/carrier.plist"
+          fetch "CarrierLab.bundle/overrides_V53_V54_V57.der.pri"
+          fetch "CarrierLab.bundle/overrides_V53_V54_V57.plist"
+          fetch "CarrierLab.bundle/signatures/common.plist"
+          fetch "CarrierLab.bundle/signatures/overrides_V53_V54_V57.plist"
+          fetch "Docomo_jp.bundle/Info.plist"
+          fetch "Docomo_jp.bundle/carrier.plist"
+          fetch "Docomo_jp.bundle/overrides_V53_V54_V57.der.pri"
+          fetch "Docomo_jp.bundle/overrides_V53_V54_V57.plist"
+          fetch "Docomo_jp.bundle/profile.mobileconfig"
+          fetch "Docomo_jp.bundle/signatures/common.plist"
+          fetch "Docomo_jp.bundle/signatures/overrides_V53_V54_V57.plist"
+          find natsuk1/Resources/CarrierAssets -type f -exec ls -la {} \;
 
       - name: Cleanup
         run: |
@@ -55,7 +79,276 @@ jobs:
           grep -q 'natsuk1/CarrierLab' project.yml || \
             perl -i -pe 's|^(      - path: natsuk1/App)$|$1\n      - path: natsuk1/CarrierLab|' project.yml
 
+          grep -q 'natsuk1/Resources/CarrierAssets' project.yml || \
+            perl -i -pe 's|^(      - path: natsuk1/Offsets\n        type: folder\n        buildPhase: resources)$|$1\n      - path: natsuk1/Resources/CarrierAssets\n        type: folder\n        buildPhase: resources|' project.yml
+
           mkdir -p natsuk1/CarrierLab
+
+          cat > natsuk1/CarrierLab/CarrierLabCore.swift <<'SWIFT_CORE'
+          import Foundation
+
+          enum CarrierGuardError: LocalizedError {
+              case message(String)
+              var errorDescription: String? {
+                  if case .message(let s) = self { return s }
+                  return nil
+              }
+          }
+
+          enum CarrierConstants {
+              static let product = "iPhone18,2"
+              static let board = "V54AP"
+              static let version = "27.0"
+              static let build = "24A437"
+              static let oper = "25001"
+              static let carrierTarget = "/var/mobile/Library/Carrier Bundles/iPhone"
+              static let carrierLinks = "/var/mobile/Library/Carrier Bundles"
+          }
+
+          struct CarrierTree {
+              var dirs: Set<String> = []
+              var files: [String: Data] = [:]
+              var links: [String: String] = [:]
+
+              func validate() throws {
+                  for n in dirs { try Self.safe(n) }
+                  for n in files.keys { try Self.safe(n) }
+                  for (n, t) in links {
+                      try Self.safe(n)
+                      if t.hasPrefix("/") {
+                          if !t.hasPrefix("/System/Library/Carrier Bundles/iPhone/") {
+                              throw CarrierGuardError.message("link escapes: \(n)")
+                          }
+                      }
+                  }
+              }
+
+              static func safe(_ s: String) throws {
+                  if s.isEmpty || s.hasPrefix("/") || s.contains("..") || s.contains("\\") {
+                      throw CarrierGuardError.message("unsafe path: \(s)")
+                  }
+              }
+
+              func digest() -> String {
+                  var h = SHA256()
+                  for n in dirs.sorted() { h.update("D\0\(n)\0") }
+                  for (n, d) in files.sorted(by: { $0.key < $1.key }) {
+                      h.update("F\0\(n)\0")
+                      h.update(d)
+                  }
+                  for (n, t) in links.sorted(by: { $0.key < $1.key }) { h.update("L\0\(n)\0\(t)\0") }
+                  return h.finalize()
+              }
+          }
+
+          struct SHA256 {
+              private var ctx = [UInt32](repeating: 0, count: 8)
+              private var buffer = [UInt8]()
+              private var length: UInt64 = 0
+
+              init() {
+                  ctx = [
+                      0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                      0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+                  ]
+              }
+
+              mutating func update(_ s: String) { update(Array(s.utf8)) }
+              mutating func update(_ d: Data) { update([UInt8](d)) }
+
+              mutating func update(_ bytes: [UInt8]) {
+                  length += UInt64(bytes.count) * 8
+                  buffer.append(contentsOf: bytes)
+                  while buffer.count >= 64 {
+                      let block = Array(buffer.prefix(64))
+                      buffer.removeFirst(64)
+                      compress(block)
+                  }
+              }
+
+              mutating func finalize() -> String {
+                  buffer.append(0x80)
+                  while buffer.count % 64 != 56 { buffer.append(0) }
+                  var len = length.bigEndian
+                  withUnsafeBytes(of: &len) { buffer.append(contentsOf: $0) }
+                  while buffer.count >= 64 {
+                      let block = Array(buffer.prefix(64))
+                      buffer.removeFirst(64)
+                      compress(block)
+                  }
+                  var out = ""
+                  for v in ctx { out += String(format: "%08x", v) }
+                  return out
+              }
+
+              private mutating func compress(_ block: [UInt8]) {
+                  var w = [UInt32](repeating: 0, count: 64)
+                  for i in 0..<16 {
+                      w[i] = (UInt32(block[i*4]) << 24) |
+                             (UInt32(block[i*4+1]) << 16) |
+                             (UInt32(block[i*4+2]) << 8) |
+                             UInt32(block[i*4+3])
+                  }
+                  for i in 16..<64 {
+                      let s0 = rotr(w[i-15], 7) ^ rotr(w[i-15], 18) ^ (w[i-15] >> 3)
+                      let s1 = rotr(w[i-2], 17) ^ rotr(w[i-2], 19) ^ (w[i-2] >> 10)
+                      w[i] = w[i-16] &+ s0 &+ w[i-7] &+ s1
+                  }
+                  var a = ctx[0], b = ctx[1], c = ctx[2], d = ctx[3]
+                  var e = ctx[4], f = ctx[5], g = ctx[6], h = ctx[7]
+                  let k: [UInt32] = [
+                      0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+                      0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+                      0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+                      0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+                      0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+                      0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+                      0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+                      0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+                  ]
+                  for i in 0..<64 {
+                      let S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
+                      let ch = (e & f) ^ (~e & g)
+                      let t1 = h &+ S1 &+ ch &+ k[i] &+ w[i]
+                      let S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
+                      let mj = (a & b) ^ (a & c) ^ (b & c)
+                      let t2 = S0 &+ mj
+                      h = g; g = f; f = e; e = d &+ t1
+                      d = c; c = b; b = a; a = t1 &+ t2
+                  }
+                  ctx[0] = ctx[0] &+ a; ctx[1] = ctx[1] &+ b
+                  ctx[2] = ctx[2] &+ c; ctx[3] = ctx[3] &+ d
+                  ctx[4] = ctx[4] &+ e; ctx[5] = ctx[5] &+ f
+                  ctx[6] = ctx[6] &+ g; ctx[7] = ctx[7] &+ h
+              }
+
+              private func rotr(_ x: UInt32, _ n: UInt32) -> UInt32 {
+                  return (x >> n) | (x << (32 - n))
+              }
+          }
+
+          func loadCarrierTree(from url: URL) throws -> CarrierTree {
+              var tree = CarrierTree()
+              let fm = FileManager.default
+              guard let e = fm.enumerator(at: url, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else {
+                  return tree
+              }
+              let base = url.standardizedFileURL.path
+              for case let item as URL in e {
+                  let full = item.standardizedFileURL.path
+                  guard full.hasPrefix(base + "/") else { continue }
+                  let rel = String(full.dropFirst(base.count + 1))
+                  let attrs = try fm.attributesOfItem(atPath: full)
+                  let type = attrs[.type] as? FileAttributeType
+                  if type == .typeDirectory {
+                      tree.dirs.insert(rel)
+                  } else if type == .typeSymbolicLink {
+                      let t = try fm.destinationOfSymbolicLink(atPath: full)
+                      tree.links[rel] = t
+                  } else {
+                      tree.files[rel] = try Data(contentsOf: item)
+                  }
+              }
+              return tree
+          }
+
+          func carrierPrepareTree(original: CarrierTree, donor: CarrierTree) throws -> (CarrierTree, [String]) {
+              var out = original
+              for (n, d) in donor.files { out.files[n] = d }
+              out.dirs.formUnion(donor.dirs)
+              var aliases: [String] = []
+              let op = CarrierConstants.oper
+              if out.links[op] != nil || out.dirs.contains(op) || out.files[op] != nil {
+                  aliases.append(op)
+              }
+              for n in original.links.keys where n.hasPrefix(op + "_") {
+                  aliases.append(n)
+              }
+              if aliases.isEmpty {
+                  aliases.append(op)
+              }
+              for a in aliases { out.links[a] = "CarrierLab.bundle" }
+              return (out, aliases)
+          }
+          SWIFT_CORE
+
+          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'SWIFT_BRIDGE'
+          import Foundation
+          import UIKit
+
+          final class CarrierLabBridge: @unchecked Sendable {
+              static let shared = CarrierLabBridge()
+
+              enum CarrierError: LocalizedError {
+                  case airliftUnavailable
+                  case remote(String)
+                  case io(String)
+
+                  var errorDescription: String? {
+                      switch self {
+                      case .airliftUnavailable: return "Airlift недоступен. Проверьте pairing и запустите Airlift ещё раз."
+                      case .remote(let s): return s
+                      case .io(let s): return "I/O: " + s
+                      }
+                  }
+              }
+
+              private let carrierRoot = CarrierConstants.carrierTarget
+              private let bundleLinks = CarrierConstants.carrierLinks
+
+              private var lastProbeOK = false
+              private var lastProbeMessage = "не проверялся"
+
+              func probe() -> (ok: Bool, message: String) {
+                  var outErr: UnsafeMutablePointer<CChar>? = nil
+                  var outJson: UnsafeMutablePointer<CChar>? = nil
+                  let probeFile = NSTemporaryDirectory() + "/carrierlab-probe-\(UUID().uuidString).txt"
+                  try? "probe".data(using: .utf8)?.write(to: URL(fileURLWithPath: probeFile))
+                  var rc: Int32 = -1
+                  probeFile.withCString { pf in
+                      "/var/mobile/Library/Carrier Bundles/.carrierlab-probe".withCString { tf in
+                          rc = al_exploit_run(pf, tf, nil, nil, &outJson, &outErr)
+                      }
+                  }
+                  let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
+                  if let p = outErr { al_string_free(p) }
+                  if let p = outJson { al_string_free(p) }
+                  try? FileManager.default.removeItem(atPath: probeFile)
+                  if rc == 0 {
+                      lastProbeOK = true
+                      lastProbeMessage = "OK"
+                  } else {
+                      lastProbeOK = false
+                      lastProbeMessage = errMsg.isEmpty ? "rc=\(rc)" : errMsg
+                  }
+                  return (lastProbeOK, lastProbeMessage)
+              }
+
+              func isAvailable() -> Bool { lastProbeOK }
+              func probeMessage() -> String { lastProbeMessage }
+
+              func writeFile(source: String, target: String) throws {
+                  let (ok, msg) = probe()
+                  guard ok else { throw CarrierError.airliftUnavailable }
+                  _ = msg
+                  var outJson: UnsafeMutablePointer<CChar>? = nil
+                  var outErr: UnsafeMutablePointer<CChar>? = nil
+                  var rc: Int32 = -1
+                  source.withCString { sc in
+                      target.withCString { tc in
+                          rc = al_exploit_run(sc, tc, nil, nil, &outJson, &outErr)
+                      }
+                  }
+                  if let p = outJson { al_string_free(p) }
+                  let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
+                  if let p = outErr { al_string_free(p) }
+                  if rc != 0 { throw CarrierError.remote(errMsg.isEmpty ? "rc=\(rc)" : errMsg) }
+              }
+
+              func bundleLinksPath() -> String { bundleLinks + "/iPhone" }
+              func carrierRootPath() -> String { carrierRoot }
+          }
+          SWIFT_BRIDGE
 
           cat > natsuk1/CarrierLab/CarrierLabState.swift <<'SWIFT_STATE'
           import Foundation
@@ -73,6 +366,7 @@ jobs:
                   var originalBackupPath: String?
                   var ipccTriggerPath: String?
                   var lastError: String?
+                  var aliases: [String]?
               }
 
               @Published private(set) var session: Session?
@@ -122,64 +416,6 @@ jobs:
           }
           SWIFT_STATE
 
-          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'SWIFT_BRIDGE'
-          import Foundation
-
-          final class CarrierLabBridge: @unchecked Sendable {
-              static let shared = CarrierLabBridge()
-
-              enum CarrierError: LocalizedError {
-                  case noPairing
-                  case notImplemented(String)
-                  case remote(String)
-
-                  var errorDescription: String? {
-                      switch self {
-                      case .noPairing: return "No pairing file. Pair via Airlift first."
-                      case .notImplemented(let s): return "Not implemented: " + s
-                      case .remote(let s): return s
-                      }
-                  }
-              }
-
-              private let carrierRoot = "/var/mobile/Library/Carrier Bundles"
-              private let bundleLinks = "/var/mobile/Library/Carrier Bundles/BundleLinks"
-
-              func carrierRootPath() -> String { carrierRoot }
-              func bundleLinksPath() -> String { bundleLinks }
-
-              func writeFile(source: String, target: String) throws {
-                  let pairing = PairingController.pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: pairing) else { throw CarrierError.noPairing }
-                  var outJson: UnsafeMutablePointer<CChar>? = nil
-                  var outErr: UnsafeMutablePointer<CChar>? = nil
-                  let rc: Int32 = pairing.withCString { pc in
-                      source.withCString { sc in
-                          target.withCString { tc in
-                              al_exploit_run(pc, tc, nil, nil, &outJson, &outErr)
-                          }
-                      }
-                  }
-                  if let p = outJson { al_string_free(p) }
-                  let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
-                  if let p = outErr { al_string_free(p) }
-                  if rc != 0 { throw CarrierError.remote(errMsg.isEmpty ? "rc=\(rc)" : errMsg) }
-              }
-
-              func readFile(path: String) throws -> Data {
-                  throw CarrierError.notImplemented("al_read_file")
-              }
-
-              func removePath(_ path: String) throws {
-                  throw CarrierError.notImplemented("al_remove_path")
-              }
-
-              func symlink(link: String, target: String) throws {
-                  throw CarrierError.notImplemented("al_make_symlink")
-              }
-          }
-          SWIFT_BRIDGE
-
           cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'SWIFT_INSTALLER'
           import Foundation
 
@@ -190,45 +426,64 @@ jobs:
               private let bridge = CarrierLabBridge.shared
 
               struct CheckResult {
+                  let airliftOK: Bool
+                  let airliftMessage: String
                   let carrierRootExists: Bool
                   let bundleLinksExists: Bool
-                  let currentLinks: [String]
+                  let resourcesBundled: Bool
                   let backupPresent: Bool
                   let status: CarrierLabState.Status
               }
 
               func check() throws -> CheckResult {
                   let fm = FileManager.default
+                  let (ok, msg) = bridge.probe()
                   let root = bridge.carrierRootPath()
                   let links = bridge.bundleLinksPath()
-                  var entries: [String] = []
-                  if let e = try? fm.contentsOfDirectory(atPath: links) { entries = e }
+                  let bundle = Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/CarrierLab.bundle")
                   return CheckResult(
+                      airliftOK: ok,
+                      airliftMessage: msg,
                       carrierRootExists: fm.fileExists(atPath: root),
                       bundleLinksExists: fm.fileExists(atPath: links),
-                      currentLinks: entries,
+                      resourcesBundled: fm.fileExists(atPath: bundle.path),
                       backupPresent: state.hasBackup(),
                       status: state.session?.status ?? .clean
                   )
               }
 
-              func install(sourceBundlePath: String, ipccPath: String) throws {
-                  if state.session != nil && !state.hasBackup() {
-                      throw NSError(domain: "carrierlab", code: 1,
-                                    userInfo: [NSLocalizedDescriptionKey: "Session already placed. Run finish or reload."])
+              func install() throws {
+                  let bundleRoot = Bundle.main.bundleURL.appendingPathComponent("CarrierAssets")
+                  let carrierBundle = bundleRoot.appendingPathComponent("CarrierLab.bundle")
+                  let docomoBundle = bundleRoot.appendingPathComponent("Docomo_jp.bundle")
+                  guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
+                      throw NSError(domain: "carrierlab", code: 3,
+                                    userInfo: [NSLocalizedDescriptionKey: "CarrierLab.bundle отсутствует в бандле"])
                   }
+                  guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
+                      throw NSError(domain: "carrierlab", code: 3,
+                                    userInfo: [NSLocalizedDescriptionKey: "Docomo_jp.bundle отсутствует в бандле"])
+                  }
+
+                  let (ok, msg) = bridge.probe()
+                  guard ok else {
+                      throw NSError(domain: "carrierlab", code: 4,
+                                    userInfo: [NSLocalizedDescriptionKey: "Airlift недоступен: \(msg)"])
+                  }
+
                   let s = CarrierLabState.Session(
                       status: .placing,
                       startedAt: Date(),
-                      carrierBundlePath: sourceBundlePath,
+                      carrierBundlePath: carrierBundle.path,
                       originalBackupPath: state.backupURL().path,
-                      ipccTriggerPath: ipccPath,
-                      lastError: nil)
+                      ipccTriggerPath: docomoBundle.path,
+                      lastError: nil,
+                      aliases: nil)
                   state.save(s)
 
                   do {
-                      try bridge.writeFile(source: sourceBundlePath, target: bridge.bundleLinksPath())
-                      try bridge.writeFile(source: ipccPath, target: bridge.carrierRootPath())
+                      try bridge.writeFile(source: carrierBundle.path,
+                                           target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
                       var done = s
                       done.status = .placed
                       state.save(done)
@@ -241,12 +496,15 @@ jobs:
                   }
               }
 
-              func reload(ipccPath: String) throws {
+              func reload() throws {
                   guard let s = state.session, s.status == .placed || s.status == .finished else {
                       throw NSError(domain: "carrierlab", code: 2,
-                                    userInfo: [NSLocalizedDescriptionKey: "Nothing to reload. Install first."])
+                                    userInfo: [NSLocalizedDescriptionKey: "Нечего перечитывать. Сначала Install."])
                   }
-                  try bridge.writeFile(source: ipccPath, target: bridge.carrierRootPath())
+                  let docomoBundle = Bundle.main.bundleURL
+                      .appendingPathComponent("CarrierAssets/Docomo_jp.bundle")
+                  try bridge.writeFile(source: docomoBundle.path,
+                                       target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
               }
 
               func finish() throws {
@@ -254,6 +512,10 @@ jobs:
                   var done = s
                   done.status = .finished
                   state.save(done)
+              }
+
+              func reset() throws {
+                  state.clear()
               }
           }
           SWIFT_INSTALLER
@@ -265,68 +527,80 @@ jobs:
               @ObservedObject private var clState = CarrierLabState.shared
               @State private var logText: String = ""
               @State private var busy: Bool = false
-              @State private var showInstall = false
-              @State private var confirmText = ""
-              @State private var carrierSource: String = ""
+              @State private var airliftOK: Bool? = nil
+              @State private var airliftMessage: String = ""
 
               var body: some View {
                   List {
-                      Section {
-                          HStack {
-                              Text("Status")
-                              Spacer()
-                              Text(statusText)
-                                  .font(.system(.body, design: .monospaced))
-                                  .foregroundStyle(statusColor)
-                          }
-                          if let s = clState.session {
-                              HStack {
-                                  Text("Started")
-                                  Spacer()
-                                  Text(s.startedAt.formatted()).font(.caption).foregroundStyle(.secondary)
-                              }
-                              if let e = s.lastError {
-                                  Text(e).font(.caption).foregroundStyle(.red)
-                              }
-                          }
-                      } header: { Label("CarrierLab", systemImage: "antenna.radiowaves.left.and.right") }
-
-                      Section {
-                          TextField("Source .bundle path", text: $carrierSource)
-                              .font(.system(.footnote, design: .monospaced))
-                              .autocorrectionDisabled()
-                              .textInputAutocapitalization(.never)
-                      } header: { Label("Source", systemImage: "folder") }
-
-                      Section {
-                          Button { runCheck() } label: { Text("Check") }.disabled(busy)
-                          Button { showInstall = true } label: { Text("Install") }.disabled(busy)
-                          Button { runReload() } label: { Text("Reload") }.disabled(busy)
-                          Button { runFinish() } label: { Text("Finish") }.disabled(busy)
-                      } header: { Label("Actions", systemImage: "wrench") }
-
-                      Section {
-                          ScrollView {
-                              Text(logText.isEmpty ? "no output" : logText)
-                                  .font(.system(size: 10, design: .monospaced))
-                                  .frame(maxWidth: .infinity, alignment: .leading)
-                          }
-                          .frame(minHeight: 200, maxHeight: 400)
-                      } header: { Label("Log", systemImage: "terminal") }
+                      airliftSection
+                      statusSection
+                      actionsSection
+                      logSection
                   }
                   .listStyle(.insetGrouped)
                   .navigationTitle("CarrierLab")
                   .navigationBarTitleDisplayMode(.inline)
-                  .alert("Confirm install", isPresented: $showInstall) {
-                      TextField("Type INSTALL", text: $confirmText)
-                      Button("Cancel", role: .cancel) { confirmText = "" }
-                      Button("Install", role: .destructive) {
-                          if confirmText == "INSTALL" { runInstall() }
-                          confirmText = ""
+                  .onAppear { runCheck() }
+              }
+
+              private var airliftSection: some View {
+                  Section {
+                      HStack {
+                          Image(systemName: (airliftOK == true) ? "checkmark.seal.fill" : ((airliftOK == false) ? "xmark.seal.fill" : "questionmark.circle"))
+                              .foregroundStyle((airliftOK == true) ? .green : ((airliftOK == false) ? .red : .secondary))
+                          Text("Airlift")
+                          Spacer()
+                          Text(airliftMessage.isEmpty ? "проверка…" : airliftMessage)
+                              .font(.system(.footnote, design: .monospaced))
+                              .foregroundStyle((airliftOK == true) ? .green : .red)
+                              .lineLimit(2)
                       }
-                  } message: {
-                      Text("Modifies operator files. No guaranteed rollback.")
-                  }
+                  } header: { Label("Airlift", systemImage: "antenna.radiowaves.left.and.right") }
+              }
+
+              private var statusSection: some View {
+                  Section {
+                      HStack {
+                          Text("Status")
+                          Spacer()
+                          Text(statusText)
+                              .font(.system(.body, design: .monospaced))
+                              .foregroundStyle(statusColor)
+                      }
+                      if let s = clState.session {
+                          HStack {
+                              Text("Started")
+                              Spacer()
+                              Text(s.startedAt.formatted()).font(.caption).foregroundStyle(.secondary)
+                          }
+                          if let e = s.lastError {
+                              Text(e).font(.caption).foregroundStyle(.red)
+                          }
+                      }
+                  } header: { Label("CarrierLab", systemImage: "shippingbox") }
+              }
+
+              private var actionsSection: some View {
+                  Section {
+                      Button { runCheck() } label: { Text("Check") }.disabled(busy)
+                      Button { runInstall() } label: { Text("Install") }
+                          .disabled(busy || airliftOK != true)
+                      Button { runReload() } label: { Text("Reload") }
+                          .disabled(busy || airliftOK != true)
+                      Button { runFinish() } label: { Text("Finish") }.disabled(busy)
+                      Button(role: .destructive) { runReset() } label: { Text("Reset") }.disabled(busy)
+                  } header: { Label("Actions", systemImage: "wrench") }
+              }
+
+              private var logSection: some View {
+                  Section {
+                      ScrollView {
+                          Text(logText.isEmpty ? "no output" : logText)
+                              .font(.system(size: 10, design: .monospaced))
+                              .frame(maxWidth: .infinity, alignment: .leading)
+                      }
+                      .frame(minHeight: 200, maxHeight: 400)
+                  } header: { Label("Log", systemImage: "terminal") }
               }
 
               private var statusText: String {
@@ -348,9 +622,13 @@ jobs:
                   busy = true
                   do {
                       let r = try CarrierLabInstaller.shared.check()
-                      append("[check] carrierRoot=\(r.carrierRootExists) bundleLinks=\(r.bundleLinksExists) backup=\(r.backupPresent) status=\(r.status.rawValue)")
-                      append("[check] links=\(r.currentLinks.joined(separator: ", "))")
+                      airliftOK = r.airliftOK
+                      airliftMessage = r.airliftMessage
+                      append("[check] airlift=\(r.airliftOK) msg=\(r.airliftMessage)")
+                      append("[check] carrierRoot=\(r.carrierRootExists) bundleLinks=\(r.bundleLinksExists) resourcesBundled=\(r.resourcesBundled) backup=\(r.backupPresent) status=\(r.status.rawValue)")
                   } catch {
+                      airliftOK = false
+                      airliftMessage = error.localizedDescription
                       append("[check] error: \(error.localizedDescription)")
                   }
                   busy = false
@@ -358,10 +636,8 @@ jobs:
 
               private func runInstall() {
                   busy = true
-                  let src = carrierSource.isEmpty ? Bundle.main.bundlePath + "/CarrierLab.bundle" : carrierSource
-                  let ipcc = Bundle.main.bundlePath + "/ipcc"
                   do {
-                      try CarrierLabInstaller.shared.install(sourceBundlePath: src, ipccPath: ipcc)
+                      try CarrierLabInstaller.shared.install()
                       append("[install] ok")
                   } catch {
                       append("[install] error: \(error.localizedDescription)")
@@ -372,7 +648,7 @@ jobs:
               private func runReload() {
                   busy = true
                   do {
-                      try CarrierLabInstaller.shared.reload(ipccPath: Bundle.main.bundlePath + "/ipcc")
+                      try CarrierLabInstaller.shared.reload()
                       append("[reload] ok")
                   } catch {
                       append("[reload] error: \(error.localizedDescription)")
@@ -387,6 +663,17 @@ jobs:
                       append("[finish] ok")
                   } catch {
                       append("[finish] error: \(error.localizedDescription)")
+                  }
+                  busy = false
+              }
+
+              private func runReset() {
+                  busy = true
+                  do {
+                      try CarrierLabInstaller.shared.reset()
+                      append("[reset] ok")
+                  } catch {
+                      append("[reset] error: \(error.localizedDescription)")
                   }
                   busy = false
               }
@@ -435,12 +722,13 @@ jobs:
 
           if [ -f docs/ai-hints.md ] && ! grep -q '## CARRIERLAB' docs/ai-hints.md; then
             printf '\n## CARRIERLAB\n\n' >> docs/ai-hints.md
-            printf 'CarrierLab UI wraps AirLift file writes to /var/mobile/Library/Carrier Bundles.\n\n' >> docs/ai-hints.md
-            printf -- '- check: read-only, safe.\n' >> docs/ai-hints.md
-            printf -- '- install: requires clean session, no rollback.\n' >> docs/ai-hints.md
-            printf -- '- reload: only after install, re-triggers IPCC read.\n' >> docs/ai-hints.md
-            printf -- '- finish: marks session done.\n' >> docs/ai-hints.md
-            printf -- '- TODO: al_read_file, al_remove_path, al_make_symlink in AirliftFFI.\n' >> docs/ai-hints.md
+            printf 'iOS port of MTS_CARRIER_FORUM core logic. No type-INSTALL confirmation.\n\n' >> docs/ai-hints.md
+            printf -- '- Bundled Apple assets under Resources/CarrierAssets (13 files, ~51 KB).\n' >> docs/ai-hints.md
+            printf -- '- Check probes Airlift first via al_exploit_run dry-run.\n' >> docs/ai-hints.md
+            printf -- '- Install writes CarrierLab.bundle to Carrier Bundles/iPhone.\n' >> docs/ai-hints.md
+            printf -- '- Reload re-writes Docomo_jp.bundle to trigger rescan.\n' >> docs/ai-hints.md
+            printf -- '- Reset clears session state (no rollback).\n' >> docs/ai-hints.md
+            printf -- '- Python sources live in sibling repo, not bundled here.\n' >> docs/ai-hints.md
           fi
 
           grep -q 'Documents/carrierlab' .gitignore 2>/dev/null || printf '\nDocuments/carrierlab/\n' >> .gitignore
@@ -449,7 +737,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "feat: CarrierLab sources in project.yml [skip ci]"
+            git commit -m "feat: CarrierLab iOS port with bundled assets and airlift check [skip ci]"
             git push
           fi
 
