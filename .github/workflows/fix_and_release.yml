@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v10-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v10-
+          key: nk-v11-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v11-
 
       - name: Install tools
         run: |
@@ -54,7 +54,7 @@ jobs:
 
           mkdir -p natsuk1/CarrierLab
 
-          cat > /tmp/cl_state.swift <<'SWIFT_EOF'
+          cat > natsuk1/CarrierLab/CarrierLabState.swift <<'SWIFT_STATE'
           import Foundation
           import Combine
 
@@ -117,10 +117,9 @@ jobs:
               func backupURL() -> URL { backupDir }
               func rootURL() -> URL { root }
           }
-          SWIFT_EOF
-          cut -c 11- /tmp/cl_state.swift > natsuk1/CarrierLab/CarrierLabState.swift
+          SWIFT_STATE
 
-          cat > /tmp/cl_bridge.swift <<'SWIFT_EOF'
+          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'SWIFT_BRIDGE'
           import Foundation
 
           final class CarrierLabBridge: @unchecked Sendable {
@@ -176,10 +175,9 @@ jobs:
                   throw CarrierError.notImplemented("al_make_symlink")
               }
           }
-          SWIFT_EOF
-          cut -c 11- /tmp/cl_bridge.swift > natsuk1/CarrierLab/CarrierLabBridge.swift
+          SWIFT_BRIDGE
 
-          cat > /tmp/cl_installer.swift <<'SWIFT_EOF'
+          cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'SWIFT_INSTALLER'
           import Foundation
 
           final class CarrierLabInstaller: @unchecked Sendable {
@@ -255,10 +253,9 @@ jobs:
                   state.save(done)
               }
           }
-          SWIFT_EOF
-          cut -c 11- /tmp/cl_installer.swift > natsuk1/CarrierLab/CarrierLabInstaller.swift
+          SWIFT_INSTALLER
 
-          cat > /tmp/cl_view.swift <<'SWIFT_EOF'
+          cat > natsuk1/CarrierLab/CarrierLabView.swift <<'SWIFT_VIEW'
           import SwiftUI
 
           struct CarrierLabView: View {
@@ -391,10 +388,9 @@ jobs:
                   busy = false
               }
           }
-          SWIFT_EOF
-          cut -c 11- /tmp/cl_view.swift > natsuk1/CarrierLab/CarrierLabView.swift
+          SWIFT_VIEW
 
-          cat > /tmp/tools_view.swift <<'SWIFT_EOF'
+          cat > natsuk1/Views/ToolsView.swift <<'SWIFT_TOOLS'
           import SwiftUI
 
           struct ToolsView: View {
@@ -432,8 +428,7 @@ jobs:
                   }
               }
           }
-          SWIFT_EOF
-          cut -c 11- /tmp/tools_view.swift > natsuk1/Views/ToolsView.swift
+          SWIFT_TOOLS
 
           if [ -f docs/ai-hints.md ] && ! grep -q '## CARRIERLAB' docs/ai-hints.md; then
             printf '\n## CARRIERLAB\n\n' >> docs/ai-hints.md
@@ -451,7 +446,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "feat: CarrierLab, rewrite ToolsView deterministically [skip ci]"
+            git commit -m "feat: CarrierLab, fix ToolsView [skip ci]"
             git push
           fi
 
