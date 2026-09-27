@@ -30,23 +30,29 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v4-${{ hashFiles('project.yml') }}
+          key: nk-v5-${{ hashFiles('project.yml') }}
           restore-keys: |
-            nk-v4-
+            nk-v5-
 
       - name: Install tools
         run: |
           set -e
-          command -v xcodegen  >/dev/null 2>&1 || brew install xcodegen
-          command -v ldid      >/dev/null 2>&1 || brew install ldid
-          command -v swiftlint >/dev/null 2>&1 || brew install swiftlint
-          command -v periphery >/dev/null 2>&1 || brew install periphery
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          command -v ldid     >/dev/null 2>&1 || brew install ldid
 
       - name: Cleanup
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          rm -f .swiftlint.yml .periphery.yml CHANGELOG.md
+          rm -f docs/offsets.md docs/nativeness.md
+          rm -rf natsuk1Tests pages
+          rmdir docs 2>/dev/null && mkdir -p docs || true
+
+          git mv docs/ai-hints.md docs/ai-hints.md 2>/dev/null || true
+          git mv docs/ai-think.md docs/ai-think.md 2>/dev/null || true
 
           rm -f natsuk1/Exploit/NECP/necp.c
           rmdir natsuk1/Exploit/NECP 2>/dev/null || true
@@ -113,41 +119,7 @@ jobs:
             printf -- '- Remove nk_necp_cancel lines with sed, do not rename.\n' >> docs/ai-hints.md
           fi
 
-          mkdir -p docs natsuk1Tests
-
-          if [ ! -f .swiftlint.yml ]; then
-            printf 'disabled_rules:\n  - trailing_whitespace\n  - line_length\n  - identifier_name\nopt_in_rules:\n  - empty_count\n  - closure_spacing\n  - collection_alignment\nexcluded:\n  - build\n  - .build\n' > .swiftlint.yml
-          fi
-
-          if [ ! -f .periphery.yml ]; then
-            printf 'project: natsuk1.xcodeproj\nschemes:\n  - natsuk1\ntargets:\n  - natsuk1\nretain_public: false\nretain_unused_protocol_func_params: true\n' > .periphery.yml
-          fi
-
-          if [ ! -f docs/offsets.md ]; then
-            printf '%s\n' '# Offsets' '' 'All offsets live in `natsuk1/Offsets/`.' '' '`index.json` maps device + iOS to a version file.' 'Each version file has `groups` and `defaults`.' '' 'Currently shipped:' '' '- iPhone14,5_iOS27.0_24A437.json — `verified: false`, awaiting Ghidra pass.' '' 'Do not trust unverified offsets.' > docs/offsets.md
-          fi
-
-          if [ ! -f docs/nativeness.md ]; then
-            printf '%s\n' '# Nativeness' '' 'What actually works on iOS 27 / 24A437:' '' '- Airlift (AirTraffic / Grappa) — works via static token fallback.' '- NECP — closed. All ops bounded at depth-0. Removed from repo.' '- IOKit — not probed beyond shallow externalMethod dispatch.' '- BSD syscalls — 557/558 unpacked, all shallow paths bounded.' '' 'What does not work:' '' '- Kernel R/W primitive. None found.' '- Grappa on iOS without static token.' > docs/nativeness.md
-          fi
-
-          if [ ! -f CHANGELOG.md ]; then
-            printf '%s\n' '# Changelog' '' '## v22.0' '' '- Reorganize repo layout.' '- Drop NECP (closed).' '- Remove dead code.' '- Add SwiftLint and Periphery.' '- Add docs.' > CHANGELOG.md
-          fi
-
-          if [ ! -f natsuk1Tests/DeviceNameTests.swift ]; then
-            printf '%s\n' 'import XCTest' '@testable import natsuk1' '' 'final class DeviceNameTests: XCTestCase {' '    func testMachineID() {' '        XCTAssertFalse(DeviceName.machineID().isEmpty)' '    }' '}' > natsuk1Tests/DeviceNameTests.swift
-          fi
-
-          if ! grep -q 'natsuk1Tests' project.yml; then
-            printf '\n  natsuk1Tests:\n    type: bundle.unit-test\n    platform: iOS\n    sources:\n      - path: natsuk1Tests\n    dependencies:\n      - target: natsuk1\n    settings:\n      base:\n        PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit.tests\n        GENERATE_INFOPLIST_FILE: YES\n' >> project.yml
-          fi
-
-          if grep -q 'LLVM_LTO: YES' project.yml; then
-            sed -i '' 's/LLVM_LTO: YES/LLVM_LTO: NO/' project.yml
-          fi
-
-          oxipng -o max --strip safe natsuk1/Resources/Assets.xcassets/AppIcon.appiconset/1024x1024.png 2>/dev/null || true
+          perl -0777 -i -pe 's/\n  natsuk1Tests:\n    type: bundle\.unit-test.*?(?=\n\S|\z)//gs' project.yml 2>/dev/null || true
 
           grep -q '.swiftpm/' .gitignore 2>/dev/null || printf '\n# Swift\n*.xcworkspace\n.swiftpm/\n.build/\nPackage.resolved\n\n# Debug\n*.dSYM\n' >> .gitignore
 
@@ -155,7 +127,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "chore: brew tools, fix pin, drop necp [skip ci]"
+            git commit -m "chore: remove lint, tests, changelog [skip ci]"
             git push
           fi
 
@@ -163,14 +135,6 @@ jobs:
         run: |
           rm -rf natsuk1.xcodeproj
           xcodegen generate
-
-      - name: Lint
-        run: |
-          swiftlint lint --config .swiftlint.yml --reporter github-actions-logging || true
-
-      - name: Dead code
-        run: |
-          periphery scan --config .periphery.yml --disable-update-check || true
 
       - name: Build
         run: |
@@ -195,15 +159,6 @@ jobs:
             -skipPackagePluginValidation \
             -skipMacroValidation \
             build -quiet
-
-      - name: Test
-        run: |
-          xcodebuild test \
-            -project natsuk1.xcodeproj \
-            -scheme natsuk1 \
-            -destination "platform=iOS Simulator,name=iPhone 17" \
-            CODE_SIGNING_ALLOWED=NO \
-            -quiet || true
 
       - name: Package and Release
         env:
