@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v32-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v32-
+          key: nk-v33-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v33-
 
       - name: Install tools
         run: |
@@ -169,218 +169,7 @@ jobs:
                   ENABLE_ONLY_ACTIVE_RESOURCES: YES
           PROJECT_EOF
 
-      - name: Write AirliftBridge
-        run: |
-          set -euo pipefail
-          cat > natsuk1/Helpers/AirliftBridge.swift <<'SWIFT_EOF'
-          import Foundation
-          import Combine
-
-          final class AirliftBridge: ObservableObject, @unchecked Sendable {
-              static let shared = AirliftBridge()
-              enum State: Equatable { case idle, pairing, ready(pairingPath: String), running, done(ok: Bool, message: String) }
-
-              @Published private(set) var state: State = .idle
-              @Published private(set) var pairPIN: String? = nil
-              @Published private(set) var pairingStatus: String = ""
-              @Published private(set) var exploitLog: [String] = []
-              @Published var target: String = "/var/mobile/Library/SpringBoard"
-              private var loggedLines: [String] = []
-
-              private init() {
-                  al_log_init({ _, msg in
-                      guard let msg = msg else { return }
-                      let line = String(cString: msg)
-                      DispatchQueue.main.async { AirliftBridge.shared.appendLog(line) }
-                  }, nil)
-              }
-
-              private func appendLog(_ s: String) {
-                  DispatchQueue.main.async {
-                      self.loggedLines.append(s)
-                      if self.loggedLines.count > 800 { self.loggedLines.removeFirst(self.loggedLines.count - 600) }
-                      self.exploitLog = self.loggedLines
-                  }
-              }
-
-              func clearLog() {
-                  DispatchQueue.main.async {
-                      self.loggedLines.removeAll()
-                      self.exploitLog = []
-                  }
-              }
-
-              func pairingFilePath() -> String { PairingController.pairingFilePath() }
-
-              func hasPairing() -> Bool {
-                  let p = pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: p) else { return false }
-                  let size = (try? FileManager.default.attributesOfItem(atPath: p)[.size] as? Int) ?? 0
-                  return size > 0
-              }
-
-              private func setState(_ s: State) { DispatchQueue.main.async { self.state = s } }
-              private func setStatus(_ s: String) { DispatchQueue.main.async { self.pairingStatus = s } }
-              private func setPIN(_ p: String?) { DispatchQueue.main.async { self.pairPIN = p } }
-
-              func runPairing() {
-                  guard !hasPairing() else {
-                      setState(.ready(pairingPath: pairingFilePath()))
-                      return
-                  }
-                  setState(.pairing)
-                  setStatus("Starting host...")
-                  setPIN(nil)
-                  let ctrl = PairingController.shared
-                  Task {
-                      do {
-                          let path = try await ctrl.startAndWait()
-                          self.setState(.ready(pairingPath: path))
-                          self.setStatus("Paired")
-                          self.setPIN(nil)
-                      } catch is CancellationError {
-                          self.setState(.idle)
-                          self.setStatus("Cancelled")
-                      } catch {
-                          self.setState(.idle)
-                          self.setStatus("Failed: \(error.localizedDescription)")
-                      }
-                  }
-                  Task {
-                      var iterations = 0
-                      while iterations < 900 {
-                          let status = ctrl.pairingStatus
-                          let pin = ctrl.pairingPIN
-                          let running = ctrl.running
-                          self.setStatus(status)
-                          self.setPIN(pin)
-                          if !running { break }
-                          try? await Task.sleep(nanoseconds: 200_000_000)
-                          iterations += 1
-                      }
-                  }
-              }
-
-              func cancelPairing() {
-                  PairingController.shared.softCancel()
-                  setState(.idle)
-                  setStatus("")
-                  setPIN(nil)
-              }
-
-              func deletePairing() {
-                  let fm = FileManager.default
-                  let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                  let candidates = [
-                      docs.appendingPathComponent("natsuk1_pairing.plist"),
-                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing"),
-                      docs.appendingPathComponent("pairingFile.plist"),
-                  ]
-                  for url in candidates {
-                      if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
-                  }
-                  if let custom = PairingController.customPairingFilePath, fm.fileExists(atPath: custom) {
-                      try? fm.removeItem(atPath: custom)
-                  }
-                  PairingController.customPairingFilePath = nil
-                  if let files = try? fm.contentsOfDirectory(atPath: docs.path) {
-                      for f in files {
-                          guard f.hasSuffix(".plist") || f.hasSuffix(".mobilepairing") || f.hasSuffix(".mobilepair") else { continue }
-                          try? fm.removeItem(at: docs.appendingPathComponent(f))
-                      }
-                  }
-                  UserDefaults.standard.removeObject(forKey: "natsuk1PairingHostAltIRK")
-                  UserDefaults.standard.removeObject(forKey: "natsuk1PairingPath")
-                  setState(.idle)
-                  setStatus("")
-                  setPIN(nil)
-              }
-
-              func runExploit() {
-                  let pairingPath = pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: pairingPath) else {
-                      setState(.done(ok: false, message: "No pairing file"))
-                      return
-                  }
-                  setState(.running)
-                  DispatchQueue.main.async {
-                      self.loggedLines.removeAll()
-                      self.exploitLog = []
-                  }
-                  let t = target
-                  let bridge = self
-                  bridge.appendLog("[exploit] path=\(pairingPath) target=\(t)")
-                  Task.detached {
-                      var outJson: UnsafeMutablePointer<CChar>? = nil
-                      var outError: UnsafeMutablePointer<CChar>? = nil
-                      let rc: Int32 = pairingPath.withCString { pc in
-                          t.withCString { tc in
-                              al_exploit_run(pc, tc, nil, nil, &outJson, &outError)
-                          }
-                      }
-                      let jsonStr = outJson.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-                      let errStr = outError.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-                      if rc == 0 {
-                          let msg = jsonStr ?? "OK"
-                          bridge.appendLog("[exploit] ok: \(msg)")
-                          bridge.setState(.done(ok: true, message: msg))
-                      } else {
-                          let msg = errStr ?? "rc=\(rc)"
-                          bridge.appendLog("[exploit] fail: \(msg)")
-                          bridge.setState(.done(ok: false, message: msg))
-                      }
-                  }
-              }
-
-              func cancelExploit() {
-                  appendLog("[exploit] cancel requested")
-                  setState(.done(ok: false, message: "cancelled"))
-              }
-
-              func respring() {
-                  let pairingPath = pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: pairingPath) else {
-                      appendLog("[respring] no pairing file")
-                      return
-                  }
-                  let bridge = self
-                  Task.detached {
-                      var outError: UnsafeMutablePointer<CChar>? = nil
-                      let rc: Int32 = pairingPath.withCString { pc in
-                          al_device_respring(pc, nil, nil, &outError)
-                      }
-                      let errStr = outError.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-                      if rc == 0 {
-                          bridge.appendLog("[respring] ok")
-                      } else {
-                          bridge.appendLog("[respring] rc=\(rc) \(errStr ?? "")")
-                      }
-                  }
-              }
-
-              func findContainer(bundleID: String) async -> String? {
-                  let pairingPath = pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: pairingPath) else { return nil }
-                  return await withCheckedContinuation { cont in
-                      DispatchQueue.global(qos: .userInitiated).async {
-                          var outContainer: UnsafeMutablePointer<CChar>? = nil
-                          var outError: UnsafeMutablePointer<CChar>? = nil
-                          let rc: Int32 = pairingPath.withCString { pc in
-                              bundleID.withCString { bc in
-                                  al_find_app_container(pc, bc, nil, nil, &outContainer, &outError)
-                              }
-                          }
-                          let containerStr = outContainer.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-                          if let p = outError { al_string_free(p) }
-                          if rc == 0, let c = containerStr { cont.resume(returning: c) }
-                          else { cont.resume(returning: nil) }
-                      }
-                  }
-              }
-          }
-          SWIFT_EOF
-
-      - name: Write CarrierLab sources
+      - name: Write CarrierLabBridge
         run: |
           set -euo pipefail
           mkdir -p natsuk1/CarrierLab
@@ -395,6 +184,7 @@ jobs:
                   case ok
                   case noVPN
                   case noPairing
+                  case pairingRPPOnly
                   case pairingInvalid
                   case ffiFailed(String)
               }
@@ -408,6 +198,7 @@ jobs:
                       case .ok: return "ready"
                       case .noVPN: return "No loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
                       case .noPairing: return "No pairing file. Open Tools / Airlift and run Start Pairing."
+                      case .pairingRPPOnly: return "Pairing file is RPPairing-only. AirliftFFI needs merged lockdown+RPPairing with DeviceCertificate."
                       case .pairingInvalid: return detail
                       case .ffiFailed(let s): return s
                       }
@@ -416,6 +207,7 @@ jobs:
 
               private let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
               private let bundleLinks = "/var/mobile/Library/Carrier Bundles"
+              private let expectedLockdownKeys = ["DeviceCertificate", "HostCertificate", "RootCertificate", "HostID", "SystemBUID"]
 
               func carrierRootPath() -> String { carrierRoot }
               func bundleLinksPath() -> String { bundleLinks }
@@ -423,7 +215,6 @@ jobs:
               private func findPairingFile() -> String? {
                   let fm = FileManager.default
                   let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-
                   let candidates = [
                       docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing"),
                       docs.appendingPathComponent("natsuk1_pairing.plist"),
@@ -435,13 +226,11 @@ jobs:
                           if size > 0 { return url.path }
                       }
                   }
-
                   let controller = PairingController.pairingFilePath()
                   if fm.fileExists(atPath: controller) {
                       let size = (try? fm.attributesOfItem(atPath: controller)[.size] as? Int) ?? 0
                       if size > 0 { return controller }
                   }
-
                   if let e = try? fm.contentsOfDirectory(atPath: docs.path) {
                       for f in e where f.hasSuffix(".plist") || f.hasSuffix(".mobilepairing") || f.hasSuffix(".mobilepair") {
                           let p = docs.appendingPathComponent(f).path
@@ -449,7 +238,6 @@ jobs:
                           if size > 100 { return p }
                       }
                   }
-
                   let nested = docs.appendingPathComponent("Data/Application")
                   if let e = try? fm.contentsOfDirectory(atPath: nested.path) {
                       for sub in e {
@@ -460,25 +248,27 @@ jobs:
                           }
                       }
                   }
-
                   return nil
               }
 
-              private func validatePairingFile(_ path: String) -> (Bool, String) {
+              private func validatePairingFile(_ path: String) -> (Bool, String, Bool) {
                   let fm = FileManager.default
-                  guard fm.fileExists(atPath: path) else { return (false, "missing") }
+                  guard fm.fileExists(atPath: path) else { return (false, "missing", false) }
                   let attrs = try? fm.attributesOfItem(atPath: path)
                   let size = (attrs?[.size] as? Int) ?? 0
-                  if size < 50 { return (false, "Pairing file too small (\(size) bytes).") }
+                  if size < 50 { return (false, "Pairing file too small (\(size) bytes).", false) }
                   guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
-                      return (false, "Pairing file unreadable.")
+                      return (false, "Pairing file unreadable.", false)
                   }
                   guard let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
                         let dict = obj as? [String: Any] else {
-                      return (false, "Pairing file not a plist (\(size) bytes).")
+                      return (false, "Pairing file not a plist (\(size) bytes).", false)
                   }
-                  if dict.isEmpty { return (false, "Pairing plist empty.") }
-                  return (true, "Pairing ok (\(size) bytes, \(dict.count) keys)")
+                  if dict.isEmpty { return (false, "Pairing plist empty.", false) }
+                  var lockdownCount = 0
+                  for k in expectedLockdownKeys where dict[k] != nil { lockdownCount += 1 }
+                  let hasLockdown = lockdownCount >= 3
+                  return (true, "Pairing ok (\(size) bytes, \(dict.count) keys, lockdown=\(lockdownCount))", hasLockdown)
               }
 
               func probe() -> ProbeResult {
@@ -486,9 +276,10 @@ jobs:
                   guard let pairing = findPairingFile() else {
                       return ProbeResult(state: .noPairing, detail: "missing")
                   }
-                  let (pairOk, pairMsg) = validatePairingFile(pairing)
-                  if !pairOk { return ProbeResult(state: .pairingInvalid, detail: pairMsg) }
-                  return ProbeResult(state: .ok, detail: pairMsg)
+                  let (ok, msg, hasLockdown) = validatePairingFile(pairing)
+                  if !ok { return ProbeResult(state: .pairingInvalid, detail: msg) }
+                  if !hasLockdown { return ProbeResult(state: .pairingRPPOnly, detail: msg) }
+                  return ProbeResult(state: .ok, detail: msg)
               }
 
               func writeFile(source: String, target: String) -> ProbeResult {
@@ -516,6 +307,10 @@ jobs:
               }
           }
           SWIFT_EOF
+
+      - name: Write CarrierLabState
+        run: |
+          set -euo pipefail
           cat > natsuk1/CarrierLab/CarrierLabState.swift <<'SWIFT_EOF'
           import Foundation
           import Combine
@@ -618,6 +413,10 @@ jobs:
               func rootURL() -> URL { root }
           }
           SWIFT_EOF
+
+      - name: Write CarrierLabInstaller
+        run: |
+          set -euo pipefail
           cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'SWIFT_EOF'
           import Foundation
 
@@ -666,6 +465,8 @@ jobs:
                   guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
                       return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"), detail: "missing")
                   }
+                  let pre = bridge.probe()
+                  guard pre.ok else { return pre }
                   let s = CarrierLabState.Session(
                       status: .placing,
                       startedAt: Date(),
@@ -718,6 +519,10 @@ jobs:
               }
           }
           SWIFT_EOF
+
+      - name: Write CarrierLabView
+        run: |
+          set -euo pipefail
           cat > natsuk1/CarrierLab/CarrierLabView.swift <<'SWIFT_EOF'
           import SwiftUI
 
@@ -781,6 +586,9 @@ jobs:
                               Text("CarrierLab never creates a pairing file. Open Tools / Airlift, run Start Pairing, then return here.")
                                   .font(.caption)
                                   .foregroundStyle(.secondary)
+                              Text("If Airlift works but CarrierLab says RPPairing-only, you need a merged lockdown+RPPairing file with DeviceCertificate. Generate it via pymobiledevice3 remote pair on Mac.")
+                                  .font(.caption2)
+                                  .foregroundStyle(.orange)
                           }
                       }
                   }
@@ -930,502 +738,6 @@ jobs:
           }
           SWIFT_EOF
 
-      - name: Write Views
-        run: |
-          set -euo pipefail
-          cat > natsuk1/Views/AirliftView.swift <<'SWIFT_EOF'
-          import SwiftUI
-          import UIKit
-          import Combine
-
-          struct AirliftView: View {
-              @EnvironmentObject var airlift: AirliftBridge
-              @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()
-              @State private var tunnelIP: String? = NetworkStatus.tunnelIP()
-              @State private var deviceIP: String? = NetworkStatus.deviceIP()
-              @State private var copied = false
-              @State private var pairedTick = 0
-
-              private let ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
-
-              var body: some View {
-                  List {
-                      statusSection
-                      sessionSection
-                      pairingStatusSection
-                      pairingButtonsSection
-                      targetSection
-                      exploitSection
-                      logSection
-                      logActionsSection
-                  }
-                  .listStyle(.insetGrouped)
-                  .navigationTitle("Airlift")
-                  .navigationBarTitleDisplayMode(.inline)
-                  .onAppear { refresh(); pairedTick &+= 1 }
-                  .onReceive(ticker) { _ in refresh() }
-                  .onChange(of: airlift.state) { _, _ in pairedTick &+= 1 }
-                  .refreshable { refresh(); pairedTick &+= 1 }
-              }
-
-              private var statusSection: some View {
-                  Section {
-                      HStack(spacing: 12) {
-                          Image(systemName: loopbackVPNUp ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                              .font(.system(size: 22))
-                              .foregroundStyle(loopbackVPNUp ? .green : .orange)
-                              .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.45), radius: 3)
-                          VStack(alignment: .leading, spacing: 3) {
-                              Text("LocalDevVPN")
-                              Text(loopbackVPNUp ? "Connected" : "Not connected")
-                                  .font(.subheadline)
-                                  .foregroundStyle(loopbackVPNUp ? .green : .orange)
-                                  .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.45), radius: 3)
-                          }
-                          Spacer()
-                      }
-                      .padding(.vertical, 4)
-                  } header: { Label("VPN", systemImage: "shield.lefthalf.filled") }
-              }
-
-              private var sessionSection: some View {
-                  Section {
-                      HStack {
-                          Text("Tunnel IP")
-                          Spacer()
-                          Text(tunnelIP ?? "\u{2014}")
-                              .font(.system(.body, design: .monospaced))
-                              .foregroundStyle(tunnelIP != nil ? .green : .secondary)
-                              .shadow(color: tunnelIP != nil ? Color.green.opacity(0.45) : Color.clear, radius: 3)
-                      }
-                      HStack {
-                          Text("Device IP")
-                          Spacer()
-                          Text(deviceIP ?? "\u{2014}")
-                              .font(.system(.body, design: .monospaced))
-                              .foregroundStyle(deviceIP != nil ? .green : .secondary)
-                              .shadow(color: deviceIP != nil ? Color.green.opacity(0.45) : Color.clear, radius: 3)
-                      }
-                  } header: { Label("Session details", systemImage: "network") }
-              }
-
-              private var pairingStatusSection: some View {
-                  Section {
-                      if let pin = airlift.pairPIN {
-                          pinCard(pin: pin)
-                      } else {
-                          HStack(spacing: 12) {
-                              Image(systemName: pairingIcon)
-                                  .font(.system(size: 22))
-                                  .foregroundStyle(pairingColor)
-                              VStack(alignment: .leading, spacing: 3) {
-                                  Text(pairingTitle)
-                                  Text(pairingSubtitle)
-                                      .font(.subheadline)
-                                      .foregroundStyle(pairingColor)
-                                      .shadow(color: pairingColor.opacity(0.45), radius: 3)
-                                      .lineLimit(3)
-                              }
-                              Spacer()
-                          }
-                          .padding(.vertical, 4)
-                      }
-                  } header: { Label("Pairing", systemImage: "link.circle") }
-              }
-
-              @ViewBuilder
-              private func pinCard(pin: String) -> some View {
-                  VStack(alignment: .leading, spacing: 14) {
-                      HStack(spacing: 6) {
-                          Image(systemName: "lock.shield.fill")
-                              .foregroundStyle(.orange)
-                              .shadow(color: Color.orange.opacity(0.45), radius: 3)
-                          Text("Enter this PIN in Settings")
-                              .font(.footnote)
-                              .foregroundStyle(.secondary)
-                      }
-                      HStack(spacing: 10) {
-                          ForEach(Array(pin.enumerated()), id: \.offset) { _, ch in
-                              Text(String(ch))
-                                  .font(.system(size: 32, weight: .semibold, design: .rounded))
-                                  .foregroundStyle(.orange)
-                                  .shadow(color: Color.orange.opacity(0.45), radius: 3)
-                                  .frame(width: 44, height: 56)
-                                  .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                          }
-                          Spacer()
-                      }
-                      Button {
-                          if let url = URL(string: UIApplication.openSettingsURLString) {
-                              UIApplication.shared.open(url)
-                          }
-                      } label: {
-                          Text("Open Settings").frame(maxWidth: .infinity)
-                      }
-                      .buttonStyle(.borderedProminent)
-                      .tint(.orange)
-                      .controlSize(.large)
-                      .shadow(color: Color.orange.opacity(0.45), radius: 3)
-                      Text("Privacy & Security - Developer Mode - Pair with natsuk1")
-                          .font(.caption2)
-                          .foregroundStyle(.secondary)
-                  }
-                  .padding(.vertical, 6)
-              }
-
-              private var pairingButtonsSection: some View {
-                  Section {
-                      Button { airlift.runPairing() } label: {
-                          Text(isPaired ? "Already Paired" : "Start Pairing")
-                      }
-                      .disabled(isPairing || isPaired)
-                      Button(role: .destructive) { airlift.cancelPairing() } label: {
-                          Text("Cancel Pairing")
-                      }
-                      .disabled(!isPairing)
-                      Button(role: .destructive) { airlift.deletePairing(); pairedTick &+= 1 } label: {
-                          Text("Delete Pairing")
-                      }
-                      .disabled(!isPaired)
-                  }
-              }
-
-              private var targetSection: some View {
-                  Section {
-                      HStack {
-                          Text("Target")
-                          Spacer()
-                          TextField("/var/mobile/Library/SpringBoard", text: Binding(
-                              get: { airlift.target }, set: { airlift.target = $0 }))
-                              .font(.system(.footnote, design: .monospaced))
-                              .multilineTextAlignment(.trailing)
-                              .autocorrectionDisabled()
-                              .textInputAutocapitalization(.never)
-                      }
-                  } header: { Label("Target", systemImage: "scope") }
-              }
-
-              private var exploitSection: some View {
-                  Section {
-                      Button { airlift.runExploit() } label: {
-                          HStack {
-                              Text("Run Exploit")
-                              Spacer()
-                              if airlift.state == .running { ProgressView() }
-                          }
-                      }
-                      .disabled(airlift.state == .running || !loopbackVPNUp || !isPaired)
-                      Button(role: .destructive) { airlift.cancelExploit() } label: {
-                          Text("Cancel Exploit")
-                      }
-                      .disabled(airlift.state != .running)
-                  } header: { Label("Exploit", systemImage: "cpu") }
-              }
-
-              @ViewBuilder
-              private var logSection: some View {
-                  if !airlift.exploitLog.isEmpty {
-                      Section {
-                          ScrollView {
-                              Text(airlift.exploitLog.joined(separator: "\n"))
-                                  .font(.system(size: 10, design: .monospaced))
-                                  .frame(maxWidth: .infinity, alignment: .leading)
-                          }
-                          .frame(minHeight: 200, maxHeight: 400)
-                      } header: { Label("Log", systemImage: "terminal") }
-                  }
-              }
-
-              @ViewBuilder
-              private var logActionsSection: some View {
-                  if !airlift.exploitLog.isEmpty {
-                      Section {
-                          Button {
-                              UIPasteboard.general.string = airlift.exploitLog.joined(separator: "\n")
-                              copied = true
-                              DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
-                          } label: {
-                              Text(copied ? "Copied" : "Copy All")
-                          }
-                          Button(role: .destructive) { airlift.clearLog() } label: {
-                              Text("Clear")
-                          }
-                      } header: { Label("Log Actions", systemImage: "document.on.document") }
-                  }
-              }
-
-              private func refresh() {
-                  let vpn = NetworkStatus.loopbackVPNUp()
-                  let tun = NetworkStatus.tunnelIP()
-                  let dev = NetworkStatus.deviceIP()
-                  if loopbackVPNUp != vpn { loopbackVPNUp = vpn }
-                  if tunnelIP != tun { tunnelIP = tun }
-                  if deviceIP != dev { deviceIP = dev }
-              }
-
-              private var isPairing: Bool {
-                  if case .pairing = airlift.state { return true }
-                  return false
-              }
-
-              private var isPaired: Bool {
-                  _ = pairedTick
-                  return airlift.hasPairing()
-              }
-
-              private var pairingColor: Color {
-                  if isPaired { return .green }
-                  if isPairing { return .orange }
-                  if case .done(false, _) = airlift.state { return .red }
-                  return .secondary
-              }
-
-              private var pairingIcon: String {
-                  if isPaired { return "checkmark.circle.fill" }
-                  if isPairing { return "link.circle.fill" }
-                  if case .done(false, _) = airlift.state { return "xmark.circle.fill" }
-                  return "link.circle"
-              }
-
-              private var pairingTitle: String {
-                  if isPaired { return "Paired" }
-                  if isPairing { return "Pairing" }
-                  if case .done(false, _) = airlift.state { return "Failed" }
-                  return "Not Paired"
-              }
-
-              private var pairingSubtitle: String {
-                  if isPaired { return "Credentials saved" }
-                  if isPairing {
-                      return airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus
-                  }
-                  if case .done(false, let msg) = airlift.state { return msg }
-                  return "Open Settings to pair"
-              }
-          }
-          SWIFT_EOF
-          cat > natsuk1/Views/DeviceInfoView.swift <<'SWIFT_EOF'
-          import SwiftUI
-          import UIKit
-
-          struct DeviceInfoView: View {
-              var body: some View {
-                  List {
-                      Section {
-                          row("Model", DeviceName.friendly())
-                          row("Identifier", machineID())
-                          row("Chip", DeviceName.chip())
-                      } header: { Label("Hardware", systemImage: "cpu") }
-
-                      Section {
-                          row("iOS", sysctlString("kern.osproductversion"))
-                          row("Build", sysctlString("kern.osversion"))
-                          row("Architecture", arch())
-                      } header: { Label("Software", systemImage: "gear") }
-
-                      Section {
-                          row("RAM", ram())
-                          row("Uptime", uptime())
-                      } header: { Label("Resources", systemImage: "memorychip") }
-
-                      Section {
-                          row("Locale", localeShort())
-                          row("Region", regionShort())
-                      } header: { Label("Locale", systemImage: "globe") }
-                  }
-                  .listStyle(.insetGrouped)
-                  .navigationTitle("Device")
-                  .navigationBarTitleDisplayMode(.inline)
-              }
-
-              private func row(_ key: String, _ value: String) -> some View {
-                  HStack {
-                      Text(key)
-                      Spacer()
-                      Text(value)
-                          .font(.system(.body, design: .monospaced))
-                          .foregroundStyle(.green)
-                          .shadow(color: Color.green.opacity(0.45), radius: 3)
-                          .lineLimit(1)
-                          .truncationMode(.middle)
-                  }
-              }
-
-              private func machineID() -> String {
-                  var sysinfo = utsname(); uname(&sysinfo)
-                  return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
-                      guard let v = el.value as? Int8, v != 0 else { return id }
-                      return id + String(UnicodeScalar(UInt8(v)))
-                  }
-              }
-
-              private func sysctlString(_ name: String) -> String {
-                  var size = 0; sysctlbyname(name, nil, &size, nil, 0)
-                  var buf = [CChar](repeating: 0, count: size)
-                  sysctlbyname(name, &buf, &size, nil, 0)
-                  let bytes = buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-                  return String(decoding: bytes, as: UTF8.self)
-              }
-
-              private func ram() -> String {
-                  var size: UInt64 = 0; var len = MemoryLayout<UInt64>.size
-                  if sysctlbyname("hw.memsize", &size, &len, nil, 0) != 0 { return "unknown" }
-                  return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .memory)
-              }
-
-              private func arch() -> String {
-                  #if arch(arm64)
-                  return "arm64"
-                  #else
-                  return "unknown"
-                  #endif
-              }
-
-              private func localeShort() -> String {
-                  Locale.current.identifier.split(separator: "_").first.map(String.init)?.uppercased() ?? "—"
-              }
-
-              private func regionShort() -> String {
-                  let region = Locale.current.region?.identifier ?? ""
-                  return region.isEmpty ? "—" : region.uppercased()
-              }
-
-              private func uptime() -> String {
-                  let t = ProcessInfo.processInfo.systemUptime
-                  return "\(Int(t) / 3600)h \((Int(t) % 3600) / 60)m"
-              }
-          }
-          SWIFT_EOF
-          cat > natsuk1/Views/PathAccessView.swift <<'SWIFT_EOF'
-          import SwiftUI
-          import UIKit
-          import Darwin
-
-          struct PathAccessView: View {
-              struct PathResult: Identifiable {
-                  let id = UUID()
-                  let path: String
-                  let exists: Bool
-                  let isDirectory: Bool
-                  let readable: Bool
-                  let writable: Bool
-                  let size: Int64?
-              }
-
-              @State private var results: [PathResult] = []
-              @State private var busy = false
-
-              private let paths: [String] = [
-                  "/var/mobile",
-                  "/var/mobile/Documents",
-                  "/var/mobile/Library",
-                  "/var/mobile/Library/Preferences",
-                  "/var/mobile/Library/Caches",
-                  "/var/mobile/Library/SpringBoard",
-                  "/var/mobile/Library/SMS",
-                  "/var/mobile/Library/Safari",
-                  "/var/mobile/Containers",
-                  "/var/mobile/Containers/Data/Application",
-                  "/var/mobile/Containers/Shared/AppGroup",
-                  "/var/tmp",
-                  "/var/mobile/Media",
-              ]
-
-              var body: some View {
-                  List {
-                      Section {
-                          HStack {
-                              Text("Paths")
-                              Spacer()
-                              Text("\(results.filter { $0.exists }.count)/\(results.count)")
-                                  .font(.system(.body, design: .monospaced))
-                                  .foregroundStyle(.green)
-                                  .shadow(color: Color.green.opacity(0.45), radius: 3)
-                          }
-                          HStack {
-                              Text("Readable")
-                              Spacer()
-                              Text("\(results.filter { $0.readable }.count)")
-                                  .font(.system(.body, design: .monospaced))
-                                  .foregroundStyle(.green)
-                                  .shadow(color: Color.green.opacity(0.45), radius: 3)
-                          }
-                          HStack {
-                              Text("Writable")
-                              Spacer()
-                              Text("\(results.filter { $0.writable }.count)")
-                                  .font(.system(.body, design: .monospaced))
-                                  .foregroundStyle(.orange)
-                                  .shadow(color: Color.orange.opacity(0.45), radius: 3)
-                          }
-                          Button { scan() } label: {
-                              HStack {
-                                  Text(busy ? "Scanning..." : "Run Scan")
-                                  Spacer()
-                                  ProgressView().opacity(busy ? 1 : 0)
-                              }
-                          }.disabled(busy)
-                      } header: { Label("Summary", systemImage: "chart.bar") }
-                      Section {
-                          ForEach(results) { r in
-                              VStack(alignment: .leading, spacing: 4) {
-                                  Text(r.path)
-                                      .font(.system(.footnote, design: .monospaced))
-                                      .foregroundStyle(r.exists ? .primary : .secondary)
-                                      .lineLimit(2)
-                                  HStack(spacing: 6) {
-                                      badge(r.exists ? "exists" : "missing", color: r.exists ? .green : .red)
-                                      if r.isDirectory { badge("dir", color: .blue) }
-                                      if r.readable { badge("r", color: .green) }
-                                      if r.writable { badge("w", color: .orange) }
-                                      if let s = r.size { badge("\(s)B", color: .gray) }
-                                  }
-                              }
-                          }
-                      } header: { Label("Paths", systemImage: "folder") }
-                  }
-                  .listStyle(.insetGrouped)
-                  .navigationTitle("Path Access")
-                  .navigationBarTitleDisplayMode(.inline)
-                  .onAppear { if results.isEmpty { scan() } }
-              }
-
-              private func badge(_ text: String, color: Color) -> some View {
-                  Text(text)
-                      .font(.system(size: 9, design: .monospaced))
-                      .padding(.horizontal, 4)
-                      .padding(.vertical, 1)
-                      .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
-                      .foregroundStyle(color)
-                      .shadow(color: color.opacity(0.45), radius: 3)
-              }
-
-              private func scan() {
-                  busy = true
-                  let pathList = paths
-                  DispatchQueue.global(qos: .userInitiated).async {
-                      let fm = FileManager.default
-                      var outPaths: [PathResult] = []
-                      for p in pathList {
-                          var isDir: ObjCBool = false
-                          let exists = fm.fileExists(atPath: p, isDirectory: &isDir)
-                          let readable = fm.isReadableFile(atPath: p)
-                          let writable = fm.isWritableFile(atPath: p)
-                          var size: Int64? = nil
-                          if exists, !isDir.boolValue,
-                             let attrs = try? fm.attributesOfItem(atPath: p),
-                             let n = attrs[.size] as? NSNumber { size = n.int64Value }
-                          outPaths.append(PathResult(path: p, exists: exists, isDirectory: isDir.boolValue,
-                                                     readable: readable, writable: writable, size: size))
-                      }
-                      DispatchQueue.main.async {
-                          self.results = outPaths; self.busy = false
-                      }
-                  }
-              }
-          }
-          SWIFT_EOF
-
       - name: Append ai-hints
         run: |
           set -euo pipefail
@@ -1471,6 +783,7 @@ jobs:
           Until merged file is generated, install will fail with TunnelFailureRsdUnreachable.
           SideStore uses file name ALTPairingFile.mobiledevicepairing, not natsuk1_pairing.plist.
           Always write pairing file with ALTPairingFile.mobiledevicepairing name.
+          To generate merged file: python3 -m pymobiledevice3 remote pair on Mac.
 
           ## CARRIERLAB
 
@@ -1482,6 +795,7 @@ jobs:
           - reset clears session, does not revert the phone.
           - view auto-refreshes every 5 s silent, no log spam on silent refresh.
           - probe() checks only VPN and pairing file validity. Never call al_exploit_run from probe.
+          - probe() checks for DeviceCertificate presence. If missing, returns pairingRPPOnly state.
 
           ## UI STYLE
 
@@ -1530,7 +844,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: pairing file name ALTPairingFile, cleanup workflow, apple-style glow [skip ci]"
+            git commit -m "fix: probe detects RPPairing-only file, clear UI message, apple-style glow [skip ci]"
             git push
           fi
 
