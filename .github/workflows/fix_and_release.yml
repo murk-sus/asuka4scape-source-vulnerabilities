@@ -100,29 +100,20 @@ jobs:
           perl -i -ne 'print unless /necp\.c.*probes/i' docs/architecture.md 2>/dev/null || true
 
           if [ -f docs/ai-hints.md ] && ! grep -q 'FIX AND RELEASE WORKFLOW' docs/ai-hints.md; then
-            cat >> docs/ai-hints.md <<'AHINT'
-
-## FIX AND RELEASE WORKFLOW
-
-Single workflow `.github/workflows/fix_and_release.yml`.
-
-Rules learned the hard way:
-
-- Never put Python / heredoc / anything over 30 lines inside a `run: |` block.
-- Use short `perl -0777 -i -pe` one-liners for multi-line edits.
-- Every mutation must be idempotent.
-- Commit only if `git diff --cached --quiet` is false, and use `[skip ci]`.
-- Release notes carry exactly one `https://` link (direct IPA). Custom
-  schemes are stripped by GitHub's markdown sanitizer.
-
-Fixes applied automatically by the workflow:
-
-- NetworkStatus: drop `netmask` field and argument.
-- AirliftView: `if let pin = airlift.pairPIN` must stay intact.
-- DeviceInfoView: use `DeviceName.machineID()`.
-- `DeviceName.full()`, `OffsetsStore.activeVersion` removed as dead.
-- NECP removed entirely (closed).
-AHINT
+            printf '\n## FIX AND RELEASE WORKFLOW\n\n' >> docs/ai-hints.md
+            printf 'Single workflow `.github/workflows/fix_and_release.yml`.\n\n' >> docs/ai-hints.md
+            printf 'Rules learned the hard way:\n\n' >> docs/ai-hints.md
+            printf -- '- Never put Python or heredoc over 30 lines inside a run block.\n' >> docs/ai-hints.md
+            printf -- '- Use short perl one-liners for multi-line edits.\n' >> docs/ai-hints.md
+            printf -- '- Every mutation must be idempotent.\n' >> docs/ai-hints.md
+            printf -- '- Commit only if git diff is non-empty, and use skip ci.\n' >> docs/ai-hints.md
+            printf -- '- Release notes carry exactly one https link (direct IPA).\n\n' >> docs/ai-hints.md
+            printf 'Fixes applied automatically by the workflow:\n\n' >> docs/ai-hints.md
+            printf -- '- NetworkStatus: drop netmask field and argument.\n' >> docs/ai-hints.md
+            printf -- '- AirliftView: if let pin = airlift.pairPIN must stay intact.\n' >> docs/ai-hints.md
+            printf -- '- DeviceInfoView: use DeviceName.machineID().\n' >> docs/ai-hints.md
+            printf -- '- DeviceName.full(), OffsetsStore.activeVersion removed as dead.\n' >> docs/ai-hints.md
+            printf -- '- NECP removed entirely (closed).\n' >> docs/ai-hints.md
           fi
 
           oxipng -o max --strip safe natsuk1/Resources/Assets.xcassets/AppIcon.appiconset/1024x1024.png 2>/dev/null || true
