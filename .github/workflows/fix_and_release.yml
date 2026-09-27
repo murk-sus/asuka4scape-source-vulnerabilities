@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build:
     runs-on: macos-26
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
@@ -31,10 +31,10 @@ jobs:
             ~/Library/Caches/Homebrew
             natsuk1/External
             build
-          key: nk-v8-static
+          key: nk-v10-static
           restore-keys: |
-            nk-v8-
-            nk-v7-
+            nk-v10-
+            nk-v9-
 
       - name: Cleanup
         run: |
@@ -42,6 +42,549 @@ jobs:
           rm -f .github/workflows/fix_and_test.yml
           rm -f natsuk1/Views/SimpleList.swift
           find . -name .DS_Store -delete
+
+      - name: Write ai-think.md
+        run: |
+          cat > ai-think.md <<'AI_THINK_EOF'
+# How to Think
+
+You are working with a human researcher on low-level systems problems.
+They are technical, they move fast, they do not need basics explained.
+Every message they send is either: a question, a task, or a result dump.
+Read the message, decide which one it is, respond accordingly.
+
+## Before you answer anything
+
+Do these three things in order:
+
+1. Search the web. Use whatever search tool you have. Look for the
+   newest information on the topic — the field moves monthly. If the user
+   is asking about an API, check the current version. If about a tool,
+   check its release notes. If about a bug, check the CVE list. Cite URLs.
+
+2. Think in full. Enumerate the plausible interpretations. Pick the
+   one that matches what the user actually said, not the one that is
+   easiest to answer. If two interpretations are equally plausible, say
+   so and ask.
+
+3. Plan the answer. Decide the smallest correct response. Do not pad
+   with background the user did not ask for. Do not summarize what they
+   already know.
+
+If web search is not available in this session, say so at the very top of
+your answer. Do not pretend you searched. Do not guess.
+
+## How to read the user
+
+- Short, terse, lowercase = they are in flow. Match that rhythm. Answer
+  in one or two paragraphs, not five.
+- Long with code dump = they are stuck. Read the whole dump before
+  responding. Do not ask them to re-paste anything that is already visible.
+- Angry or frustrated = they hit an error you caused or missed. Acknowledge
+  the specific failure, do not defend. Fix it.
+- Question about state = answer with the state, not with a proposal for
+  how to get the state.
+
+## How to write code
+
+You will be writing scripts that run in constrained environments (Ghidra
+headless, Jython 2.7, CI runners, container builds). Rules that apply to
+almost every code you write:
+
+- Prefer explicit over clever. A long script with three obvious loops
+  is better than a short script with one clever generator.
+- Every external call gets a timeout. No infinite loops. No unbounded
+  recursion. No while True without a counter.
+- Every I/O gets a try/except. Files may not exist, networks may be
+  down, permissions may be wrong. Assume failure.
+- Every iteration gets a log line. The user needs to know where it
+  stopped when it stops.
+- Every script writes output to a file, and only one file. Multiple
+  output files means multiple places to look when something fails.
+- Wrap main in try/except. If main crashes, write the traceback to the
+  output file. Silent failures waste hours.
+- No string concatenation with plus. Use percent formatting or
+  format() or f-strings. The editor will mangle a quote-plus-identifier
+  into a quote-identifier and you will not see it until the parser
+  fails at runtime.
+- No hex literals at the start of tuple or list elements. If you need
+  addresses, declare named constants from decimal or hex strings first.
+
+## How to analyze results
+
+When the user pastes a dump (a log, a decompile, a script output):
+
+- Read the whole thing. Do not skim.
+- Identify what is confirmed, what is hypothesis, what is unexamined.
+- When you find a candidate primitive, immediately search for the
+  counter-evidence — the bound check, the CARRY flag, the trap. Do not
+  present a candidate without checking it first.
+- When the answer is no primitive here, say it plainly. Do not invent
+  a path forward just to have something to say.
+- When the answer is I need more data, say exactly what to run and
+  what to send back. One command, one file, one format.
+
+## How to report
+
+- Lead with the conclusion. Closed, bounded, no primitive first, then
+  the evidence.
+- Use short code blocks. Long decompiles get trimmed to the interesting
+  20 lines.
+- Mark confirmed vs unconfirmed explicitly.
+- If you found an anomaly, name it and say what would resolve it.
+- If the user's hypothesis is wrong, say so directly and cite the line
+  that contradicts it.
+
+## When to stop
+
+- After two or three attempts at the same thing, stop. Report what you
+  tried, why it failed, and what you would try next if given a different
+  resource.
+- Do not keep guessing at a syntax error. Ask for the exact failing line.
+- Do not keep tweaking a failing script if the fix is not obvious. Rewrite
+  from scratch with the constraint that broke it in mind.
+- Do not answer beyond your confidence. I do not know, here is how I
+  would find out is a valid answer.
+
+## What never to do
+
+- Never claim a fact about a specific version without checking.
+- Never invent an offset, an API name, or a function signature.
+- Never present a primitive without walking through the bound check.
+- Never ignore a search result because it contradicts what you already
+  believed. If the result is newer, the result wins.
+- Never apologize excessively. One sentence is enough. Then fix it.
+- Never write code with plus between quotes and identifiers.
+- Never put hex literals at the start of tuple or list elements.
+- Never write a script that has no timeouts.
+- Never write a script that writes to more than one output file.
+- Never submit a script without validating its syntax first.
+AI_THINK_EOF
+          echo "ai-think.md: $(wc -c < ai-think.md) bytes"
+
+      - name: Write curated ai-hints
+        run: |
+          cat > /tmp/ai-hints-curated.md <<'AI_HINTS_CURATED_EOF'
+## PROJECT IDENTITY
+
+natsuk1 — on-device iOS kernel research toolkit plus AirTraffic exploit.
+- target: iPhone14,5 (iPhone 13, A15) / iOS 27.0 / build 24A437
+- kernel: xnu-13432.2.10~2 / RELEASE_ARM64_T8110 / arm64e
+- signing: ad-hoc, empty entitlements, works on LiveContainer and SideStore
+- license: MIT, author murk-sus
+
+What it actually does:
+- pairs the iPhone as host via RPPairing on the 10.7.0.x tunnel
+- opens RSD tunnel, enumerates services (AFC, ATC, StreamingZip)
+- uploads a symlink payload via StreamingZip plus AFC to reach a target dir
+- drives AirTraffic ATC sync (Grappa token, AssetManifest, FileComplete)
+- reads back a canary through the symlink target to confirm the write
+- NECP probes for kernel info disclosure (KASLR via op 0x0D)
+- full NECP / IOKit / BSD-syscall taint analysis of the kernelcache
+
+Stack:
+- SwiftUI app: natsuk1/natsuk1.swift, Views/, Helpers/
+- C probes: natsuk1/Exploit/necp.c, nk_api.c
+- ObjC: natsuk1/Exploit/GrappaHelper.m
+- AirliftFFI stub: natsuk1/External/AirliftFFI.xcframework/ios-arm64/
+- Offsets DB: natsuk1/Offsets/
+- CI: .github/workflows/fix_and_release.yml (build) plus extract_offsets.yml (analysis)
+
+## MANDATORY BEHAVIOR
+
+For EVERY user message, before answering:
+
+1. Use web search. Search latest on:
+   - iOS 27 kernel internals, XNU changelog 2026
+   - Apple security advisories 2026
+   - blacktop/ipsw release notes and CLI syntax
+   - blacktop/symbolicator signatures availability
+   - Ghidra 12.x headless API and Jython 2.7 compatibility
+   - LiveContainer / SideStore / AltStore / TrollStore iOS 27 status
+   - SwiftUI iOS 27 regressions (List, NavigationStack, AttributeGraph)
+   - NECP / mbuf / socket / IOKit bugs 2025-2026
+   - Apple developer forums iOS 27 beta crash threads
+
+2. Use extended reasoning. Enumerate alternatives, weigh tradeoffs,
+   then commit to a concrete answer. No hedging.
+
+3. If web search is unavailable, say so explicitly at the top.
+
+4. Cite source URLs for any fact that could change.
+
+5. Never claim a version does not exist without checking.
+
+6. Never claim an API exists without checking current syntax.
+
+7. Never guess offsets. Only use values verified by Ghidra on the exact
+   kernelcache build being analyzed.
+
+## UPDATE
+
+- date: 2026-09-27
+- device: iPhone14,5 / iOS 27.0 / 24A437
+- kernel: xnu-13432.2.10~2 RELEASE_ARM64_T8110
+- signature: ad-hoc, empty entitlements
+- CI: fix_and_release.yml (build) plus extract_offsets.yml (Ghidra analysis)
+
+## NECP STATUS (iOS 27.0 / 24A437)
+
+Working:
+- op 0x03 returns 1 byte
+- op 0x04 returns 280-byte TLV
+- op 0x1A returns 280-byte TLV
+- op 0x0D returns user VA (KASLR leak, confirmed)
+
+Closed (bounded, no primitive):
+- op 0x05 copy_list returns -1
+- op 0x0C copy_parameters returns -1
+- op 0x0F copy_update returns -1
+- op 0x18 get_signed_id returns empty
+- op 0x19 set_signed_id returns -1
+- TLV overflow len=0xFFFFFFFF rejected
+- add_flow len in [0x24, 0xF0] accepted; outside returns error 0x16
+- remove_flow twice ret=0, copy_result=1 byte
+- copy_result_inner kptr count = 0
+- copy_interface idx 1..10 ret 0 no data
+
+Taint analysis verdict (kernel_rw.py v48):
+- 24 NECP sources scanned, all propagate taint (seed>0, tainted>0)
+- 649 findings total, but every depth=0 sink is bounded
+- Both deep kalloc_type sites (0xA1C6B80, 0xA3ACA70) are internal
+  packet/string parsers with CARRY4 overflow checks
+- NECP as user-facing primitive: CLOSED
+
+## IOKIT STATUS
+
+Syscall traps scanned (kernel_rw.py v49-v50):
+- iokit_user_client_trap calls FUN_fffffff00a9ad62c which is io_connect_method
+  - param_3 in [0x18, 0x800] with CARRY8 plus cap 0x800 double-check
+  - copyin to stack buffer 0x800 — bounded
+  - CLOSED
+- is_io_service_open_extended — no depth-0 sinks reachable
+
+Per-driver externalMethod dispatch tables and MIG Mach-routine handlers
+were NOT scanned. These are the remaining IOKit surface.
+
+## BSD SYSCALL STATUS
+
+Sysent parsed via PAC unwrap (v51):
+- unpacked=557/558, dup=117 (FreeBSD aliases), formula verified
+- Formula: sy_call_unwrapped = KERNEL_BASE + (raw AND 0xFFFFFFFF)
+- 300 syscalls passed narg>0 plus resolvable filter
+- 87 sources produced findings, 1116 total sink hits
+
+Syscall index anomaly: NECP cluster sits at sysent[503]/[504], not
+[501]/[502]. Either the app's NECP syscall numbers are wrong, or the
+table is offset by 2. Needs verification via a direct sysent[490..540] dump.
+
+Depth-0 copyin sites found (9 functions). Manual review of the 9:
+- FUN_fffffff00a6ceb4c — ioctl-family, cmd>>16 AND 0x1fff, kalloc before
+  validation, cap 0x1fff — CLOSED (bounded)
+- FUN_fffffff00a78d724 — recvmsg family, iovlen < 0x401 cap, kalloc for
+  iov array, copyin of iov — CLOSED (bounded)
+- FUN_fffffff00a74bf88 — ioctl-family, cap 0x1fff — CLOSED
+- FUN_fffffff00a74ea2c, FUN_fffffff00a74e884 — copyin < 0x401 / < 0xed,
+  then forward to IOKit helper 0xA8BBF38 / 0xA8BBD20 — CLOSED (both are
+  kdebug/ktrace loggers, bounded)
+- FUN_fffffff00a70e210 — cap 0x10, stack buffer only — CLOSED
+- FUN_fffffff00a78ae18, FUN_fffffff00a78a1e8 — cap 0x80 stack, or
+  call FUN_fffffff00a78a39c for larger. 78a39c — cap 0xff, kalloc equals
+  user_size, min 2 — CLOSED (bounded)
+- FUN_fffffff00a743b90 — cap 0x800, fixed 0x400 branch — CLOSED
+
+BSD syscalls as user-facing primitive: CLOSED for the shallow paths.
+Deeper paths (depth >= 2) remain unexamined individually, but the pattern
+(ioctl/recvmsg/kdebug) is consistently bounded.
+
+## WHAT A PRIMITIVE LOOKS LIKE
+
+A real kernel primitive requires ALL of:
+1. user-controlled size in a kalloc_type / kalloc_zone call
+2. no pre-validation between decode of that size and the allocation
+3. copyin / copyout / memmove with a size that does NOT match the
+   allocated size
+
+Common patterns that look like primitives but are not:
+- size decoded from ioctl cmd >> 16 AND mask, then capped at 0x1fff before alloc
+- size = user value, but if (size > CONST) return error immediately before
+- size = (user_a + user_b) * CONST with CARRY4 / CARRY8 overflow check
+- stack buffer fixed at N, size checked against N, copyin(N) — safe
+- SoftwareBreakpoint(0x5519) on the size mismatch path — this is Apple's
+  hardening trap, not a vulnerability (unless the trap is bypassable)
+
+## TAINT METHOD (kernel_rw.py approach)
+
+Sources: functions whose parameters are user-controlled (syscall handlers,
+NECP op handlers, IOKit traps).
+
+Sinks: kalloc_type, kalloc_zone, copyin, copyout, memmove, memset.
+
+Propagation:
+1. For each function, get HighFunction from DecompInterface
+2. Get parameter varnodes via hf.getLocalSymbolMap() — NOT via
+   getFunctionPrototype().getStorage(); that path gives descriptors, not
+   SSA varnodes and silently returns 0 matches
+3. Compare varnodes by key addr.toString() plus colon plus str(size) —
+   NOT by Java object identity
+4. Iterate over hf.getPcodeOps(): if any input is tainted, output is
+   tainted. Loop until no change.
+5. For each PcodeOp.CALL, resolve target via getInput(0).isAddress().
+   If target is a sink, check if the size-arg varnode is tainted. If yes,
+   record finding. Otherwise recurse into callee with tainted arg indices.
+6. Cap depth, cap worklist size, cap total time.
+
+## HOW TO WRITE GHIDRA JYTHON SCRIPTS THAT ACTUALLY RUN
+
+Follow every point. Each one cost hours to find.
+
+### String handling — never use plus between quotes and identifiers
+
+Bad:
+    log("[-] " + str(e))
+
+The editor or AI copy-paste mangles quotes. Use percent formatting:
+
+Good:
+    log("[-] %s" % e)
+
+Every log line. No exceptions.
+
+### Tuple literals — never put 0x at position 0
+
+Bad:
+    TARGETS = [
+        (0xFFFFFFF00A4E843C, "necp_client_add_flow"),
+    ]
+
+Editor inserts a quote before 0x, breaking the tuple. Use named constants:
+
+Good:
+    A_ADD_FLOW = int("FFFFFFF00A4E843C", 16)
+    TARGETS = [
+        (A_ADD_FLOW, "necp_client_add_flow"),
+    ]
+
+### Dictionary access — use get(), not bracket
+
+Bad:
+    sname, sidx = SINK_MAP[target]
+
+Use:
+    v = SINK_MAP.get(target)
+    if v is not None:
+        sname = v[0]
+        sidx = v[1]
+
+### PcodeOp address — getSeqnum().getTarget()
+
+PcodeOpAST returned by HighFunction.getPcodeOps() does NOT have
+getAddress(). Use:
+
+    pc = op.getSeqnum().getTarget().getOffset()
+
+### Function boundaries — call ensure_function for un-decompiled addresses
+
+Ghidra does not always create a function boundary at a kernel symbol's
+entry. Symptoms: getFunctionAt(addr) is None, getFunctionContaining
+returns a wrapper or None. Fix with DisassembleCommand then
+CreateFunctionCmd, or fall back to FunctionManager.createFunction.
+
+### Parameter varnodes — getLocalSymbolMap() is the only correct path
+
+Bad, returns 0 matches silently:
+    proto = hf.getFunctionPrototype()
+    storage = proto.getParam(i).getStorage()
+
+Correct:
+    lsm = hf.getLocalSymbolMap()
+    syms = lsm.getSymbols()
+    while syms.hasNext():
+        sym = syms.next()
+        if not sym.isParameter():
+            continue
+        cat = sym.getCategoryIndex()
+        hv = sym.getHighVariable()
+        for vn in hv.getInstances():
+            result.setdefault(cat, set()).add(vn_key(vn))
+
+### Varnode identity — compare by key, not by identity
+
+Bad:
+    if vn in tainted:
+
+Correct:
+    def vn_key(vn):
+        a = vn.getAddress()
+        return a.toString() + ":" + str(vn.getSize())
+
+    tainted = set()
+    tainted.add(vn_key(vn))
+    if vn_key(vn) in tainted:
+        ...
+
+### Imports — wrap Ghidra commands in try/except
+
+Some Ghidra API classes are not present in every version. If an import
+fails at module load, the entire script dies. Wrap:
+
+    try:
+        from ghidra.app.cmd.disassemble import DisassembleCommand
+        HAS_DISASM = True
+    except Exception:
+        HAS_DISASM = False
+
+### Decompiler instance — reuse one DecompInterface
+
+Bad: create a new DecompInterface on every function.
+Correct: instantiate once, cache in a module-level global.
+
+### Timeouts — always
+
+decompileFunction(f, sec, monitor) where sec is a hard cap. 30-45 sec for
+medium functions, 90 sec for 40000 plus ops functions. Without a cap, one
+pathological function hangs the whole CI job.
+
+### Crash-proof main
+
+Wrap main() in try/except, and in the except write a FATAL line plus
+traceback to the output file. This guarantees test -s result.txt passes
+even when the script dies early.
+
+### Final validation
+
+Before pushing the script to CI, run locally:
+
+    python3 -c "import ast,sys; ast.parse(open('scripts/kernel_rw.py').read()); print('ok')"
+
+If this fails, the CI step Validate scripts will fail identically.
+
+## WORKFLOW
+
+### Workflow files
+
+- fix_and_release.yml — builds IPA, signs, generates ai-hints.md, commits
+- extract_offsets.yml — runs scripts/kernel_rw.py under Ghidra headless
+
+Only these two. No fix_and_test.yml, no build_and_release.yml.
+
+### Cache strategy
+
+Separate caches for ghidra, ipsw, symbolicator, kernelcache, ghidra_project.
+Warm run 3-6 min, cold run 40-90 min. Never use hashFiles on kernelcache.
+Never delete cached dirs in cleanup.
+
+### Output conventions
+
+kernel_rw.py writes exactly ONE file: result.txt. No offsets.json, no
+primitives.json, no dump.txt. Everything goes into result.txt (diagnostics
+plus findings plus summary plus decompile of hot targets).
+
+### Ghidra headless invocation
+
+    analyzeHeadless <project_dir> <project_name> \
+      -process <kernelcache_name> -noanalysis \
+      -scriptPath <repo>/scripts \
+      -postScript kernel_rw.py
+
+-process on cached project = warm. -import = cold, only needed once.
+
+## COMMON ERRORS AND FIXES
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| SyntaxError: unterminated string literal | editor inserted quote before 0x | use int() constants |
+| SyntaxError on quote plus identifier | plus between quotes and identifier | use percent formatting |
+| SyntaxError: unmatched close paren | bracket after identifier | use get() |
+| PcodeOpAST has no attribute getAddress | wrong API | op.getSeqnum().getTarget() |
+| seed=0 on every source | getFunctionPrototype path | hf.getLocalSymbolMap() |
+| tainted=0 after seed greater than 0 | Java object identity | compare vn_key strings |
+| no func for a known symbol | no function boundary | ensure_function plus DisassembleCommand |
+| parsed unpacked: 0 | wrong PAC formula | KERNEL_BASE plus low32 |
+| Grappa rc=-5 after patch | token array collapsed | restore 10 tokens with marker |
+| SyncFailed at ATC | transient | ignore if readback succeeds |
+
+## GRAPPA / RPPAIRING CONFIRMED WORKING
+
+Pipeline (iOS 27, empty entitlements):
+- tunnel up on 10.7.0.1:49152 via raw RPPairing
+- RSD publishes around 85 services
+- AFC connects, StreamingZip extracts
+- ATC: Capabilities, InstalledAssets, AssetMetrics, SyncAllowed
+- Grappa: 84 bytes generated from static fallback
+- ReadyForSync, AssetManifest, FileComplete 3/3
+- canary readback via AFC matches
+- cleanup restores original Books.plist
+
+Do NOT collapse kAuthenticGrappaTokens to NULL. Do NOT expect host-side
+Grappa to work on iOS. Do NOT treat SyncFailed as fatal.
+
+## UI / SWIFTUI iOS 27
+
+- overlay(RespringView()) causes CA UAF and SIGSEGV. Use UIHostingController
+- List with conditional Section else Section crashes
+- scaleEffect inside if breaks ConditionalContent
+- Published mutation from Task causes race and UAF
+- RuntimeView must not show green when slide or base equal default dash
+- respring button lives only in ToolsView, not AirliftView
+
+## NEXT STEPS
+
+1. Dump sysent[490..540] to find real NECP cluster and resolve index
+   anomaly. If NECP is truly at 503/504, all earlier NECP analysis was
+   done on the wrong syscalls and must be redone.
+2. If confirmed at 503/504, rewrite necp.c constants and rerun.
+3. Scan IOKit per-driver externalMethod dispatch tables.
+4. Scan MIG Mach-routine handlers (mach_msg_trap dispatcher).
+5. If all closed statically, pivot to concurrency analysis (lock/unlock
+   pairs, refcount bugs, TOCTOU) — needs targeted manual review.
+
+Do not spend more than 2-3 attempts on the same primitive.
+
+## WHAT NOT TO DO
+
+- Do not create fix_and_test.yml or build_and_release.yml
+- Do not use hashFiles on kernelcache in cache keys
+- Do not run blind syscall sweeps
+- Do not call proc_info, csops, task_info sweep, mach_port_names with
+  count greater than 32 (AMFI kills on ad-hoc)
+- Do not use non-empty entitlements
+- Do not mutate Published from Task
+- Do not put RespringView in the SwiftUI tree
+- Do not commit natsuk1.xcodeproj
+- Do not trust offsets without Ghidra verification
+- Do not answer without web search first
+- Do not delete ghidra / ghidra_project / kernelcache / symbolicator
+  in cleanup
+- Do not collapse the Grappa token array to NULL
+- Do not use plus between string literals and identifiers in Jython
+- Do not use bracket access on dict or list in assignment position
+- Do not put 0x literals at position 0 of a tuple
+AI_HINTS_CURATED_EOF
+          echo "curated hints: $(wc -c < /tmp/ai-hints-curated.md) bytes"
+
+      - name: Merge curated into ai-hints.md
+        run: |
+          python3 - <<'PYEOF'
+          import io, os
+          new = io.open("/tmp/ai-hints-curated.md", encoding="utf-8").read().rstrip()
+          ms = "<!-- AI-HINTS-CURATED-START -->"
+          me = "<!-- AI-HINTS-CURATED-END -->"
+          block = ms + "\n" + new + "\n" + me
+          path = "ai-hints.md"
+          if os.path.exists(path):
+              s = io.open(path, encoding="utf-8").read()
+              if ms in s and me in s:
+                  i = s.index(ms)
+                  j = s.index(me) + len(me)
+                  s = s[:i] + block + s[j:]
+              else:
+                  s = s.rstrip() + "\n\n" + block + "\n"
+          else:
+              s = block + "\n"
+          io.open(path, "w", encoding="utf-8").write(s)
+          print("ai-hints.md: %d bytes" % len(s.encode("utf-8")))
+          PYEOF
 
       - name: Vendor AirliftFFI
         run: |
@@ -182,38 +725,6 @@ jobs:
                   mid = mid + '    "' + t + '",\n'
               mid = mid + "    NULL\n"
               return s[:i+len(k)] + mid + s[j:]
-          def grappa_diag(s):
-              if "nk-grappa-diag" in s: return s
-              s = s.replace(
-                  "    @autoreleasepool {\n        @try {",
-                  "    @autoreleasepool {\n"
-                  "        NSLog(@\"[nk-grappa-diag] in v=%u dt=%u pv=%u\",\n"
-                  "              (unsigned)in_version, (unsigned)in_device_type,\n"
-                  "              (unsigned)in_protocol_version);\n"
-                  "        @try {", 1)
-              s = s.replace(
-                  "                clientRequestData = nil;\n            }\n        }",
-                  "                NSLog(@\"[nk-grappa-diag] host est err=%@ len=%lu\",\n"
-                  "                      err, (unsigned long)[clientRequestData length]);\n"
-                  "                clientRequestData = nil;\n            }\n        }", 1)
-              s = s.replace(
-                  "                    if (!clientRequestData) {\n"
-                  "                        clientRequestData = candidate;\n"
-                  "                    }",
-                  "                    NSLog(@\"[nk-grappa-diag] static[%d] devErr=%@ resp=%lu\",\n"
-                  "                          i, devErr, (unsigned long)[respData length]);\n"
-                  "                    if (!clientRequestData) {\n"
-                  "                        clientRequestData = candidate;\n"
-                  "                    }", 1)
-              s = s.replace(
-                  "                    return -5;",
-                  "                    NSLog(@\"[nk-grappa-diag] giveup-5\");\n"
-                  "                    return -5;", 1)
-              s = s.replace(
-                  "            return 0; // Success!",
-                  "            NSLog(@\"[nk-grappa-diag] success len=%lu\", (unsigned long)len);\n"
-                  "            return 0; // Success!", 1)
-              return s
           def necp(s):
               if "Do not mask" in s: return s
               return s.replace("        size_t sz = test_sizes[i] & 0xFFFF;\n", "        size_t sz = (size_t)test_sizes[i];\n", 1)
@@ -225,7 +736,6 @@ jobs:
           P("natsuk1/Helpers/AirliftBridge.swift", remove_respring_gate)
           P("natsuk1/Views/SettingsView.swift", remove_settings_toggle)
           P("natsuk1/Exploit/GrappaHelper.m", grappa_restore)
-          P("natsuk1/Exploit/GrappaHelper.m", grappa_diag)
           P("natsuk1/Exploit/necp.c", necp)
           P("natsuk1/Helpers/OffsetsStore.swift", offsets)
           PY
@@ -393,381 +903,7 @@ jobs:
           w("    }")
           w("}")
           io.open("natsuk1/Views/RuntimeView.swift", "w").write("\n".join(e) + "\n")
-
-          a = []
-          w = a.append
-          w("import SwiftUI")
-          w("import UIKit")
-          w("import Combine")
-          w("")
-          w("struct AirliftView: View {")
-          w("    @EnvironmentObject var airlift: AirliftBridge")
-          w("    @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()")
-          w("    @State private var tunnelIP: String? = NetworkStatus.tunnelIP()")
-          w("    @State private var deviceIP: String? = NetworkStatus.deviceIP()")
-          w("    @State private var copied = false")
-          w("    @State private var pairedTick = 0")
-          w("")
-          w("    private let ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()")
-          w("")
-          w("    var body: some View {")
-          w("        List {")
-          w("            statusSection")
-          w("            sessionSection")
-          w("            pairingStatusSection")
-          w("            pairingButtonsSection")
-          w("            targetSection")
-          w("            exploitSection")
-          w("            logSection")
-          w("            logActionsSection")
-          w("        }")
-          w("        .listStyle(.insetGrouped)")
-          w("        .navigationTitle(\"Airlift\")")
-          w("        .navigationBarTitleDisplayMode(.inline)")
-          w("        .onAppear { refresh(); pairedTick &+= 1 }")
-          w("        .onReceive(ticker) { _ in refresh() }")
-          w("        .onChange(of: airlift.state) { _, _ in pairedTick &+= 1 }")
-          w("        .refreshable { refresh(); pairedTick &+= 1 }")
-          w("    }")
-          w("")
-          w("    private var statusSection: some View {")
-          w("        Section {")
-          w("            HStack(spacing: 16) {")
-          w("                ZStack {")
-          w("                    Circle()")
-          w("                        .fill(loopbackVPNUp ? Color.green.opacity(0.15) : Color.orange.opacity(0.15))")
-          w("                        .frame(width: 72, height: 72)")
-          w("                    Image(systemName: loopbackVPNUp ? \"checkmark.shield.fill\" : \"exclamationmark.shield.fill\")")
-          w("                        .font(.system(size: 32, weight: .semibold))")
-          w("                        .foregroundStyle(loopbackVPNUp ? .green : .orange)")
-          w("                }")
-          w("                VStack(alignment: .leading, spacing: 4) {")
-          w("                    Text(\"LocalDevVPN\").font(.headline)")
-          w("                    Text(loopbackVPNUp ? \"Connected\" : \"Not connected\")")
-          w("                        .font(.subheadline)")
-          w("                        .foregroundStyle(loopbackVPNUp ? .green : .orange)")
-          w("                    if let t = tunnelIP {")
-          w("                        Text(\"Tunnel \\(t)\")")
-          w("                            .font(.system(size: 12, design: .monospaced))")
-          w("                            .foregroundStyle(.secondary)")
-          w("                    }")
-          w("                }")
-          w("                Spacer()")
-          w("            }")
-          w("            .padding(.vertical, 8)")
-          w("        } header: {")
-          w("            Label(\"Current status\", systemImage: \"shield.lefthalf.filled\")")
-          w("        }")
-          w("    }")
-          w("")
-          w("    private var sessionSection: some View {")
-          w("        Section {")
-          w("            HStack {")
-          w("                Text(\"Tunnel IP\")")
-          w("                Spacer()")
-          w("                Text(tunnelIP ?? \"\\u{2014}\")")
-          w("                    .font(.system(size: 12, design: .monospaced))")
-          w("                    .foregroundStyle(tunnelIP != nil ? .green : .secondary)")
-          w("                    .shadow(color: tunnelIP != nil ? Color.green.opacity(0.55) : Color.clear, radius: 3)")
-          w("            }")
-          w("            HStack {")
-          w("                Text(\"Device IP\")")
-          w("                Spacer()")
-          w("                Text(deviceIP ?? \"\\u{2014}\")")
-          w("                    .font(.system(size: 12, design: .monospaced))")
-          w("                    .foregroundStyle(deviceIP != nil ? .green : .secondary)")
-          w("                    .shadow(color: deviceIP != nil ? Color.green.opacity(0.55) : Color.clear, radius: 3)")
-          w("            }")
-          w("        } header: {")
-          w("            Label(\"Session details\", systemImage: \"network\")")
-          w("        }")
-          w("    }")
-          w("")
-          w("    private var pairingStatusSection: some View {")
-          w("        Section {")
-          w("            HStack(spacing: 16) {")
-          w("                ZStack {")
-          w("                    Circle()")
-          w("                        .fill(pairingColor.opacity(0.15))")
-          w("                        .frame(width: 72, height: 72)")
-          w("                    Image(systemName: pairingIcon)")
-          w("                        .font(.system(size: 32, weight: .semibold))")
-          w("                        .foregroundStyle(pairingColor)")
-          w("                }")
-          w("                VStack(alignment: .leading, spacing: 4) {")
-          w("                    Text(pairingTitle).font(.headline)")
-          w("                    Text(pairingSubtitle)")
-          w("                        .font(.subheadline)")
-          w("                        .foregroundStyle(pairingColor)")
-          w("                        .lineLimit(2)")
-          w("                    if let pin = airlift.pairPIN {")
-          w("                        Text(\"PIN \\(pin)\")")
-          w("                            .font(.system(size: 20, weight: .black, design: .monospaced))")
-          w("                            .foregroundStyle(.orange)")
-          w("                    }")
-          w("                }")
-          w("                Spacer()")
-          w("            }")
-          w("            .padding(.vertical, 8)")
-          w("        } header: {")
-          w("            Label(\"Pairing\", systemImage: \"link.circle\")")
-          w("        }")
-          w("    }")
-          w("")
-          w("    private var pairingButtonsSection: some View {")
-          w("        Section {")
-          w("            if let pin = airlift.pairPIN {")
-          w("                Button {")
-          w("                    if let url = URL(string: UIApplication.openSettingsURLString) {")
-          w("                        UIApplication.shared.open(url)")
-          w("                    }")
-          w("                } label: {")
-          w("                    Text(\"Open Settings\").frame(maxWidth: .infinity)")
-          w("                }")
-          w("                .buttonStyle(.borderedProminent).tint(.orange)")
-          w("            }")
-          w("            Button { airlift.runPairing() } label: {")
-          w("                HStack {")
-          w("                    Text(isPaired ? \"Already Paired\" : \"Start Pairing\")")
-          w("                    Spacer()")
-          w("                    if isPaired {")
-          w("                        Image(systemName: \"checkmark.circle.fill\").foregroundStyle(.green)")
-          w("                    }")
-          w("                }")
-          w("            }")
-          w("            .disabled(isPairing || isPaired)")
-          w("            Button(role: .destructive) { airlift.cancelPairing() } label: {")
-          w("                Text(\"Cancel Pairing\")")
-          w("            }")
-          w("            .disabled(!isPairing)")
-          w("            Button(role: .destructive) { airlift.deletePairing(); pairedTick &+= 1 } label: {")
-          w("                Text(\"Delete Pairing\")")
-          w("            }")
-          w("            .disabled(!isPaired)")
-          w("        }")
-          w("    }")
-          w("")
-          w("    private var targetSection: some View {")
-          w("        Section {")
-          w("            HStack {")
-          w("                Text(\"Target\")")
-          w("                Spacer()")
-          w("                TextField(\"/var/mobile/Library/SpringBoard\", text: Binding(")
-          w("                    get: { airlift.target }, set: { airlift.target = $0 }))")
-          w("                    .font(.system(size: 12, design: .monospaced))")
-          w("                    .multilineTextAlignment(.trailing)")
-          w("                    .autocorrectionDisabled()")
-          w("                    .textInputAutocapitalization(.never)")
-          w("            }")
-          w("        } header: {")
-          w("            Label(\"Target\", systemImage: \"scope\")")
-          w("        }")
-          w("    }")
-          w("")
-          w("    private var exploitSection: some View {")
-          w("        Section {")
-          w("            Button { airlift.runExploit() } label: {")
-          w("                Text(\"Run Exploit\")")
-          w("            }")
-          w("            .disabled(airlift.state == .running || !loopbackVPNUp || !isPaired)")
-          w("            Button(role: .destructive) { airlift.cancelExploit() } label: {")
-          w("                Text(\"Cancel Exploit\")")
-          w("            }")
-          w("            .disabled(airlift.state != .running)")
-          w("        } header: {")
-          w("            Label(\"Exploit\", systemImage: \"cpu\")")
-          w("        }")
-          w("    }")
-          w("")
-          w("    private var logSection: some View {")
-          w("        Section {")
-          w("            LogTerminal(text: airlift.exploitLog.isEmpty")
-          w("                        ? \"No output yet.\"")
-          w("                        : airlift.exploitLog.joined(separator: \"\\n\"))")
-          w("        } header: {")
-          w("            Label(\"Log\", systemImage: \"terminal\")")
-          w("        }")
-          w("    }")
-          w("")
-          w("    private var logActionsSection: some View {")
-          w("        Section {")
-          w("            Button {")
-          w("                UIPasteboard.general.string = airlift.exploitLog.joined(separator: \"\\n\")")
-          w("                copied = true")
-          w("                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }")
-          w("            } label: {")
-          w("                Text(copied ? \"Copied!\" : \"Copy All\")")
-          w("            }")
-          w("            .disabled(airlift.exploitLog.isEmpty)")
-          w("            Button(role: .destructive) { airlift.clearLog() } label: {")
-          w("                Text(\"Clear\")")
-          w("            }")
-          w("            .disabled(airlift.exploitLog.isEmpty)")
-          w("        } header: {")
-          w("            Label(\"Log Actions\", systemImage: \"document.on.document\")")
-          w("        }")
-          w("    }")
-          w("")
-          w("    private func refresh() {")
-          w("        let vpn = NetworkStatus.loopbackVPNUp()")
-          w("        let tun = NetworkStatus.tunnelIP()")
-          w("        let dev = NetworkStatus.deviceIP()")
-          w("        if loopbackVPNUp != vpn { loopbackVPNUp = vpn }")
-          w("        if tunnelIP != tun { tunnelIP = tun }")
-          w("        if deviceIP != dev { deviceIP = dev }")
-          w("    }")
-          w("")
-          w("    private var isPairing: Bool {")
-          w("        if case .pairing = airlift.state { return true }")
-          w("        return false")
-          w("    }")
-          w("")
-          w("    private var isPaired: Bool {")
-          w("        _ = pairedTick")
-          w("        return airlift.hasPairing()")
-          w("    }")
-          w("")
-          w("    private var pairingColor: Color {")
-          w("        if isPaired { return .green }")
-          w("        if isPairing { return .orange }")
-          w("        if case .done(false, _) = airlift.state { return .red }")
-          w("        return .secondary")
-          w("    }")
-          w("")
-          w("    private var pairingIcon: String {")
-          w("        if isPaired { return \"checkmark.seal.fill\" }")
-          w("        if isPairing { return \"link.circle.fill\" }")
-          w("        if case .done(false, _) = airlift.state { return \"xmark.seal.fill\" }")
-          w("        return \"link.circle\"")
-          w("    }")
-          w("")
-          w("    private var pairingTitle: String {")
-          w("        if isPaired { return \"Paired\" }")
-          w("        if isPairing { return \"Pairing\" }")
-          w("        if case .done(false, _) = airlift.state { return \"Failed\" }")
-          w("        return \"Not Paired\"")
-          w("    }")
-          w("")
-          w("    private var pairingSubtitle: String {")
-          w("        if isPaired { return \"Credentials saved\" }")
-          w("        if isPairing {")
-          w("            return airlift.pairingStatus.isEmpty ? \"Starting...\" : airlift.pairingStatus")
-          w("        }")
-          w("        if case .done(false, let msg) = airlift.state { return msg }")
-          w("        return \"Open Settings to pair\"")
-          w("    }")
-          w("}")
-          io.open("natsuk1/Views/AirliftView.swift", "w").write("\n".join(a) + "\n")
-
-          b = []
-          w = b.append
-          w("import SwiftUI")
-          w("import UIKit")
-          w("import Darwin")
-          w("")
-          w("struct PathAccessView: View {")
-          w("    struct PathResult: Identifiable {")
-          w("        let id = UUID()")
-          w("        let path: String")
-          w("        let exists: Bool")
-          w("        let isDirectory: Bool")
-          w("        let readable: Bool")
-          w("        let writable: Bool")
-          w("        let size: Int64?")
-          w("    }")
-          w("")
-          w("    @State private var results: [PathResult] = []")
-          w("    @State private var busy = false")
-          w("")
-          w("    private let paths: [String] = [")
-          w("        \"/var/mobile\",")
-          w("        \"/var/mobile/Documents\",")
-          w("        \"/var/mobile/Library\",")
-          w("        \"/var/mobile/Library/Preferences\",")
-          w("        \"/var/mobile/Library/Caches\",")
-          w("        \"/var/mobile/Library/SpringBoard\",")
-          w("        \"/var/mobile/Library/SMS\",")
-          w("        \"/var/mobile/Library/Safari\",")
-          w("        \"/var/mobile/Containers\",")
-          w("        \"/var/mobile/Containers/Data/Application\",")
-          w("        \"/var/mobile/Containers/Shared/AppGroup\",")
-          w("        \"/var/tmp\",")
-          w("        \"/var/mobile/Media\",")
-          w("    ]")
-          w("")
-          w("    var body: some View {")
-          w("        List {")
-          w("            Section {")
-          w("                HStack { Text(\"Paths\"); Spacer(); Text(\"\\(results.filter { $0.exists }.count)/\\(results.count)\").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }")
-          w("                HStack { Text(\"Readable\"); Spacer(); Text(\"\\(results.filter { $0.readable }.count)\").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }")
-          w("                HStack { Text(\"Writable\"); Spacer(); Text(\"\\(results.filter { $0.writable }.count)\").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }")
-          w("                Button { scan() } label: {")
-          w("                    HStack {")
-          w("                        Text(busy ? \"Scanning...\" : \"Run Scan\")")
-          w("                        Spacer()")
-          w("                        ProgressView().opacity(busy ? 1 : 0)")
-          w("                    }")
-          w("                }.disabled(busy)")
-          w("            } header: {")
-          w("                Label(\"Summary\", systemImage: \"chart.bar\")")
-          w("            }")
-          w("            Section {")
-          w("                ForEach(results) { r in")
-          w("                    VStack(alignment: .leading, spacing: 4) {")
-          w("                        Text(r.path).font(.system(size: 11, design: .monospaced))")
-          w("                            .foregroundStyle(r.exists ? .primary : .secondary).lineLimit(2)")
-          w("                        HStack(spacing: 6) {")
-          w("                            badge(r.exists ? \"exists\" : \"missing\", color: r.exists ? .green : .red)")
-          w("                            if r.isDirectory { badge(\"dir\", color: .blue) }")
-          w("                            if r.readable { badge(\"r\", color: .green) }")
-          w("                            if r.writable { badge(\"w\", color: .orange) }")
-          w("                            if let s = r.size { badge(\"\\(s)B\", color: .gray) }")
-          w("                        }")
-          w("                    }")
-          w("                }")
-          w("            } header: {")
-          w("                Label(\"Paths\", systemImage: \"folder\")")
-          w("            }")
-          w("        }")
-          w("        .listStyle(.insetGrouped)")
-          w("        .navigationTitle(\"Path Access\")")
-          w("        .navigationBarTitleDisplayMode(.inline)")
-          w("        .onAppear { if results.isEmpty { scan() } }")
-          w("    }")
-          w("")
-          w("    private func badge(_ text: String, color: Color) -> some View {")
-          w("        Text(text).font(.system(size: 9, design: .monospaced))")
-          w("            .padding(.horizontal, 4).padding(.vertical, 1)")
-          w("            .background(color.opacity(0.18), in: RoundedRectangle(cornerRadius: 3))")
-          w("            .foregroundStyle(color)")
-          w("    }")
-          w("")
-          w("    private func scan() {")
-          w("        busy = true")
-          w("        let pathList = paths")
-          w("        DispatchQueue.global(qos: .userInitiated).async {")
-          w("            let fm = FileManager.default")
-          w("            var outPaths: [PathResult] = []")
-          w("            for p in pathList {")
-          w("                var isDir: ObjCBool = false")
-          w("                let exists = fm.fileExists(atPath: p, isDirectory: &isDir)")
-          w("                let readable = fm.isReadableFile(atPath: p)")
-          w("                let writable = fm.isWritableFile(atPath: p)")
-          w("                var size: Int64? = nil")
-          w("                if exists, !isDir.boolValue,")
-          w("                   let attrs = try? fm.attributesOfItem(atPath: p),")
-          w("                   let n = attrs[.size] as? NSNumber { size = n.int64Value }")
-          w("                outPaths.append(PathResult(path: p, exists: exists, isDirectory: isDir.boolValue,")
-          w("                                           readable: readable, writable: writable, size: size))")
-          w("            }")
-          w("            DispatchQueue.main.async {")
-          w("                self.results = outPaths; self.busy = false")
-          w("            }")
-          w("        }")
-          w("    }")
-          w("}")
-          io.open("natsuk1/Views/PathAccessView.swift", "w").write("\n".join(b) + "\n")
-          print("UI sources written")
+          print("NetworkStatus + RuntimeView written")
           PY
 
       - name: Entitlements
@@ -778,325 +914,6 @@ jobs:
           s = s + '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
           s = s + '<plist version="1.0">\n<dict>\n</dict>\n</plist>\n'
           io.open("natsuk1/Resources/natsuk1.entitlements", "w").write(s)
-          PY
-
-      - name: Generate ai-hints
-        run: |
-          python3 - <<'PY'
-          import io, sys
-          MIN = 150000
-          O = []
-          def w(x):
-              O.append(str(x))
-          def sec(n, t):
-              w("")
-              w("## " + str(n) + " " + t)
-              w("")
-          w("# natsuk1 - AI RESEARCH BRIEF")
-          w("")
-          w("Read this file before answering anything about this repo.")
-          w("")
-          sec(0, "PROJECT IDENTITY")
-          w("natsuk1: iOS on-device kernel research toolkit plus AirTraffic exploit")
-          w("target: iPhone14,5 (iPhone 13, A15) on iOS 27.0 build 24A437")
-          w("kernel: xnu-13432.2.10~2/RELEASE_ARM64_T8110 arm64e")
-          w("signing: ad-hoc, empty entitlements works on LiveContainer and SideStore")
-          w("license: MIT, author murk-sus")
-          w("What it does:")
-          w("- pairs the iPhone as host via RPPairing on the 10.7.0.x tunnel")
-          w("- opens RSD tunnel and enumerates services including AFC ATC StreamingZip")
-          w("- uploads a symlink payload via StreamingZip plus AFC to reach a target dir")
-          w("- drives AirTraffic ATC sync with Grappa token AssetManifest FileComplete")
-          w("- reads back a canary through the symlink target to confirm the write")
-          w("- NECP probes for kernel information disclosure KASLR via op 0x0D")
-          sec(1, "MANDATORY BEHAVIOR")
-          w("For EVERY user message before answering:")
-          w("1. Use web search. Search latest on iOS 27 kernel internals, XNU changelog 2026,")
-          w("   Apple security advisories, blacktop ipsw release notes and CLI syntax,")
-          w("   blacktop symbolicator signatures, Ghidra 12.x headless API and Jython compat,")
-          w("   LiveContainer SideStore AltStore TrollStore iOS 27 status, SwiftUI iOS 27")
-          w("   regressions, NECP mbuf socket IOKit bugs 2025 2026, Apple dev forums crashes.")
-          w("2. Use extended reasoning. Enumerate alternatives weigh tradeoffs and only then")
-          w("   commit to a concrete answer.")
-          w("3. If web search is unavailable say so explicitly at the top.")
-          w("4. Cite source URLs for any fact that could change.")
-          w("5. Never claim a version does not exist without checking.")
-          w("6. Never claim an API exists without checking current syntax.")
-          w("7. Never guess offsets. Only use values verified by Ghidra or extracted from")
-          w("   the actual kernelcache for this exact build.")
-          sec(2, "Update")
-          w("- date: 2026-09-27")
-          w("- device: iPhone14,5 iOS 27.0 24A437")
-          w("- kernel: xnu-13432.2.10~2 RELEASE_ARM64_T8110")
-          w("- signature: ad-hoc empty entitlements")
-          w("- ci: fix_and_release.yml only")
-          sec(3, "NECP status")
-          w("Working: op 0x03 returns 1 byte; op 0x04 and 0x1A return 280-byte TLV;")
-          w("op 0x0D returns user VA (KASLR leak).")
-          w("Closed: op 0x05 -1; op 0x0C -1; op 0x0F -1; op 0x18 empty; op 0x19 -1;")
-          w("TLV overflow rejected; add_flow 0x24..0xF0 ok 0xF1+ -1; remove_flow twice ret 0;")
-          w("copy_result_inner kptr count 0; copy_interface 1..10 ret 0 no data.")
-          sec(4, "Caller graph")
-          w("- necp_flow_alloc 0xA346E70 callers 0xA346474 0xA348180")
-          w("- necp_handler_big 0xA3D91B4 caller 0xA3D9174")
-          w("- necp_get_tlv 0xA4C2034 caller 0xA4C113C (9 BL)")
-          w("- necp_open 0xA4E411C dispatcher BR BLR")
-          w("- necp_client_action 0xA4E5C28 dispatcher BR BLR")
-          w("- syscall_dispatcher 0xA6CEB84")
-          sec(5, "NECP flow_alloc analysis (closed)")
-          w("necp_flow_alloc 0xA346E70 has 2 BL callers:")
-          w("- 0xA346474 -> FUN(auStack, ctx, 0)")
-          w("- 0xA348180 -> FUN(local_a8, ctx, 1)")
-          w("param_3 is a mode flag (0 read, 1 write), NOT user input.")
-          w("Integer overflow hypothesis is disproven as of 2026-09-27.")
-          w("Caller 0xA346474 is a flow-buffer serializer, kernel-internal.")
-          w("Bounds check present: if (size < needed) return 0x22.")
-          w("Ring wrap: if (size - offset < needed) offset = 0.")
-          w("Caller 0xA348180 reads flow stats, fixed-size kalloc 0x14/0x18.")
-          w("Neither is reachable from syscall(502) directly.")
-          sec(6, "Confirmed safe")
-          w("- sooptcopyin 0xA77FD2C maxlen checked")
-          w("- necp_handler_big 0xA3D91B4 uVar21 >= 0x2001")
-          w("- necp_client_add_flow 0xA4E843C rejects 0xBF to 0xF0")
-          w("- necp_update_cache 0xA4EBD58 user ptr via copyin only")
-          sec(7, "iOS 27 runtime crashes")
-          w("SIGKILL CODESIGNING never from ad-hoc: proc_info 336 any flavor;")
-          w("csops 169 any op; task_info flavor sweep 1 to 40; mach_port_names count > 32.")
-          w("SIGSYS sandbox never do: blind syscall sweep 0 to 558 dies on syscall 78.")
-          w("Safe whitelist: getpid 20 getuid 24 getgid 47 getppid 39 geteuid 25")
-          w("getegid 43 gettid 286 getpgid 202. socket getsockopt setsockopt sysctl uname safe.")
-          sec(8, "Signature")
-          w("empty entitlements dict for LiveContainer and SideStore.")
-          w("non-empty com.apple.private.* makes AMFI kill.")
-          w("ldid -Snatsuk1/Resources/natsuk1.entitlements")
-          w("works: Sideloadly AltStore TrollStore ESign LiveContainer SideStore.")
-          sec(9, "Build gotchas")
-          w("mach_vm.h missing in SDK 26.5 declare manually. TCP_KEEPINIT etc missing.")
-          w("@MainActor plus nonisolated unsafe static shared is error.")
-          w("sysctlbyname hw.memsize returns UInt64.")
-          w("nk_offsets.h must define NK_SYSENT_BASE and NK_SYSENT_COUNT.")
-          w("GrappaHelper 10 static tokens confirmed working never collapse.")
-          sec(10, "SwiftUI iOS 27")
-          w(".overlay(RespringView) CA UAF SIGSEGV.")
-          w("List if cond Section else Section crash.")
-          w(".scaleEffect inside if breaks _ConditionalContent.")
-          w("@Published from Task race UAF.")
-          w("Respring button must exist only in ToolsView not AirliftView.")
-          w("RuntimeView must not show green when slide or base equal '-'.")
-          sec(11, "Network / LocalDevVPN")
-          w("LocalDevVPN creates a utun interface with local IP 10.7.0.1 and peer 10.7.1.1.")
-          w("tunnelIP must return the peer (ifa_dstaddr) not the interface address.")
-          w("deviceIP must return the interface address (ifa_addr).")
-          w("Both are point-to-point so getifaddrs exposes peer via ifa_dstaddr.")
-          w("Status card in AirliftView refreshes every 0.5 seconds via Timer.publish.")
-          w("loopbackVPNUp is true only when at least one utun pair exists in 10.7 range.")
-          sec(12, "Airlift accessible paths")
-          w("/var/mobile and /var/mobile/Documents are writable.")
-          w("/var/mobile/Library and subdirectories Preferences Caches SpringBoard SMS Safari.")
-          w("/var/mobile/Containers and Data/Application and Shared/AppGroup.")
-          w("/var/tmp and /var/mobile/Media.")
-          w("Default target /var/mobile/Library/SpringBoard.")
-          w("Reads are indirect via Media round-trip; MobileGestalt plist is not writable.")
-          sec(13, "Offsets")
-          w("- KBASE 0xFFFFFFF007004000")
-          w("- SLIDE 0x3D00000")
-          w("- SYSENT_BASE 0xFFFFFFF007C192A0")
-          off = [
-              ("necp_open", "0xFFFFFFF00A4E411C"),
-              ("necp_client_action", "0xFFFFFFF00A4E5C28"),
-              ("necp_client_add_flow", "0xFFFFFFF00A4E843C"),
-              ("necp_client_remove_client", "0xFFFFFFF00A4E76F4"),
-              ("necp_client_remove_flow", "0xFFFFFFF00A4E93C4"),
-              ("necp_client_copy_list", "0xFFFFFFF00A4E80FC"),
-              ("necp_client_copy_result", "0xFFFFFFF00A4E7BE8"),
-              ("necp_client_copy_result_inner", "0xFFFFFFF00A4F26F0"),
-              ("necp_client_copy_interface", "0xFFFFFFF00A4EAC7C"),
-              ("necp_client_copy_update", "0xFFFFFFF00A4EC264"),
-              ("necp_client_sysctl_arena", "0xFFFFFFF00A4EB704"),
-              ("necp_get_tlv_at_offset", "0xFFFFFFF00A4C2034"),
-              ("necp_flow_alloc", "0xFFFFFFF00A346E70"),
-              ("necp_handler_big", "0xFFFFFFF00A3D91B4"),
-              ("necp_update_cache", "0xFFFFFFF00A4EBD58"),
-              ("necp_per_flow_copy", "0xFFFFFFF00A4F2E70"),
-              ("sooptcopyin", "0xFFFFFFF00A77FD2C"),
-              ("sbappendcontrol", "0xFFFFFFF00A788A24"),
-              ("sbappendrecord", "0xFFFFFFF00A7873B8"),
-              ("sbappendstream", "0xFFFFFFF00A78811C"),
-              ("copyin", "0xFFFFFFF00A368EC0"),
-              ("copyout", "0xFFFFFFF00A369A3C"),
-              ("kalloc_type", "0xFFFFFFF00A200988"),
-              ("kfree_type", "0xFFFFFFF00A201000"),
-              ("kalloc_type_necp_flow", "0xFFFFFFF007C62E68"),
-              ("flow_alloc_caller_1", "0xFFFFFFF00A346474"),
-              ("flow_alloc_caller_2", "0xFFFFFFF00A348180"),
-              ("handler_big_caller", "0xFFFFFFF00A3D9174"),
-              ("tlv_wrapper", "0xFFFFFFF00A4C113C"),
-              ("syscall_dispatcher", "0xFFFFFFF00A6CEB84"),
-          ]
-          for k, v in off:
-              w("- " + k + " " + v)
-          sec(14, "Extract Offsets repo")
-          w("repo murk-sus/Hu-Tao-and-natsuki-anime-music-player")
-          w("workflow extract_offsets.yml script scripts/kernel_rw.py")
-          w("artifacts result.txt offsets.json kernel.log symbols.json")
-          w("ipsw kernel symbolicate --signatures symbolicator/kernel/27.0 --json KERNEL")
-          w("format decimal_addr to name")
-          w("jython 2.7 isinstance basestring; no tabs only 4 spaces")
-          sec(15, "YAML rules")
-          w("one workflow fix_and_release.yml")
-          w("no C or Swift heredoc over 30 lines")
-          w("structured UI regeneration is allowed under Generate UI sources step")
-          w("all heredoc indented 10 spaces; endmarker on 10 spaces")
-          w("do not delete cached dirs")
-          sec(16, "Next steps")
-          w("decompile necp_client_add_flow 0xA4E843C (op 0x11 handler)")
-          w("decompile necp_client_action 0xA4E5C28 (op dispatcher)")
-          w("trace user-size to copyin+kalloc path in op handlers")
-          w("decompile syscall dispatcher 0xA6CEB84 case 501 502")
-          w("search IOKit IOSurface IOConnectCallMethod IOHIDEvent")
-          w("mbuf m_copydata mbuf_copydata with user lengths")
-          sec(17, "What NOT to do")
-          w("no fix_and_test.yml or build_and_release.yml")
-          w("no hashFiles cache keys on kernelcache")
-          w("no blind syscall sweep")
-          w("no proc_info csops task_info sweep mach_port_names")
-          w("no non-empty entitlements")
-          w("no @Published mutation from Task")
-          w("no RespringView in SwiftUI tree")
-          w("no respring button in AirliftView (only in ToolsView)")
-          w("no green glow for slide or base until set")
-          w("no commit of natsuk1.xcodeproj")
-          w("no trust of offsets without Ghidra")
-          w("no answer without web search first")
-          w("no deleting ghidra kernelcache symbolicator")
-          w("no collapsing GrappaHelper token array to NULL")
-          sec(18, "BSD syscall safety table")
-          w("S safe C codesign-kill B sandbox U unknown")
-          known = {
-              1:"S",2:"B",3:"S",4:"S",5:"S",6:"S",7:"B",9:"B",10:"S",
-              11:"B",12:"S",13:"S",14:"B",15:"B",16:"B",17:"S",18:"S",
-              19:"S",20:"S",21:"S",22:"S",23:"S",24:"S",25:"S",26:"S",
-              27:"S",28:"S",29:"S",30:"B",31:"B",32:"B",33:"S",34:"B",
-              35:"S",36:"B",37:"B",38:"S",39:"S",40:"S",44:"B",45:"B",
-              46:"B",47:"B",48:"B",49:"B",50:"B",58:"S",60:"S",62:"S",
-              63:"B",64:"S",65:"S",66:"B",67:"B",68:"S",69:"B",70:"S",
-              71:"S",72:"S",73:"S",74:"S",75:"U",76:"S",77:"S",78:"S",
-              79:"S",80:"B",81:"S",82:"S",84:"S",85:"S",86:"S",87:"S",
-              88:"S",90:"S",91:"S",92:"S",93:"B",96:"B",97:"B",98:"B",
-              99:"B",100:"B",101:"B",102:"B",103:"B",104:"B",105:"B",
-              106:"B",107:"S",108:"S",109:"S",110:"S",111:"S",112:"S",
-              113:"S",114:"S",115:"S",116:"S",117:"S",118:"B",119:"B",
-              120:"S",121:"S",122:"S",123:"B",124:"B",125:"S",126:"B",
-              127:"S",129:"B",130:"B",131:"B",132:"B",133:"S",134:"S",
-              135:"S",136:"S",137:"S",138:"S",139:"S",140:"S",141:"S",
-              142:"B",143:"B",144:"S",145:"S",146:"B",147:"B",148:"B",
-              149:"B",150:"S",151:"S",152:"U",153:"B",154:"B",155:"B",
-              156:"B",157:"B",158:"S",159:"S",160:"B",161:"B",162:"S",
-              163:"S",169:"C",170:"C",173:"S",174:"S",175:"U",177:"B",
-              178:"B",179:"B",180:"B",181:"B",182:"B",183:"S",184:"S",
-              185:"S",186:"S",187:"S",188:"S",189:"S",190:"S",191:"S",
-              192:"B",193:"B",194:"S",195:"S",196:"B",197:"S",198:"S",
-              199:"B",200:"B",201:"S",202:"S",203:"B",204:"S",205:"B",
-              214:"S",216:"S",220:"B",221:"B",222:"B",223:"B",224:"S",
-              225:"S",226:"S",227:"S",228:"S",229:"S",230:"S",231:"S",
-              232:"S",233:"B",234:"B",235:"S",236:"S",237:"B",238:"B",
-              239:"B",240:"B",241:"S",242:"S",243:"U",244:"B",245:"B",
-              246:"B",247:"S",248:"S",249:"S",250:"U",286:"S",336:"C",
-              337:"B",338:"B",339:"B",340:"B",341:"S",342:"S",343:"B",
-              344:"B",345:"S",382:"S",384:"S",501:"S",502:"S",
-          }
-          for n in range(558):
-              sf = known.get(n, "U")
-              w("### syscall " + str(n))
-              w("- safety " + sf)
-              if sf == "C":
-                  w("- ad-hoc NEVER call AMFI SIGKILLs the process")
-              elif sf == "B":
-                  w("- ad-hoc may SIGSYS under sandbox")
-              elif sf == "S":
-                  w("- ad-hoc safe from signed app on iOS 27")
-              else:
-                  w("- ad-hoc unknown test in a disposable container first")
-          sec(19, "NECP op table")
-          necp = [
-              (0x01,"ADD_CLIENT","ret 0"),(0x02,"REMOVE_CLIENT","ret 0"),
-              (0x03,"COPY_RESULT","1 byte"),(0x04,"COPY_RESULT_ALT","280B TLV"),
-              (0x05,"COPY_LIST","-1"),(0x06,"REQUEST_NEXUS","unknown"),
-              (0x07,"AGENT_ACTION","unknown"),(0x08,"COPY_AGENT","unknown"),
-              (0x09,"COPY_INTERFACE","ret 0 no data"),
-              (0x0B,"COPY_ROUTE_STATS","unknown"),(0x0C,"COPY_PARAMETERS","-1"),
-              (0x0D,"SYSCTL_ARENA","user VA"),(0x0E,"UPDATE_CACHE","kptr via copyin"),
-              (0x0F,"COPY_UPDATE","-1"),(0x10,"COPY_RESULT_LONG","280B TLV"),
-              (0x11,"ADD_FLOW","0x24..0xF0 ok"),(0x12,"REMOVE_FLOW","double-free ret 0"),
-              (0x13,"CLAIM","unknown"),(0x14,"SIGN","unknown"),
-              (0x15,"GET_IFACE_ADDR","unknown"),(0x16,"COPY_AGENT_ALT","unknown"),
-              (0x17,"VALIDATE","unknown"),(0x18,"GET_SIGNED_ID","empty"),
-              (0x19,"SET_SIGNED_ID","-1"),(0x1A,"COPY_RESULT_LONG2","280B TLV"),
-              (0x1B,"GET_FLOW_STATS","unknown"),
-          ]
-          for op, name, st in necp:
-              w("### NECP op 0x%02X %s" % (op, name))
-              w("- observed " + st)
-              w("- signature syscall 502 fd op uuid ulen buf blen")
-          sec(20, "MobileGestalt keys")
-          mg = [
-              "ProductType string","ProductVersion string","BuildVersion string",
-              "MarketingName string","UserAssignedDeviceName string","DeviceName string",
-              "ModelNumber string","RegionCode string","RegionInfo string","SerialNumber string",
-              "UniqueDeviceID string","IMEI string","MEID string","ICCID string",
-              "WiFiAddress string","BluetoothAddress string","EthernetMacAddress string",
-              "BasebandVersion string","BasebandChipId int","BasebandSerialNumber string",
-              "HWModel string","CPUArchitecture string","CPUType int","BoardId int",
-              "ChipID int","DeviceSupportsApplePencil bool","DeviceSupportsFaceTime bool",
-              "HasBaseband bool","HasBattery bool","HasCellularTelephony bool",
-              "IsSimulator bool","PasswordProtected bool","ActivationState string",
-              "ActivationStateAcknowledged bool","RegulatoryModelNumber string",
-              "ReleaseType string","SigningFuse bool","SupportsExternalAccessory bool",
-              "SupportsSiri bool","SupportsTouchID bool","SupportsFaceID bool",
-              "BatteryCurrentCapacity int","BatteryIsCharging bool",
-              "BatteryIsFullyCharged bool","DiskUsage int","ScreenDimensions string",
-              "FrontCameraCapturedMTF float","RearCameraCapturedMTF float",
-              "WifiChipset string","WifiVendor string","AirplaneMode bool","AssistedGPS bool",
-          ]
-          for k in mg:
-              w("- " + k)
-          sec(21, "Common errors and fixes")
-          errs = [
-              ("unterminated string literal","editor mangled a long string literal across lines","keep every Python string literal on one line"),
-              ("BUILD FAILED with no error text","xcodebuild -quiet hides details","rerun without -quiet or grep xcactivitylog"),
-              ("Undefined symbols _al_pairing_run_host","AirliftFFI stub missing or not linked","run the Vendor AirliftFFI step"),
-              ("nonisolated unsafe with MainActor","Swift strict concurrency error","use final class Foo ObservableObject unchecked Sendable"),
-              ("SIGKILL CODESIGNING at launch","AMFI killed on proc_info csops task_info sweep","remove those calls"),
-              ("SIGSYS at first syscall","sandbox denies syscall 78 or nearby","do not blind-sweep syscalls"),
-              ("ldid Invalid plist","entitlements file malformed","regenerate entitlements from workflow step"),
-              ("Payload missing","cp -R of app failed","verify APP_PATH contains Info.plist"),
-              ("natsuk1.xcodeproj committed","gitignore did not apply","add natsuk1.xcodeproj to gitignore"),
-              ("Cache restore loses DerivedData","cache key changed on every push","use restore-keys with prefix"),
-              ("grappa token generation failed rc=-5","static token array emptied or fallback removed","restore 10 tokens with marker nk-grappa-restored"),
-              ("tunnel IP shows 10.7.1.1 for both fields","ifa_dstaddr not used; interface addr used for both","use ifa_addr for device and ifa_dstaddr for tunnel"),
-              ("slide or base green when not set","compared against em dash not hyphen","default is '-' check that value"),
-          ]
-          for e, why, fix in errs:
-              w("### " + e)
-              w("- why " + why)
-              w("- fix " + fix)
-          sec(22, "Grappa RPPairing confirmed working")
-          w("tunnel up on 10.7.0.1 49152 via raw RPPairing")
-          w("RSD publishes about 85 services")
-          w("AFC connects StreamingZip extracts")
-          w("ATC Capabilities InstalledAssets AssetMetrics SyncAllowed")
-          w("grappa 84 bytes generated from static fallback")
-          w("ReadyForSync AssetManifest FileComplete 3 3")
-          w("canary readback via AFC matches")
-          w("cleanup restores original Books.plist")
-          w("Do NOT collapse kAuthenticGrappaTokens to NULL.")
-          content = "\n".join(O)
-          pad = 0
-          while len(content.encode("utf-8")) < MIN:
-              pad = pad + 1
-              content = content + "\n## " + str(1000 + pad) + " reserved\n- placeholder " + str(pad) + "\n"
-          io.open("ai-hints.md", "w").write(content)
-          sys.stderr.write("ai-hints.md: %d bytes\n" % len(content.encode("utf-8")))
           PY
 
       - name: Update README
@@ -1114,7 +931,7 @@ jobs:
                   head = s
           if not head.strip():
               head = "# natsuk1\n\niOS 27 kernel research toolkit.\n\n"
-          hint = "AI researchers read ai-hints.md before answering anything.\n"
+          hint = "AI researchers read ai-hints.md and ai-think.md before answering anything.\n"
           io.open(p, "w", encoding="utf-8").write(head.rstrip() + "\n\n" + hint)
           PY
 
@@ -1159,7 +976,7 @@ jobs:
           fi
           R="${{ github.repository }}"
           U="https://github.com/$R/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v9.3 ($((SIZE/1024)) KB)
+          NOTES="natsuk1 v11.0 ($((SIZE/1024)) KB)
 
           Install:
           - IPA: $U
@@ -1182,5 +999,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "v9.3: LocalDevVPN style Airlift UI, PathAccess paths, runtime glow [skip ci]"
+          git commit -m "v11.0: full ai-think.md + curated ai-hints merge [skip ci]"
           git push
