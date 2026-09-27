@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v20-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v20-
+          key: nk-v21-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v21-
 
       - name: Install tools
         run: |
@@ -193,17 +193,12 @@ jobs:
               struct ProbeResult {
                   let state: ProbeState
                   let detail: String
-
-                  var ok: Bool {
-                      if case .ok = state { return true }
-                      return false
-                  }
-
+                  var ok: Bool { if case .ok = state { return true }; return false }
                   var message: String {
                       switch state {
                       case .ok: return "ready"
                       case .noVPN: return "no loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
-                      case .noPairing: return "no pairing file. Open Tools → Airlift, run Start Pairing."
+                      case .noPairing: return "no pairing file. Open Tools -> Airlift, run Start Pairing."
                       case .pairingInvalid: return detail
                       case .ffiFailed(let s): return s
                       }
@@ -216,43 +211,29 @@ jobs:
               func carrierRootPath() -> String { carrierRoot }
               func bundleLinksPath() -> String { bundleLinks }
 
-              // Read-only. Never writes or regenerates the pairing file.
               private func validatePairingFile(_ path: String) -> (Bool, String) {
                   let fm = FileManager.default
-                  guard fm.fileExists(atPath: path) else {
-                      return (false, "missing")
-                  }
+                  guard fm.fileExists(atPath: path) else { return (false, "missing") }
                   let attrs = try? fm.attributesOfItem(atPath: path)
                   let size = (attrs?[.size] as? Int) ?? 0
-                  if size < 200 {
-                      return (false, "pairing file damaged (\(size) bytes). Re-pair in Tools → Airlift.")
-                  }
-                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
-                      return (false, "pairing file unreadable")
-                  }
-                  guard let plist = try? PropertyListSerialization.propertyList(
-                      from: data, options: [], format: nil) as? [String: Any] else {
-                      return (false, "pairing file corrupt: not a plist (\(size) bytes). Re-pair in Tools → Airlift.")
+                  if size < 200 { return (false, "pairing file damaged (\(size) bytes). Re-pair in Tools -> Airlift.") }
+                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return (false, "pairing file unreadable") }
+                  guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
+                      return (false, "pairing file corrupt: not a plist (\(size) bytes). Re-pair in Tools -> Airlift.")
                   }
                   let keys = ["UDID", "DeviceCertificate", "HostCertificate", "RootCertificate", "HostID"]
                   var hits = 0
                   for k in keys where plist[k] != nil { hits += 1 }
-                  if hits < 2 {
-                      return (false, "pairing file invalid: only \(hits) of 5 keys present. Re-pair in Tools → Airlift.")
-                  }
+                  if hits < 2 { return (false, "pairing file invalid: only \(hits) of 5 keys present. Re-pair in Tools -> Airlift.") }
                   return (true, "pairing ok (\(size) bytes, \(hits) keys)")
               }
 
               func probe() -> ProbeResult {
-                  if !NetworkStatus.loopbackVPNUp() {
-                      return ProbeResult(state: .noVPN, detail: "no loopback VPN")
-                  }
+                  if !NetworkStatus.loopbackVPNUp() { return ProbeResult(state: .noVPN, detail: "no loopback VPN") }
                   let pairing = PairingController.pairingFilePath()
                   let (pairOk, pairMsg) = validatePairingFile(pairing)
                   if !pairOk {
-                      if pairMsg == "missing" {
-                          return ProbeResult(state: .noPairing, detail: pairMsg)
-                      }
+                      if pairMsg == "missing" { return ProbeResult(state: .noPairing, detail: pairMsg) }
                       return ProbeResult(state: .pairingInvalid, detail: pairMsg)
                   }
                   let tmp = NSTemporaryDirectory() + "/carrierlab-probe-\(UUID().uuidString).txt"
@@ -269,10 +250,7 @@ jobs:
                   if let p = outJson { al_string_free(p) }
                   if let p = outErr { al_string_free(p) }
                   try? FileManager.default.removeItem(atPath: tmp)
-                  if rc != 0 {
-                      return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg),
-                                         detail: errMsg)
-                  }
+                  if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
                   return ProbeResult(state: .ok, detail: "ready")
               }
 
@@ -290,10 +268,7 @@ jobs:
                   let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
                   if let p = outJson { al_string_free(p) }
                   if let p = outErr { al_string_free(p) }
-                  if rc != 0 {
-                      return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg),
-                                         detail: errMsg)
-                  }
+                  if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
                   return ProbeResult(state: .ok, detail: "ok")
               }
           }
@@ -348,7 +323,7 @@ jobs:
               }
 
               func save(_ s: Session) {
-                  let write = {
+                  DispatchQueue.main.async {
                       self.session = s
                       let enc = JSONEncoder()
                       enc.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -357,17 +332,13 @@ jobs:
                           try? d.write(to: self.stateURL, options: .atomic)
                       }
                   }
-                  if Thread.isMainThread { write() }
-                  else { DispatchQueue.main.async(execute: write) }
               }
 
               func clear() {
-                  let write = {
+                  DispatchQueue.main.async {
                       self.session = nil
                       try? FileManager.default.removeItem(at: self.stateURL)
                   }
-                  if Thread.isMainThread { write() }
-                  else { DispatchQueue.main.async(execute: write) }
               }
 
               func hasBackup() -> Bool {
@@ -376,41 +347,29 @@ jobs:
               }
 
               func setAirlift(ok: Bool, message: String) {
-                  let write = {
+                  DispatchQueue.main.async {
                       self.airliftOK = ok
                       self.airliftMessage = message
                   }
-                  if Thread.isMainThread { write() }
-                  else { DispatchQueue.main.async(execute: write) }
               }
 
               func setResources(_ ok: Bool) {
-                  let write = { self.resourcesOK = ok }
-                  if Thread.isMainThread { write() }
-                  else { DispatchQueue.main.async(execute: write) }
+                  DispatchQueue.main.async { self.resourcesOK = ok }
               }
 
               func setBusy(_ v: Bool) {
-                  let write = { self.busy = v }
-                  if Thread.isMainThread { write() }
-                  else { DispatchQueue.main.async(execute: write) }
+                  DispatchQueue.main.async { self.busy = v }
               }
 
               func appendLog(_ s: String) {
-                  let write = {
+                  DispatchQueue.main.async {
                       self.logText += s + "\n"
-                      if self.logText.count > 20000 {
-                          self.logText = String(self.logText.suffix(15000))
-                      }
+                      if self.logText.count > 20000 { self.logText = String(self.logText.suffix(15000)) }
                   }
-                  if Thread.isMainThread { write() }
-                  else { DispatchQueue.main.async(execute: write) }
               }
 
               func clearLog() {
-                  let write = { self.logText = "" }
-                  if Thread.isMainThread { write() }
-                  else { DispatchQueue.main.async(execute: write) }
+                  DispatchQueue.main.async { self.logText = "" }
               }
 
               func backupURL() -> URL { backupDir }
@@ -461,12 +420,10 @@ jobs:
                   let carrierBundle = carrierBundleURL()
                   let docomoBundle = docomoBundleURL()
                   guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
-                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle missing"),
-                                                          detail: "missing")
+                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle missing"), detail: "missing")
                   }
                   guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
-                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"),
-                                                          detail: "missing")
+                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"), detail: "missing")
                   }
                   let s = CarrierLabState.Session(
                       status: .placing,
@@ -478,8 +435,7 @@ jobs:
                       aliases: nil)
                   state.save(s)
 
-                  let r1 = bridge.writeFile(source: carrierBundle.path,
-                                            target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
+                  let r1 = bridge.writeFile(source: carrierBundle.path, target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
                   if !r1.ok {
                       var bad = s
                       bad.status = .failed
@@ -487,8 +443,7 @@ jobs:
                       state.save(bad)
                       return r1
                   }
-                  let r2 = bridge.writeFile(source: docomoBundle.path,
-                                            target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
+                  let r2 = bridge.writeFile(source: docomoBundle.path, target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
                   if !r2.ok {
                       var bad = s
                       bad.status = .failed
@@ -504,12 +459,10 @@ jobs:
 
               func reload() -> CarrierLabBridge.ProbeResult {
                   guard let s = state.session, s.status == .placed || s.status == .finished else {
-                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."),
-                                                          detail: "no session")
+                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."), detail: "no session")
                   }
                   _ = s
-                  return bridge.writeFile(source: docomoBundleURL().path,
-                                          target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
+                  return bridge.writeFile(source: docomoBundleURL().path, target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
               }
 
               func finish() {
@@ -575,7 +528,7 @@ jobs:
                               Label("Pairing is done in Airlift only", systemImage: "info.circle")
                                   .font(.footnote)
                                   .foregroundStyle(.secondary)
-                              Text("CarrierLab never creates a pairing file. Open Tools → Airlift, run Start Pairing, then return here.")
+                              Text("CarrierLab never creates a pairing file. Open Tools -> Airlift, run Start Pairing, then return here.")
                                   .font(.caption)
                                   .foregroundStyle(.secondary)
                           }
@@ -622,10 +575,8 @@ jobs:
               private var actionsSection: some View {
                   Section {
                       Button { runCheck() } label: { Text("Check") }.disabled(clState.busy)
-                      Button { runInstall() } label: { Text("Install") }
-                          .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
-                      Button { runReload() } label: { Text("Reload") }
-                          .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+                      Button { runInstall() } label: { Text("Install") }.disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+                      Button { runReload() } label: { Text("Reload") }.disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
                       Button { runFinish() } label: { Text("Finish") }.disabled(clState.busy)
                       Button(role: .destructive) { runReset() } label: { Text("Reset") }.disabled(clState.busy)
                   } header: { Label("Actions", systemImage: "wrench") }
@@ -727,8 +678,8 @@ jobs:
             printf -- '- All code, strings, comments in English only.\n' >> docs/ai-hints.md
             printf -- '- Match existing style: @unchecked Sendable, DispatchQueue.main.async, no @MainActor.\n' >> docs/ai-hints.md
             printf -- '- Never use Task or Task.detached in views or state classes.\n' >> docs/ai-hints.md
-            printf -- '- Never mutate @Published from background. Guard with Thread.isMainThread in setters.\n' >> docs/ai-hints.md
-            printf -- '- Pairing is done exclusively in Tools -> Airlift. CarrierLab reads the pairing file, never writes it.\n' >> docs/ai-hints.md
+            printf -- '- Never mutate @Published from background. Always DispatchQueue.main.async unconditionally.\n' >> docs/ai-hints.md
+            printf -- '- Pairing is done exclusively in Tools -> Airlift. CarrierLab reads pairing file, never writes it.\n' >> docs/ai-hints.md
             printf -- '- Do not call PairingController.runPairing or deletePairing from any view except AirliftView.\n' >> docs/ai-hints.md
             printf -- '- Do not touch AirliftBridge.swift or PairingController.swift without explicit request.\n' >> docs/ai-hints.md
             printf -- '- No "type INSTALL" confirmations. Buttons act immediately.\n' >> docs/ai-hints.md
@@ -754,7 +705,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "feat: pairing only in Airlift tab, CarrierLab shows hint [skip ci]"
+            git commit -m "fix: force main thread @Published, cleanup workflow [skip ci]"
             git push
           fi
 
