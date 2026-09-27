@@ -30,9 +30,9 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v5-${{ hashFiles('project.yml') }}
+          key: nk-v7-${{ hashFiles('project.yml') }}
           restore-keys: |
-            nk-v5-
+            nk-v7-
 
       - name: Install tools
         run: |
@@ -46,80 +46,41 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          rm -f .swiftlint.yml .periphery.yml CHANGELOG.md
-          rm -f docs/offsets.md docs/nativeness.md
-          rm -rf natsuk1Tests pages
-          rmdir docs 2>/dev/null && mkdir -p docs || true
+          rm -f natsuk1/Helpers/CrashLog.swift
 
-          git mv docs/ai-hints.md docs/ai-hints.md 2>/dev/null || true
-          git mv docs/ai-think.md docs/ai-think.md 2>/dev/null || true
+          sed -i '' '/CrashLog/d' natsuk1/App/natsuk1.swift
+          sed -i '' 's/_ = nk_full_exploit()/let rc = nk_full_exploit()/' natsuk1/App/natsuk1.swift
+          sed -i '' 's/AppState\.shared\.status = \.ok/AppState.shared.status = (rc == 0) ? .ok : .failed/' natsuk1/App/natsuk1.swift
 
-          rm -f natsuk1/Exploit/NECP/necp.c
-          rmdir natsuk1/Exploit/NECP 2>/dev/null || true
+          perl -0777 -i -pe 's/\n    func necp_run\(\) \{.*?\n    \}\n/\n/gs' natsuk1/App/natsuk1.swift
 
-          for f in natsuk1/Exploit/Core/nk_api.c natsuk1/Exploit/Core/nk_api.h; do
-            [ -f "$f" ] && sed -i '' '/nk_necp_cancel/d' "$f"
-            [ -f "$f" ] && sed -i '' 's/nk_necp_run()/nk_run()/g' "$f"
-          done
+          sed -i '' 's/state\.necp_run()/state.run()/' natsuk1/Views/OverviewView.swift
 
-          printf '%s\n' '#ifndef NK_OFFSETS_H' '#define NK_OFFSETS_H' '#define NK_KERNEL_BASE                0xFFFFFFF007004000ULL' '#define NK_SYSENT_BASE                0xFFFFFFF007C192A0ULL' '#define NK_SYSENT_COUNT               558' '#endif' > natsuk1/Exploit/Core/nk_offsets.h
-
-          find natsuk1 -name '*.swift' -exec sed -i '' '/nk_necp_cancel()/d' {} +
-          find natsuk1 -name '*.swift' -exec sed -i '' 's/nk_necp_run()/nk_run()/g' {} +
-
-          sed -i '' '/previousCrash/d; /showCrashLog/d; /recoverPreviousSession/d' natsuk1/App/natsuk1.swift 2>/dev/null || true
-
-          perl -0777 -i -pe 's/\n    func recoverPreviousSession\(\)[^{]*\{.*?\n    \}\n/\n/gs' natsuk1/Helpers/CrashLog.swift 2>/dev/null || true
-          perl -0777 -i -pe 's/\n    func clearPreviousCrash\(\)[^{]*\{.*?\n    \}\n/\n/gs' natsuk1/Helpers/CrashLog.swift 2>/dev/null || true
-          perl -0777 -i -pe 's/\n    func respring\(\) \{.*?\n    \}\n/\n/gs' natsuk1/Helpers/AirliftBridge.swift 2>/dev/null || true
-          perl -0777 -i -pe 's/\n    func findContainer\(bundleID: String\) async -> String\? \{.*?\n    \}\n/\n/gs' natsuk1/Helpers/AirliftBridge.swift 2>/dev/null || true
-
-          NS=natsuk1/Helpers/NetworkStatus.swift
-          if [ -f "$NS" ]; then
-            perl -0777 -i -pe 's/Interface\(name: name, ipv4: ipv4,\s*\n\s*netmask:[^\n]*?\)\)\)/Interface(name: name, ipv4: ipv4)/g' "$NS"
-            sed -i '' '/let netmask:/d' "$NS"
-            perl -0777 -i -pe 's/\n\s*static func summarize\(deviceIP:[^\n]*\{.*?\n\s*\}\n/\n/gs' "$NS" || true
-            perl -0777 -i -pe 's/\n\s*static func tunnelHostCandidates\([^\n]*\{.*?\n\s*\}\n/\n/gs' "$NS" || true
-            perl -0777 -i -pe 's/\n\s*static func host\(_ value:[^\n]*\{.*?\n\s*\}\n/\n/gs' "$NS" || true
-            perl -0777 -i -pe 's/\n\s*static func isOwnAddress\(_ deviceIP:[^\n]*\{.*?\n\s*\}\n/\n/gs' "$NS" || true
+          if [ -f docs/ai-hints.md ] && ! grep -q '## CURRENT STATUS' docs/ai-hints.md; then
+            printf '\n## CURRENT STATUS\n\n' >> docs/ai-hints.md
+            printf 'Build iPhone14,5 / iOS 27.0 / 24A437.\n\n' >> docs/ai-hints.md
+            printf -- '- No kernel R/W primitive found on this build.\n' >> docs/ai-hints.md
+            printf -- '- NECP closed at depth-0 sinks, code removed from repo.\n' >> docs/ai-hints.md
+            printf -- '- Airlift works via static Grappa token fallback.\n' >> docs/ai-hints.md
+            printf -- '- Offsets shipped with verified false, do not trust.\n' >> docs/ai-hints.md
+            printf -- '- IOKit not probed beyond shallow externalMethod dispatch.\n' >> docs/ai-hints.md
+            printf -- '- BSD syscalls 557 of 558 unpacked, shallow paths bounded.\n' >> docs/ai-hints.md
           fi
 
-          perl -0777 -i -pe 's/\n\s*static func full\(\)[^\n]*\{.*?\n\s*\}\n/\n/gs' natsuk1/Helpers/DeviceName.swift 2>/dev/null || true
-          perl -0777 -i -pe 's/\n\s*nonisolated static var activeVersion:[^\n]*\{.*?\n\s*\}\n/\n/gs' natsuk1/Helpers/OffsetsStore.swift 2>/dev/null || true
-          sed -i '' 's/row("Identifier", machineID())/row("Identifier", DeviceName.machineID())/' natsuk1/Views/DeviceInfoView.swift 2>/dev/null || true
-
-          AV=natsuk1/Views/AirliftView.swift
-          if [ -f "$AV" ]; then
-            sed -i '' 's/if let pin = airlift\.pairPIN {/if airlift.pairPIN != nil {/' "$AV"
-            sed -i '' 's/Text("PIN \\(pin)")/Text("PIN \\(airlift.pairPIN ?? "")")/' "$AV"
+          if [ -f docs/ai-hints.md ] && ! grep -q '## AIRLIFTVIEW KEEP' docs/ai-hints.md; then
+            printf '\n## AIRLIFTVIEW KEEP\n\n' >> docs/ai-hints.md
+            printf -- '- Keep if let pin = airlift.pairPIN, Text reads pin.\n' >> docs/ai-hints.md
+            printf -- '- Do not rewrite to if airlift.pairPIN != nil.\n' >> docs/ai-hints.md
           fi
 
-          sed -i '' '/^natsuk1-app\.tar\.gz$/d; /^natsuk1\.ipa$/d; /^reference\/$/d' .gitignore 2>/dev/null || true
-          sed -i '' '/necp\.c.*probes/d' docs/architecture.md 2>/dev/null || true
-
-          if [ -f docs/ai-hints.md ]; then
-            sed -i '' '/^## NECP STATUS$/,/^## IOKIT STATUS$/d' docs/ai-hints.md
-            sed -i '' '/^## IOKIT STATUS$/,/^## BSD SYSCALL STATUS$/d' docs/ai-hints.md
-            sed -i '' '/^## BSD SYSCALL STATUS$/,/^## NEW SURFACE/d' docs/ai-hints.md
-            sed -i '' '/^## NEW SURFACE$/,/^## WHAT A PRIMITIVE LOOKS LIKE$/d' docs/ai-hints.md
-            sed -i '' '/^## TAINT METHOD$/,/^## HOW TO WRITE GHIDRA/d' docs/ai-hints.md
-            sed -i '' '/^## HOW TO WRITE GHIDRA/,/^## WORKFLOW$/d' docs/ai-hints.md
-            sed -i '' '/^## LOGGING FOR EXPLOIT$/,/^## COMMON ERRORS/d' docs/ai-hints.md
-            sed -i '' '/^## COMMON ERRORS/,/^## GRAPPA/d' docs/ai-hints.md
-            sed -i '' '/^## GRAPPA/,/^## UI \/ SWIFTUI/d' docs/ai-hints.md
-            sed -i '' '/^## NEXT STEPS$/,/^## WHAT NOT TO DO$/d' docs/ai-hints.md
-            sed -i '' '/^## WHAT NOT TO DO$/,$d' docs/ai-hints.md
+          if [ -f docs/ai-hints.md ] && ! grep -q '## CI IDEMPOTENCE' docs/ai-hints.md; then
+            printf '\n## CI IDEMPOTENCE\n\n' >> docs/ai-hints.md
+            printf -- '- Every cleanup mutation must be idempotent.\n' >> docs/ai-hints.md
+            printf -- '- Commit only if git diff --cached is non-empty.\n' >> docs/ai-hints.md
+            printf -- '- Use skip ci in every commit message from CI.\n' >> docs/ai-hints.md
+            printf -- '- Cache key must change when project.yml changes.\n' >> docs/ai-hints.md
+            printf -- '- rm -rf natsuk1.xcodeproj before xcodegen generate.\n' >> docs/ai-hints.md
           fi
-
-          if ! grep -q 'CODE AND WORKFLOW STYLE' docs/ai-hints.md 2>/dev/null; then
-            printf '\n## CODE AND WORKFLOW STYLE\n\n' >> docs/ai-hints.md
-            printf -- '- No comments in code or workflows.\n' >> docs/ai-hints.md
-            printf -- '- Keep cleanup idempotent with sed and perl.\n' >> docs/ai-hints.md
-            printf -- '- Never rewrite if let pin = airlift.pairPIN unless Text PIN pin was removed first.\n' >> docs/ai-hints.md
-            printf -- '- Remove nk_necp_cancel lines with sed, do not rename.\n' >> docs/ai-hints.md
-          fi
-
-          perl -0777 -i -pe 's/\n  natsuk1Tests:\n    type: bundle\.unit-test.*?(?=\n\S|\z)//gs' project.yml 2>/dev/null || true
 
           grep -q '.swiftpm/' .gitignore 2>/dev/null || printf '\n# Swift\n*.xcworkspace\n.swiftpm/\n.build/\nPackage.resolved\n\n# Debug\n*.dSYM\n' >> .gitignore
 
@@ -127,7 +88,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "chore: remove lint, tests, changelog [skip ci]"
+            git commit -m "chore: remove CrashLog, fail state, update hints [skip ci]"
             git push
           fi
 
