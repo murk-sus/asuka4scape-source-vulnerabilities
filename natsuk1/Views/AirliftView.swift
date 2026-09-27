@@ -38,6 +38,7 @@ struct AirliftView: View {
                 Image(systemName: loopbackVPNUp ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                     .font(.system(size: 22))
                     .foregroundStyle(loopbackVPNUp ? .green : .orange)
+                    .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.45), radius: 3)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("LocalDevVPN")
                     Text(loopbackVPNUp ? "Connected" : "Not connected")

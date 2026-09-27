@@ -29,6 +29,7 @@ struct CarrierLabView: View {
                 Image(systemName: clState.airliftOK ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                     .font(.system(size: 22))
                     .foregroundStyle(clState.airliftOK ? .green : .orange)
+                    .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.45), radius: 3)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Airlift")
                     Text(clState.airliftOK ? "Connected" : "Not ready")

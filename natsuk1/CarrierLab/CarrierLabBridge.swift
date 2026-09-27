@@ -106,7 +106,7 @@ final class CarrierLabBridge: @unchecked Sendable {
     func writeFile(source: String, target: String) -> ProbeResult {
         let pre = probe()
         guard pre.ok else { return pre }
-        let pairingPath = CarrierLabBridge.shared.probePairingPath()
+        let pairingPath = findPairingFile() ?? ""
         guard !pairingPath.isEmpty else {
             return ProbeResult(state: .noPairing, detail: "no pairing path")
         }
@@ -125,9 +125,5 @@ final class CarrierLabBridge: @unchecked Sendable {
         if let p = outErr { al_string_free(p) }
         if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
         return ProbeResult(state: .ok, detail: "ok")
-    }
-
-    private func probePairingPath() -> String {
-        return findPairingFile() ?? ""
     }
 }

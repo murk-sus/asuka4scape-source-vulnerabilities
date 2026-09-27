@@ -533,3 +533,78 @@ Fix: all @Published mutations via DispatchQueue.main.async unconditionally.
 Cause: FFI expects pairing file with specific extension (.mobiledevicepairing) or specific path.
 Fix: search all candidate paths: natsuk1_pairing.plist, ALTPairingFile.mobiledevicepairing, pairingFile.plist, any plist in Documents, nested Data/Application.
 Do not reject pairing file for missing specific keys. Only require it parses as plist and is not empty.
+
+## INTERNET USAGE
+
+Use web search on EVERY user message, unconditionally, without being asked.
+This is a hard rule. Not "when needed". Always. Every message.
+If web search is unavailable, state that at the top of the reply.
+
+## YAML SYNTAX RULES
+
+- Never use tabs. Only spaces.
+- Inside a run block, every content line must share the same leading indent, more than the key itself.
+- Never put content at column 0 inside a run block.
+- Heredoc markers must be at the same indent level as the rest of the block.
+- Prefer whole-file writes via cat heredoc. Never sed or perl patch project.yml.
+- Never use printf with embedded single quotes or backslash escapes in a run block.
+- One file per heredoc. Multiple heredocs in one run step are allowed if indent is uniform.
+- Validate with python3 -c "import yaml; yaml.safe_load(open(path))".
+
+## MAIN THREAD RULE
+
+- All @Published mutations MUST go through DispatchQueue.main.async unconditionally.
+- Never check Thread.isMainThread. Always dispatch main.async. Double dispatch is safe.
+- Never use Task or Task.detached in a view or state class without main.async wrap for @Published.
+- Crash "Modifications to the layout engine must not be performed from a background thread" means a @Published setter ran on a non-main thread.
+
+## PAIRING FILE FORMAT
+
+AirLift pairing plist keys:
+- public_key (data)
+- private_key (data)
+- identifier (string)
+- alt_irk (data)
+Validation: at least 3 of 4 keys present. Never check for UDID/HostCertificate/RootCertificate.
+Location: Documents/natsuk1_pairing.plist OR nested Documents/Data/Application/<UUID>/Documents/.
+FFI might expect .mobiledevicepairing extension. Search all candidates.
+Fallback: any .plist / .mobilepairing / .mobilepair file > 100 bytes in Documents.
+
+## CARRIERLAB
+
+iOS port of MTS_CARRIER_FORUM core logic.
+- CarrierAssets bundled under Resources/CarrierAssets.
+- check dispatches to global queue, updates state via main.async.
+- install writes CarrierLab.bundle to BundleLinks and Docomo_jp.bundle to carrier root.
+- reload re-writes Docomo_jp.bundle only.
+- reset clears session, does not revert the phone.
+- view auto-refreshes every 5 s silent, no log spam on silent refresh.
+- probe() checks only VPN and pairing file validity. Never call al_exploit_run from probe.
+  FFI expects device at 10.7.0.3, LocalDevVPN gives 10.7.0.1. Direct FFI call always times out.
+  Actual writes still use al_exploit_run and may fail if the FFI cannot reach the device.
+
+## UI STYLE
+
+Match Apple native apps. Subtle glow everywhere: .shadow(color: c.opacity(0.45), radius: 3).
+Every value in every menu must have glow. Every button must have glow.
+Use .green / .orange / .red for statuses only.
+Section headers use Label with SF Symbols.
+
+## ERROR FIX LOG
+
+### cannot find 'nk_necp_cancel' in scope
+Cause: NECP was removed but a call remained in AirliftBridge.cancelExploit.
+Fix: remove the call. cancelExploit only logs and sets state to .done(ok:false).
+
+### invalid yaml syntax
+Cause: nested heredoc inside printf with shell quote escapes.
+Fix: never printf strings with backslash or single-quote escapes. Use cat <<'EOF' heredocs at uniform indent.
+
+### Modifications to the layout engine must not be performed from a background thread
+Cause: @Published setter called on non-main thread.
+Fix: all @Published mutations via DispatchQueue.main.async unconditionally.
+
+### "raw RPPairing timed out after 6s"
+Cause: AirliftFFI connects to 10.7.0.3:49152 but LocalDevVPN gives device IP 10.7.0.1.
+Fix: probe() no longer calls al_exploit_run. Only checks VPN and pairing file.
+The actual write still calls al_exploit_run and will fail if the FFI cannot reach the device.
