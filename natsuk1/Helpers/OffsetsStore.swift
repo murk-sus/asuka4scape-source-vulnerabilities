@@ -39,7 +39,7 @@ final class OffsetsStore: ObservableObject, @unchecked Sendable {
     nonisolated static var groups: [Group] { bundled?.groups ?? [] }
     nonisolated static var defaults: [String: String] { bundled?.defaults ?? [:] }
 
-        nonisolated private static func loadIndex() -> Index? {
+    nonisolated private static func loadIndex() -> Index? {
         guard let url = Bundle.main.url(forResource: "index", withExtension: "json", subdirectory: "Offsets"),
               let data = try? Data(contentsOf: url),
               let index = try? JSONDecoder().decode(Index.self, from: data)
@@ -60,9 +60,9 @@ final class OffsetsStore: ObservableObject, @unchecked Sendable {
         guard let entry = resolveActiveEntry() else { return nil }
         let parts = entry.file.split(separator: ".", maxSplits: 1).map(String.init)
         let name = parts.first ?? entry.file
-        let ext  = parts.count > 1 ? parts[1] : "json"
+        let ext = parts.count > 1 ? parts[1] : "json"
         return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")
-                ?? Bundle.main.url(forResource: name, withExtension: ext)
+            ?? Bundle.main.url(forResource: name, withExtension: ext)
     }
 
     @Published var values: [String: String] = [:]
@@ -71,33 +71,49 @@ final class OffsetsStore: ObservableObject, @unchecked Sendable {
 
     private init() { load() }
 
+    private func persistNow() {
+        UserDefaults.standard.set(values, forKey: storageKey)
+    }
+
     func load() {
         let saved = UserDefaults.standard.dictionary(forKey: storageKey) as? [String: String]
         var merged = Self.defaults
         if let saved = saved {
             for (k, v) in saved where merged[k] != nil { merged[k] = v }
         }
-        values = merged
-        if saved == nil { save() }
+        DispatchQueue.main.async {
+            self.values = merged
+            if saved == nil { self.persistNow() }
+        }
     }
 
     func save() {
-        UserDefaults.standard.set(values, forKey: storageKey)
+        DispatchQueue.main.async { self.persistNow() }
     }
 
     func reset() {
-        values = Self.defaults
-        save()
+        DispatchQueue.main.async {
+            self.values = Self.defaults
+            self.persistNow()
+        }
     }
 
     func resetOne(_ name: String) {
-        values[name] = Self.defaults[name] ?? "0x0"
-        save()
+        DispatchQueue.main.async {
+            var next = self.values
+            next[name] = Self.defaults[name] ?? "0x0"
+            self.values = next
+            self.persistNow()
+        }
     }
 
     func update(_ name: String, value: String) {
-        values[name] = value
-        save()
+        DispatchQueue.main.async {
+            var next = self.values
+            next[name] = value
+            self.values = next
+            self.persistNow()
+        }
     }
 
     func value(for name: String) -> String {

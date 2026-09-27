@@ -2,31 +2,10 @@ import Foundation
 import Darwin
 
 enum NetworkStatus {
-    struct Interface {
-        let name: String
-        let ipv4: String
-    }
     struct TunnelPair {
         let local: String
         let peer: String?
         let iface: String
-    }
-
-    static func interfaces() -> [Interface] {
-        var result: [Interface] = []
-        var ifaddr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
-        defer { freeifaddrs(ifaddr) }
-        var ptr: UnsafeMutablePointer<ifaddrs>? = first
-        while let cur = ptr {
-            defer { ptr = cur.pointee.ifa_next }
-            guard let addr = cur.pointee.ifa_addr else { continue }
-            guard addr.pointee.sa_family == sa_family_t(AF_INET) else { continue }
-            let name = String(cString: cur.pointee.ifa_name)
-            guard let ipv4 = numericHost(addr) else { continue }
-            result.append(Interface(name: name, ipv4: ipv4))
-        }
-        return result
     }
 
     private static func numericHost(_ addr: UnsafeMutablePointer<sockaddr>) -> String? {
@@ -46,7 +25,8 @@ enum NetworkStatus {
         var ptr: UnsafeMutablePointer<ifaddrs>? = first
         while let cur = ptr {
             defer { ptr = cur.pointee.ifa_next }
-            let name = String(cString: cur.pointee.ifa_name)
+            guard let namePtr = cur.pointee.ifa_name else { continue }
+            let name = String(cString: namePtr)
             guard isTunnelInterface(name) else { continue }
             guard let addr = cur.pointee.ifa_addr,
                   addr.pointee.sa_family == sa_family_t(AF_INET) else { continue }
@@ -61,7 +41,7 @@ enum NetworkStatus {
         return result
     }
 
-        static func loopbackVPNUp() -> Bool {
+    static func loopbackVPNUp() -> Bool {
         return !tunnelPairs().isEmpty
     }
 
@@ -85,5 +65,4 @@ enum NetworkStatus {
         name.hasPrefix("utun") || name.hasPrefix("ipsec")
             || name.hasPrefix("tap") || name.hasPrefix("ppp")
     }
-
-            }
+}

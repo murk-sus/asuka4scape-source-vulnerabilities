@@ -4,7 +4,8 @@ import UIKit
 struct AboutView: View {
     @Environment(\.openURL) private var openURL
     @EnvironmentObject var state: AppState
-    private let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")!
+
+    private static let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")
 
     private var appName: String {
         Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
@@ -28,12 +29,10 @@ struct AboutView: View {
                 .padding(.vertical, 6)
             }
             Section {
-                linkRow("Source Repository", url: repoURL)
-                linkRow("MIT License", url: repoURL.appendingPathComponent("blob/main/LICENSE"))
+                linkRow("Source Repository", url: Self.repoURL)
+                linkRow("MIT License", url: Self.repoURL?.appendingPathComponent("blob/main/LICENSE"))
+                linkRow("Star on GitHub", url: Self.repoURL?.appendingPathComponent("stargazers"))
             } header: { Text("Open Source") }
-            Section {
-                linkRow("Star on GitHub", url: repoURL.appendingPathComponent("stargazers"))
-            } header: { Text("Community") }
             Section { } header: { Text("Disclaimer") }
             footer: {
                 Text("Independent research project. Not affiliated with Apple Inc.")
@@ -45,13 +44,19 @@ struct AboutView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    private func linkRow(_ title: String, url: URL) -> some View {
-        Button { openURL(url) } label: {
-            HStack {
-                Text(title).foregroundStyle(.tint)
-                Spacer()
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(.tertiary)
+    @ViewBuilder
+    private func linkRow(_ title: String, url: URL?) -> some View {
+        if let url = url {
+            Button { openURL(url) } label: {
+                HStack {
+                    Text(title).foregroundStyle(.tint)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
             }
-        }.buttonStyle(.plain)
+            .buttonStyle(.plain)
+        }
     }
 }
