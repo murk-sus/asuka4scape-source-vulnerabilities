@@ -155,7 +155,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
     func clear() { LockedBuffer.shared.clear(); log = "" }
     func cancel() {
-        nk_necp_cancel()
         append("[*] cancel requested")
     }
 }

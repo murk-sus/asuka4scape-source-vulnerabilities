@@ -126,29 +126,6 @@ New syscalls 27.0:
 - channel 0xA7DACEC .. 0xA7DCF00
 - ulock   0xA754778, 0xA755798, 0xA7547C0
 
-## NECP STATUS
-
-Working:
-- op 0x03 returns 1 byte
-- op 0x04 and 0x1A return 280-byte TLV
-- op 0x0D returns caller VA, NOT a kernel pointer, no leak
-
-Closed:
-- op 0x05, 0x0C, 0x0F return -1
-- op 0x18 empty, op 0x19 -1
-- TLV overflow rejected
-- add_flow len in [0x24, 0xF0] accepted
-- remove_flow twice returns ret=0
-- copy_result_inner kptr count 0
-- copy_interface idx 1..10 no data
-- all 24 op-handlers plus 18 session_action cases bounded
-
-Taint verdict: all propagate taint, all depth-0 sinks bounded.
-Both deep kalloc_type sites 0xA1C6B80 and 0xA3ACA70 are internal
-packet/string parsers with CARRY4 checks. NECP as user-facing
-primitive: CLOSED.
-
-## IOKIT STATUS
 
 - iokit_user_client_trap calls io_connect_method
 - param_3 in [0x18, 0x800] with CARRY8 plus cap 0x800
@@ -158,14 +135,6 @@ primitive: CLOSED.
   candidates, all bounded
 - MIG Mach-routine handlers NOT scanned
 
-## BSD SYSCALL STATUS
-
-- 557/558 unpacked, 117 dup aliases, 300 syscalls passed narg>0
-- 87 sources produced findings
-- depth-0 copyin sites reviewed (9), all bounded
-- BSD syscalls as user-facing primitive: CLOSED for shallow paths
-
-## NEW SURFACE (iOS 27 additions)
 
 - nexus 505..511
 - channel 512..516
@@ -188,21 +157,6 @@ Common false positives:
   Occurs everywhere in NECP. Never flag as INT_OVERFLOW.
 - SoftwareBreakpoint(0x5519) on mismatch is hardening trap
 
-## TAINT METHOD
-
-Sources: user-controlled parameter functions. Sinks: kalloc_type,
-kalloc_zone, copyin, copyout, memmove, memset, kfree_type, ref_dec.
-
-1. Get HighFunction from DecompInterface.
-2. Get parameter varnodes via hf.getLocalSymbolMap. NOT via
-   getFunctionPrototype().getStorage() which silently returns 0.
-3. Compare varnodes by key addr.toString() plus colon plus size.
-4. Iterate hf.getPcodeOps. If any input tainted, output tainted.
-5. For each PcodeOp.CALL, resolve target via getInput(0).isAddress().
-   If sink, check size-arg varnode. Else recurse with tainted args.
-6. Cap depth 12, worklist 40000, total time 1800 sec.
-
-## HOW TO WRITE GHIDRA JYTHON SCRIPTS
 
 - Never use plus between quotes and identifiers. Use percent format.
 - Never put 0x at position 0 of a tuple. Use int("HEX", 16).
@@ -231,17 +185,6 @@ Ghidra headless: analyzeHeadless <proj_dir> <proj_name> -process
 <name> -noanalysis -scriptPath <repo>/scripts -postScript
 kernel_rw.py
 
-## LOGGING FOR EXPLOIT
-
-- Log every syscall result with errno.
-- Log raw return values from every NECP op.
-- Log byte buffer length after every op.
-- Hexdump only when ret is in range 0..600.
-- Hexdump max 2048 bytes.
-- Use percent formatting, never plus.
-- Every probe ends with done or error marker.
-
-## COMMON ERRORS AND FIXES
 
 - unterminated string literal: editor inserted quote before 0x.
   Use int("HEX", 16).
@@ -255,17 +198,6 @@ kernel_rw.py
 - Grappa rc=-5 after patch: restore tokens with marker.
 - SyncFailed at ATC: transient, ignore if readback succeeds.
 
-## GRAPPA RPPAIRING CONFIRMED WORKING
-
-tunnel 10.7.0.1:49152 via raw RPPairing, RSD 85 services, AFC,
-StreamingZip, ATC Capabilities/InstalledAssets/AssetMetrics/
-SyncAllowed, Grappa 84 bytes from static fallback, ReadyForSync,
-AssetManifest, FileComplete 3/3, canary readback matches.
-
-Do NOT collapse kAuthenticGrappaTokens to NULL. Do NOT expect
-host-side Grappa on iOS. Do NOT treat SyncFailed as fatal.
-
-## UI / SWIFTUI iOS 27
 
 - overlay(RespringView()) causes CA UAF and SIGSEGV.
 - List with conditional Section else Section crashes.
@@ -274,14 +206,6 @@ host-side Grappa on iOS. Do NOT treat SyncFailed as fatal.
 - RuntimeView must not show green when slide/base equal dash.
 - respring button lives only in ToolsView.
 
-## NEXT STEPS
-
-1. IOKit per-driver externalMethod scanner with array filter.
-2. MIG Mach-routine handlers.
-3. Concurrency analysis (UAF / TOCTOU).
-4. If all closed statically, pivot to dynamic fuzzing.
-
-## WHAT NOT TO DO
 
 - Do not change SYS_NECP_OPEN/ACTION in necp.c (they are correct).
 - Do not create fix_and_test.yml or build_and_release.yml.
@@ -329,3 +253,10 @@ Fixes applied automatically by the workflow:
 - All Swift call sites of nk_necp_cancel must be deleted, not renamed.
 - Keep if let pin = airlift.pairPIN intact, Text uses pin.
 - Never rewrite it to if airlift.pairPIN != nil.
+
+## CODE AND WORKFLOW STYLE
+
+- No comments in code or workflows.
+- Keep Cleanup idempotent with sed and perl.
+- Never rewrite if let pin = airlift.pairPIN.
+- Remove nk_necp_cancel lines with sed, do not rename.
