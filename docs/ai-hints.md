@@ -315,3 +315,10 @@ CarrierLab UI wraps AirLift file writes to /var/mobile/Library/Carrier Bundles.
 - CarrierLab probe must distinguish: no VPN / no pairing / too-small pairing / FFI error.
 - Read this file before every workflow change. Remove dead steps on every run.
 - project.yml is written in full via cat heredoc, never sed/perl patched.
+
+## PAIRING FILE
+
+- Pairing file lives in Documents/natsuk1_pairing.plist or nested in Documents/Data/Application/*/Documents/.
+- Never validate by specific keys. Some AirLift versions use different key names.
+- Validation: file exists, size > 200, parses as plist, is a dictionary, has at least 1 key.
+- findPairingFile() checks direct path, PairingController path, any plist in Documents, then nested Data/Application/*/Documents.

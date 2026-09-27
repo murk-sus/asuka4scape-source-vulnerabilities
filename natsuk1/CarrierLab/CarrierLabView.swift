@@ -25,17 +25,26 @@ struct CarrierLabView: View {
 
     private var airliftSection: some View {
         Section {
-            HStack(alignment: .top) {
-                Image(systemName: clState.airliftOK ? "checkmark.seal.fill" : "xmark.seal.fill")
-                    .foregroundStyle(clState.airliftOK ? .green : .red)
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: clState.airliftOK ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(clState.airliftOK ? .green : .orange)
+                    .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.55), radius: 4)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Airlift")
+                        .font(.headline)
+                    Text(clState.airliftOK ? "Connected" : "Not ready")
+                        .font(.subheadline)
+                        .foregroundStyle(clState.airliftOK ? .green : .orange)
+                        .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.55), radius: 3)
                     Text(clState.airliftMessage)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(clState.airliftOK ? .green : .red)
+                        .foregroundStyle(.secondary)
                         .lineLimit(5)
                 }
+                Spacer()
             }
+            .padding(.vertical, 6)
         } header: { Label("Airlift", systemImage: "antenna.radiowaves.left.and.right") }
     }
 
@@ -60,11 +69,13 @@ struct CarrierLabView: View {
             HStack {
                 Image(systemName: clState.resourcesOK ? "checkmark.seal.fill" : "xmark.seal.fill")
                     .foregroundStyle(clState.resourcesOK ? .green : .red)
+                    .shadow(color: (clState.resourcesOK ? Color.green : Color.red).opacity(0.55), radius: 3)
                 Text("CarrierAssets in bundle")
                 Spacer()
                 Text(clState.resourcesOK ? "ok" : "missing")
-                    .font(.system(.footnote, design: .monospaced))
+                    .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(clState.resourcesOK ? .green : .red)
+                    .shadow(color: (clState.resourcesOK ? Color.green : Color.red).opacity(0.55), radius: 3)
             }
         } header: { Label("Resources", systemImage: "shippingbox") }
     }
@@ -75,17 +86,23 @@ struct CarrierLabView: View {
                 Text("Status")
                 Spacer()
                 Text(statusText)
-                    .font(.system(.body, design: .monospaced))
+                    .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(statusColor)
+                    .shadow(color: statusColor.opacity(0.55), radius: 3)
             }
             if let s = clState.session {
                 HStack {
                     Text("Started")
                     Spacer()
-                    Text(s.startedAt.formatted()).font(.caption).foregroundStyle(.secondary)
+                    Text(s.startedAt.formatted())
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
                 }
                 if let e = s.lastError {
-                    Text(e).font(.caption).foregroundStyle(.red)
+                    Text(e)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.red)
+                        .shadow(color: Color.red.opacity(0.55), radius: 3)
                 }
             }
         } header: { Label("CarrierLab", systemImage: "shippingbox") }

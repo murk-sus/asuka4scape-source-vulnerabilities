@@ -32,31 +32,73 @@ final class CarrierLabBridge: @unchecked Sendable {
     func carrierRootPath() -> String { carrierRoot }
     func bundleLinksPath() -> String { bundleLinks }
 
+    private func findPairingFile() -> String? {
+        let fm = FileManager.default
+        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+
+        let direct = docs.appendingPathComponent("natsuk1_pairing.plist")
+        if fm.fileExists(atPath: direct.path) {
+            let size = (try? fm.attributesOfItem(atPath: direct.path)[.size] as? Int) ?? 0
+            if size > 0 { return direct.path }
+        }
+
+        let controller = PairingController.pairingFilePath()
+        if fm.fileExists(atPath: controller) {
+            let size = (try? fm.attributesOfItem(atPath: controller)[.size] as? Int) ?? 0
+            if size > 0 { return controller }
+        }
+
+        if let e = try? fm.contentsOfDirectory(atPath: docs.path) {
+            for f in e where f.hasSuffix(".plist") || f.hasSuffix(".mobilepairing") || f.hasSuffix(".mobilepair") {
+                let p = docs.appendingPathComponent(f).path
+                let size = (try? fm.attributesOfItem(atPath: p)[.size] as? Int) ?? 0
+                if size > 200 { return p }
+            }
+        }
+
+        let nested = docs.appendingPathComponent("Data/Application")
+        if let e = try? fm.contentsOfDirectory(atPath: nested.path) {
+            for sub in e {
+                let inner = nested.appendingPathComponent(sub).appendingPathComponent("Documents/natsuk1_pairing.plist")
+                if fm.fileExists(atPath: inner.path) {
+                    let size = (try? fm.attributesOfItem(atPath: inner.path)[.size] as? Int) ?? 0
+                    if size > 0 { return inner.path }
+                }
+            }
+        }
+
+        return nil
+    }
+
     private func validatePairingFile(_ path: String) -> (Bool, String) {
         let fm = FileManager.default
         guard fm.fileExists(atPath: path) else { return (false, "missing") }
         let attrs = try? fm.attributesOfItem(atPath: path)
         let size = (attrs?[.size] as? Int) ?? 0
-        if size < 200 { return (false, "pairing file damaged (\(size) bytes). Re-pair in Tools -> Airlift.") }
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return (false, "pairing file unreadable") }
-        guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
-            return (false, "pairing file corrupt: not a plist (\(size) bytes). Re-pair in Tools -> Airlift.")
+        if size < 200 { return (false, "pairing file too small (\(size) bytes). Re-pair in Tools -> Airlift.") }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+            return (false, "pairing file unreadable")
         }
-        let keys = ["UDID", "DeviceCertificate", "HostCertificate", "RootCertificate", "HostID"]
-        var hits = 0
-        for k in keys where plist[k] != nil { hits += 1 }
-        if hits < 2 { return (false, "pairing file invalid: only \(hits) of 5 keys present. Re-pair in Tools -> Airlift.") }
-        return (true, "pairing ok (\(size) bytes, \(hits) keys)")
+        guard let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) else {
+            return (false, "pairing file not a plist (\(size) bytes). Re-pair in Tools -> Airlift.")
+        }
+        guard let dict = obj as? [String: Any] else {
+            return (false, "pairing plist is not a dictionary. Re-pair in Tools -> Airlift.")
+        }
+        let keys = Array(dict.keys).sorted()
+        if keys.isEmpty {
+            return (false, "pairing plist has no keys (\(size) bytes). Re-pair in Tools -> Airlift.")
+        }
+        return (true, "pairing ok (\(size) bytes, \(keys.count) keys: \(keys.prefix(4).joined(separator: ",")))")
     }
 
     func probe() -> ProbeResult {
         if !NetworkStatus.loopbackVPNUp() { return ProbeResult(state: .noVPN, detail: "no loopback VPN") }
-        let pairing = PairingController.pairingFilePath()
-        let (pairOk, pairMsg) = validatePairingFile(pairing)
-        if !pairOk {
-            if pairMsg == "missing" { return ProbeResult(state: .noPairing, detail: pairMsg) }
-            return ProbeResult(state: .pairingInvalid, detail: pairMsg)
+        guard let pairing = findPairingFile() else {
+            return ProbeResult(state: .noPairing, detail: "missing")
         }
+        let (pairOk, pairMsg) = validatePairingFile(pairing)
+        if !pairOk { return ProbeResult(state: .pairingInvalid, detail: pairMsg) }
         let tmp = NSTemporaryDirectory() + "/carrierlab-probe-\(UUID().uuidString).txt"
         try? "probe".data(using: .utf8)?.write(to: URL(fileURLWithPath: tmp))
         var outJson: UnsafeMutablePointer<CChar>? = nil
