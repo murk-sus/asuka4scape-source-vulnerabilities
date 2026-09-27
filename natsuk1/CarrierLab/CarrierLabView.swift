@@ -60,7 +60,7 @@ struct CarrierLabView: View {
                     Text("CarrierLab never creates a pairing file. Open Tools / Airlift, run Start Pairing, then return here.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("If Airlift works but CarrierLab says RPPairing-only, you need a merged lockdown+RPPairing file with DeviceCertificate. Generate it via pymobiledevice3 remote pair on Mac.")
+                    Text("If pairing file exists but Install is blocked, tap Delete Pairing in Airlift, then Start Pairing again to regenerate merged file.")
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
@@ -157,11 +157,7 @@ struct CarrierLabView: View {
             CarrierLabState.shared.setAirlift(ok: r.probe.ok, message: r.probe.message)
             CarrierLabState.shared.setResources(r.resourcesBundled)
             if !silent {
-                let lines = [
-                    "[check] airlift=\(r.probe.ok) msg=\(r.probe.message)",
-                    "[check] carrierRoot=\(r.carrierRootExists) bundleLinks=\(r.bundleLinksExists) resourcesBundled=\(r.resourcesBundled) backup=\(r.backupPresent) status=\(r.status.rawValue)"
-                ]
-                for l in lines { CarrierLabState.shared.appendLog(l) }
+                CarrierLabState.shared.appendLog("[check] airlift=\(r.probe.ok) msg=\(r.probe.message)")
             }
             CarrierLabState.shared.setBusy(false)
         }
@@ -172,8 +168,7 @@ struct CarrierLabView: View {
         clState.setBusy(true)
         DispatchQueue.global(qos: .userInitiated).async {
             let r = CarrierLabInstaller.shared.install()
-            let line = r.ok ? "[install] ok" : "[install] failed: \(r.message)"
-            CarrierLabState.shared.appendLog(line)
+            CarrierLabState.shared.appendLog(r.ok ? "[install] ok" : "[install] failed: \(r.message)")
             CarrierLabState.shared.setBusy(false)
         }
     }
@@ -183,8 +178,7 @@ struct CarrierLabView: View {
         clState.setBusy(true)
         DispatchQueue.global(qos: .userInitiated).async {
             let r = CarrierLabInstaller.shared.reload()
-            let line = r.ok ? "[reload] ok" : "[reload] failed: \(r.message)"
-            CarrierLabState.shared.appendLog(line)
+            CarrierLabState.shared.appendLog(r.ok ? "[reload] ok" : "[reload] failed: \(r.message)")
             CarrierLabState.shared.setBusy(false)
         }
     }

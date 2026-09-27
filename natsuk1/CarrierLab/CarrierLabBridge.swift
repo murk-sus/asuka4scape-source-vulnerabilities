@@ -21,7 +21,7 @@ final class CarrierLabBridge: @unchecked Sendable {
             case .ok: return "ready"
             case .noVPN: return "No loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
             case .noPairing: return "No pairing file. Open Tools / Airlift and run Start Pairing."
-            case .pairingRPPOnly: return "Pairing file is RPPairing-only. AirliftFFI needs merged lockdown+RPPairing with DeviceCertificate."
+            case .pairingRPPOnly: return "Pairing file is RPPairing-only. Re-run Start Pairing in Airlift to regenerate merged file."
             case .pairingInvalid: return detail
             case .ffiFailed(let s): return s
             }
