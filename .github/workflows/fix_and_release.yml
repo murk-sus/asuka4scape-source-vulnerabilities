@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 concurrency:
   group: fix-release-${{ github.ref }}
@@ -15,7 +17,7 @@ concurrency:
 jobs:
   build:
     runs-on: macos-26
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
@@ -29,79 +31,58 @@ jobs:
         with:
           path: ~/Library/Caches/Homebrew
           key: nk-homebrew-v1
-          restore-keys: |
-            nk-homebrew-
+          restore-keys: nk-homebrew-
 
       - uses: actions/cache@v4
         with:
           path: natsuk1.xcodeproj
           key: xcodeproj-${{ hashFiles('project.yml') }}
-          restore-keys: |
-            xcodeproj-
+          restore-keys: xcodeproj-
 
       - name: Reorganize repository
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           move() {
             local src="$1" dst="$2"
-            if [ -e "$src" ] && [ ! -e "$dst" ]; then
-              mkdir -p "$(dirname "$dst")"
-              if git ls-files --error-unmatch "$src" >/dev/null 2>&1; then
-                git mv "$src" "$dst"
-              else
-                mv "$src" "$dst"
-              fi
-              echo "moved $src -> $dst"
-            fi
+            [ -e "$src" ] && [ ! -e "$dst" ] || return 0
+            mkdir -p "$(dirname "$dst")"
+            git ls-files --error-unmatch "$src" >/dev/null 2>&1 \
+              && git mv "$src" "$dst" || mv "$src" "$dst"
           }
 
           write_if_changed() {
-            local dst="$1"
-            local tmp
-            tmp=$(mktemp)
+            local dst="$1" tmp; tmp=$(mktemp)
             cat > "$tmp"
-            if [ -f "$dst" ] && cmp -s "$tmp" "$dst"; then
-              rm -f "$tmp"
-            else
-              mkdir -p "$(dirname "$dst")"
-              mv "$tmp" "$dst"
-              echo "wrote $dst"
-            fi
+            if [ -f "$dst" ] && cmp -s "$tmp" "$dst"; then rm -f "$tmp"
+            else mkdir -p "$(dirname "$dst")"; mv "$tmp" "$dst"; fi
           }
 
           # --- Layout ---
           move ai-hints.md docs/ai-hints.md
           move ai-think.md docs/ai-think.md
-
           move natsuk1/External/AirliftFFI.xcframework external/AirliftFFI.xcframework
           rmdir natsuk1/External 2>/dev/null || true
-
           move natsuk1/natsuk1.swift natsuk1/App/natsuk1.swift
-
-          move natsuk1/Exploit/nk_api.c        natsuk1/Exploit/Core/nk_api.c
-          move natsuk1/Exploit/nk_api.h        natsuk1/Exploit/Core/nk_api.h
-          move natsuk1/Exploit/nk_offsets.h    natsuk1/Exploit/Core/nk_offsets.h
-          move natsuk1/Exploit/necp.c          natsuk1/Exploit/NECP/necp.c
-          move natsuk1/Exploit/GrappaHelper.h  natsuk1/Exploit/Airlift/GrappaHelper.h
-          move natsuk1/Exploit/GrappaHelper.m  natsuk1/Exploit/Airlift/GrappaHelper.m
-
+          move natsuk1/Exploit/nk_api.c       natsuk1/Exploit/Core/nk_api.c
+          move natsuk1/Exploit/nk_api.h       natsuk1/Exploit/Core/nk_api.h
+          move natsuk1/Exploit/nk_offsets.h   natsuk1/Exploit/Core/nk_offsets.h
+          move natsuk1/Exploit/necp.c         natsuk1/Exploit/NECP/necp.c
+          move natsuk1/Exploit/GrappaHelper.h natsuk1/Exploit/Airlift/GrappaHelper.h
+          move natsuk1/Exploit/GrappaHelper.m natsuk1/Exploit/Airlift/GrappaHelper.m
           move natsuk1/bridging.h natsuk1/Support/bridging.h
 
           # --- Cleanup ---
-          rm -f natsuk1.png
-          rm -f natsuk1/Views/SimpleList.swift
-          rm -f ai-hints-curated.md
+          rm -f natsuk1.png natsuk1/Views/SimpleList.swift ai-hints-curated.md
           rm -f natsuk1/Helpers/MobileGestalt.swift
           rm -f natsuk1/Views/MobileGestaltView.swift
           rm -f natsuk1/Views/CrashLogView.swift
           rm -f .github/workflows/build_and_release.yml
           rm -f .github/workflows/fix_and_test.yml
           find . -name .DS_Store -delete 2>/dev/null || true
-
-          mkdir -p docs
+          mkdir -p docs pages
 
           # --- bridging.h ---
           write_if_changed natsuk1/Support/bridging.h <<'EOF_BRIDGE'
@@ -128,66 +109,19 @@ jobs:
           - `natsuk1/Exploit/Core` — kernel primitives: `nk_api.c/h`, `nk_offsets.h`.
           - `natsuk1/Exploit/NECP` — `necp.c`, syscall-level probes. Status: closed.
           - `natsuk1/Exploit/Airlift` — `GrappaHelper.m`, AirTraffic / Grappa bridge.
-          - `natsuk1/Helpers` — Swift utilities (KeepAlive, CrashLog, OffsetsStore, …).
+          - `natsuk1/Helpers` — Swift utilities.
           - `natsuk1/Views` — SwiftUI screens.
           - `natsuk1/Offsets` — per-device offsets JSON.
           - `natsuk1/Resources` — Info.plist, entitlements, asset catalog.
           - `natsuk1/Support` — bridging header.
           - `external/AirliftFFI.xcframework` — prebuilt C FFI stub.
-          - `docs/` — project documentation (including AI guides).
+          - `docs/` — documentation (incl. AI guides).
 
           ## Build
 
-          - XcodeGen (`project.yml`) → `natsuk1.xcodeproj` → `xcodebuild`.
-          - Ad-hoc signing via `ldid`, empty entitlements.
-          - CI: `.github/workflows/fix_and_release.yml`.
-
-          ## Status
-
-          - NECP: closed at depth-0 sinks on this build. Kept as probe.
+          XcodeGen (`project.yml`) → `natsuk1.xcodeproj` → `xcodebuild` → `ldid` → IPA.
+          CI: `.github/workflows/fix_and_release.yml`.
           EOF_ARCH
-
-          # --- docs/install.html (redirector for custom URL schemes) ---
-          write_if_changed docs/install.html <<'EOF_INSTALL'
-          <!doctype html>
-          <html lang="en">
-          <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width,initial-scale=1">
-          <title>Opening installer…</title>
-          <style>
-            body{font:16px -apple-system,system-ui,sans-serif;background:#0d1117;color:#c9d1d9;
-                 display:flex;align-items:center;justify-content:center;min-height:100vh;
-                 margin:0;padding:24px;text-align:center}
-            a{color:#58a6ff}
-          </style>
-          </head>
-          <body>
-          <div>
-            <p id="msg">Opening installer…</p>
-            <p><a id="fallback" href="#" hidden>Tap here if nothing happens</a></p>
-          </div>
-          <script>
-          (function(){
-            var p = new URLSearchParams(location.search);
-            var s = p.get('scheme');
-            var u = p.get('ipa');
-            var m = document.getElementById('msg');
-            var a = document.getElementById('fallback');
-            if (!s || !u) { m.textContent = 'Missing scheme or ipa parameter.'; return; }
-            if (!/^[a-z][a-z0-9+.-]*$/.test(s)) { m.textContent = 'Bad scheme.'; return; }
-            var target = s + '://install?url=' + encodeURIComponent(u);
-            a.href = target;
-            a.hidden = false;
-            location.replace(target);
-            setTimeout(function(){
-              m.textContent = 'If the app did not open, tap the link below.';
-            }, 1500);
-          })();
-          </script>
-          </body>
-          </html>
-          EOF_INSTALL
 
           # --- README.md ---
           write_if_changed README.md <<'EOF_README'
@@ -248,16 +182,6 @@ jobs:
               ENABLE_MODULE_VERIFIER: NO
               VALIDATE_PRODUCT: NO
               ALWAYS_SEARCH_USER_PATHS: NO
-              CLANG_WARN_DOCUMENTATION_COMMENTS: NO
-              CLANG_WARN_UNREACHABLE_CODE: NO
-              CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER: NO
-              GCC_WARN_UNINITIALIZED_AUTOS: NO
-              GCC_WARN_UNDECLARED_SELECTOR: NO
-              GCC_WARN_UNUSED_FUNCTION: NO
-              GCC_WARN_UNUSED_VARIABLE: NO
-              ENABLE_STRICT_OBJC_MSGSEND: NO
-              MTL_ENABLE_DEBUG_INFO: NO
-              MTL_FAST_MATH: YES
               GCC_NO_COMMON_BLOCKS: YES
               CLANG_LTO: NO
               LLVM_LTO: NO
@@ -266,9 +190,6 @@ jobs:
                 SWIFT_OPTIMIZATION_LEVEL: "-Onone"
                 SWIFT_COMPILATION_MODE: singlefile
                 GCC_OPTIMIZATION_LEVEL: "0"
-                GCC_PREPROCESSOR_DEFINITIONS:
-                  - "DEBUG=1"
-                  - "$(inherited)"
                 ONLY_ACTIVE_ARCH: YES
                 DEBUG_INFORMATION_FORMAT: dwarf
                 SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
@@ -278,14 +199,10 @@ jobs:
                 SWIFT_COMPILATION_MODE: wholemodule
                 SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
                 GCC_OPTIMIZATION_LEVEL: "s"
-                GCC_PREPROCESSOR_DEFINITIONS:
-                  - "NDEBUG=1"
-                  - "$(inherited)"
                 ONLY_ACTIVE_ARCH: NO
                 DEBUG_INFORMATION_FORMAT: dwarf
                 ENABLE_NS_ASSERTIONS: NO
                 ENABLE_TESTABILITY: NO
-                MTL_FAST_MATH: YES
                 GCC_INLINES_ARE_PRIVATE_EXTERN: YES
                 GCC_SYMBOLS_PRIVATE_EXTERN: YES
                 DEAD_CODE_STRIPPING: YES
@@ -334,18 +251,55 @@ jobs:
                   GENERATE_INFOPLIST_FILE: NO
                   ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
                   ASSETCATALOG_COMPILER_OPTIMIZATION: space
-                  ASSETCATALOG_COMPILER_SKIP_APP_STORE_DEPLOYMENT: NO
                   ENABLE_ONLY_ACTIVE_RESOURCES: YES
           EOF_PROJECT
 
+          # --- GitHub Pages: redirect page ---
+          write_if_changed pages/index.html <<'EOF_PAGES'
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>Opening installer…</title>
+          <style>
+            body{font:16px -apple-system,system-ui,sans-serif;background:#0d1117;color:#c9d1d9;
+                 display:flex;align-items:center;justify-content:center;min-height:100vh;
+                 margin:0;padding:24px;text-align:center}
+            a{color:#58a6ff}
+          </style>
+          </head>
+          <body>
+          <div>
+            <p id="msg">Opening installer…</p>
+            <p><a id="fallback" href="#" hidden>Tap here if nothing happens</a></p>
+          </div>
+          <script>
+          (function(){
+            var p = new URLSearchParams(location.search);
+            var s = p.get('scheme');
+            var u = p.get('ipa');
+            var m = document.getElementById('msg');
+            var a = document.getElementById('fallback');
+            if (!s || !u) { m.textContent = 'Missing scheme or ipa parameter.'; return; }
+            if (!/^[a-z][a-z0-9+.-]*$/.test(s)) { m.textContent = 'Bad scheme.'; return; }
+            var target = s + '://install?url=' + encodeURIComponent(u);
+            a.href = target;
+            a.hidden = false;
+            location.replace(target);
+            setTimeout(function(){
+              m.textContent = 'If the app did not open, tap the link below.';
+            }, 1500);
+          })();
+          </script>
+          </body>
+          </html>
+          EOF_PAGES
+
           # --- Commit if changed ---
           git add -A
-          if git diff --cached --quiet; then
-            echo "no changes to commit"
-          else
-            git commit -m "chore: reorganize repo layout [skip ci]"
-            git push
-          fi
+          if git diff --cached --quiet; then echo "no changes"
+          else git commit -m "chore: reorganize repo layout [skip ci]"; git push; fi
 
       - name: Verify AirliftFFI present
         run: |
@@ -365,11 +319,8 @@ jobs:
 
       - name: Generate project
         run: |
-          if [ ! -d natsuk1.xcodeproj ]; then
-            xcodegen generate
-          else
-            echo "Using cached Xcode project"
-          fi
+          if [ ! -d natsuk1.xcodeproj ]; then xcodegen generate
+          else echo "Using cached Xcode project"; fi
 
       - name: Build
         run: |
@@ -394,7 +345,7 @@ jobs:
             OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
             build -quiet
 
-      - name: Package
+      - name: Package & Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -404,40 +355,36 @@ jobs:
           BIN="$APP/natsuk1"
           ldid -Snatsuk1/Resources/natsuk1.entitlements "$BIN"
           xcrun strip -S -x "$BIN" || true
-          find "$APP" -name "*.dSYM" -prune -exec rm -rf {} + 2>/dev/null || true
-          find "$APP" -name "*.swiftmodule" -delete 2>/dev/null || true
-          find "$APP" -name "*.swiftdoc" -delete 2>/dev/null || true
-          find "$APP" -name "*.swiftsourceinfo" -delete 2>/dev/null || true
+          find "$APP" \( -name '*.dSYM' -o -name '*.swiftmodule' \
+                       -o -name '*.swiftdoc' -o -name '*.swiftsourceinfo' \) \
+                -exec rm -rf {} + 2>/dev/null || true
           xattr -cr "$APP" || true
-          rm -rf Payload natsuk1.ipa
-          mkdir -p Payload
-          cp -R "$APP" Payload/
+          rm -rf Payload natsuk1.ipa && mkdir -p Payload && cp -R "$APP" Payload/
           ditto -c -k --sequesterRsrc --keepParent Payload natsuk1.ipa
           rm -rf Payload
           SIZE=$(stat -f%z natsuk1.ipa)
           echo "IPA bytes $SIZE"
-          if gh release view development >/dev/null 2>&1; then
-            gh release delete development --yes --cleanup-tag
-          fi
+          gh release view development >/dev/null 2>&1 \
+            && gh release delete development --yes --cleanup-tag || true
           R="${{ github.repository }}"
           IPA="https://github.com/$R/releases/download/development/natsuk1.ipa"
-          GH_PAGE="https://raw.githack.com/$R/main/docs/install.html"
-          IPA_ENC=$(printf '%s' "$IPA" | python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.stdin.read().strip(),safe=""))')
+          OWNER=$(echo "$R" | cut -d/ -f1)
+          REPO=$(echo "$R" | cut -d/ -f2)
+          PAGE="https://$OWNER.github.io/$REPO"
+          ENC=$(printf '%s' "$IPA" | python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.stdin.read().strip(),safe=""))')
 
-          mk_link() {
-            printf -- '- %s: [install](%s?scheme=%s&ipa=%s)\n' "$2" "$GH_PAGE" "$1" "$IPA_ENC"
-          }
+          mk() { printf -- '- %s: [install](%s?scheme=%s&ipa=%s)\n' "$2" "$PAGE" "$1" "$ENC"; }
 
           NOTES="natsuk1 v22.0 ($((SIZE/1024)) KB)
 
           **Install**
 
           - Direct IPA: $IPA
-          $(mk_link livecontainer LiveContainer)
-          $(mk_link sidestore SideStore)
-          $(mk_link altstore AltStore)
-          $(mk_link scarlet Scarlet)
-          $(mk_link esign ESign)
+          $(mk livecontainer LiveContainer)
+          $(mk sidestore SideStore)
+          $(mk altstore AltStore)
+          $(mk scarlet Scarlet)
+          $(mk esign ESign)
 
           **Recent commits**
 
@@ -445,7 +392,30 @@ jobs:
 
           gh release create development natsuk1.ipa \
             --target "${{ github.sha }}" \
-            --title "Development" \
-            --prerelease \
-            --latest=false \
+            --title "Development" --prerelease --latest=false \
             --notes "$NOTES"
+
+  pages:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 1
+      - name: Prepare pages
+        run: |
+          mkdir -p _site
+          cp pages/index.html _site/index.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
