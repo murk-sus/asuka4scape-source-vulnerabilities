@@ -39,11 +39,7 @@ final class OffsetsStore: ObservableObject, @unchecked Sendable {
     nonisolated static var groups: [Group] { bundled?.groups ?? [] }
     nonisolated static var defaults: [String: String] { bundled?.defaults ?? [:] }
 
-    nonisolated static var activeVersion: VersionEntry? {
-        resolveActiveEntry()
-    }
-
-    nonisolated private static func loadIndex() -> Index? {
+        nonisolated private static func loadIndex() -> Index? {
         guard let url = Bundle.main.url(forResource: "index", withExtension: "json", subdirectory: "Offsets"),
               let data = try? Data(contentsOf: url),
               let index = try? JSONDecoder().decode(Index.self, from: data)

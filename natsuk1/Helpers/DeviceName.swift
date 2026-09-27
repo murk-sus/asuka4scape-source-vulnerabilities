@@ -60,12 +60,7 @@ enum DeviceName {
         byID[machineID()]?.chip ?? "unknown"
     }
 
-    static func full() -> String {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        return "\(friendly()) · iOS \(v.majorVersion).\(v.minorVersion)"
-    }
-
-    static func machineID() -> String {
+        static func machineID() -> String {
         var info = utsname()
         uname(&info)
         return Mirror(reflecting: info.machine).children.reduce("") { id, el in

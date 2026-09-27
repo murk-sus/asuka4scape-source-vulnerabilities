@@ -20,3 +20,12 @@ natsuk1.ipa
 # Local
 reference/
 *.log
+
+# Swift
+*.xcworkspace
+.swiftpm/
+.build/
+Package.resolved
+
+# Debug
+*.dSYM

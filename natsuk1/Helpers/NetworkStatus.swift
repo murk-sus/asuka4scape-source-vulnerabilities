@@ -5,7 +5,6 @@ enum NetworkStatus {
     struct Interface {
         let name: String
         let ipv4: String
-        let netmask: String?
     }
     struct TunnelPair {
         let local: String
@@ -63,15 +62,7 @@ enum NetworkStatus {
         return result
     }
 
-    static func summarize(deviceIP: String) -> (vpn: Bool, wifi: Bool, detail: String) {
-        let ifs = interfaces()
-        let vpn = loopbackVPNUp()
-        let wifi = ifs.contains { $0.name == "en0" }
-        let detail = ifs.map { "\($0.name)=\($0.ipv4)" }.joined(separator: ", ")
-        return (vpn, wifi, detail)
-    }
-
-    static func loopbackVPNUp() -> Bool {
+        static func loopbackVPNUp() -> Bool {
         return !tunnelPairs().isEmpty
     }
 
@@ -96,21 +87,4 @@ enum NetworkStatus {
             || name.hasPrefix("tap") || name.hasPrefix("ppp")
     }
 
-    static func tunnelHostCandidates() -> [String] {
-        let ifs = interfaces().filter {
-            !isTunnelInterface($0.name) && !$0.ipv4.hasPrefix("127.")
-        }
-        return (ifs.filter { $0.name == "en0" } + ifs.filter { $0.name != "en0" })
-            .map(\.ipv4)
-    }
-
-    static func host(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let slash = trimmed.firstIndex(of: "/") else { return trimmed }
-        return String(trimmed[..<slash]).trimmingCharacters(in: .whitespaces)
-    }
-
-    static func isOwnAddress(_ deviceIP: String) -> Bool {
-        interfaces().contains { $0.ipv4 == deviceIP }
-    }
-}
+            }

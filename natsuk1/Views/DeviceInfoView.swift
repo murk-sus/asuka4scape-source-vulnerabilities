@@ -6,7 +6,7 @@ struct DeviceInfoView: View {
         List {
             Section {
                 row("Model", DeviceName.friendly())
-                row("Identifier", machineID())
+                row("Identifier", DeviceName.machineID())
                 row("Chip", DeviceName.chip())
             } header: { Label("Hardware", systemImage: "cpu") }
 
@@ -39,14 +39,7 @@ struct DeviceInfoView: View {
                 .lineLimit(1).truncationMode(.middle)
         }
     }
-    private func machineID() -> String {
-        var sysinfo = utsname(); uname(&sysinfo)
-        return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
-            guard let v = el.value as? Int8, v != 0 else { return id }
-            return id + String(UnicodeScalar(UInt8(v)))
-        }
-    }
-    private func sysctlString(_ name: String) -> String {
+        private func sysctlString(_ name: String) -> String {
         var size = 0; sysctlbyname(name, nil, &size, nil, 0)
         var buf = [CChar](repeating: 0, count: size)
         sysctlbyname(name, &buf, &size, nil, 0)
