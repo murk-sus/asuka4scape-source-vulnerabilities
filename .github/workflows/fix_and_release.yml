@@ -30,9 +30,9 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-${{ hashFiles('project.yml') }}
+          key: nk-v2-${{ hashFiles('project.yml') }}
           restore-keys: |
-            nk-
+            nk-v2-
 
       - name: Install tools
         run: |
@@ -63,7 +63,6 @@ jobs:
 
           perl -0777 -i -pe 's/\n    func recoverPreviousSession\(\)[^{]*\{.*?\n    \}\n/\n/gs' natsuk1/Helpers/CrashLog.swift 2>/dev/null || true
           perl -0777 -i -pe 's/\n    func clearPreviousCrash\(\)[^{]*\{.*?\n    \}\n/\n/gs' natsuk1/Helpers/CrashLog.swift 2>/dev/null || true
-
           perl -0777 -i -pe 's/\n    func respring\(\) \{.*?\n    \}\n/\n/gs' natsuk1/Helpers/AirliftBridge.swift 2>/dev/null || true
           perl -0777 -i -pe 's/\n    func findContainer\(bundleID: String\) async -> String\? \{.*?\n    \}\n/\n/gs' natsuk1/Helpers/AirliftBridge.swift 2>/dev/null || true
 
@@ -81,30 +80,37 @@ jobs:
           perl -0777 -i -pe 's/\n\s*nonisolated static var activeVersion:[^\n]*\{.*?\n\s*\}\n/\n/gs' natsuk1/Helpers/OffsetsStore.swift 2>/dev/null || true
           sed -i '' 's/row("Identifier", machineID())/row("Identifier", DeviceName.machineID())/' natsuk1/Views/DeviceInfoView.swift 2>/dev/null || true
 
-          sed -i '' 's/if airlift\.pairPIN != nil {/if let pin = airlift.pairPIN {/' natsuk1/Views/AirliftView.swift 2>/dev/null || true
+          AV=natsuk1/Views/AirliftView.swift
+          if [ -f "$AV" ]; then
+            if grep -q 'PIN \\(pin)' "$AV"; then
+              sed -i '' 's/if airlift\.pairPIN != nil {/if let pin = airlift.pairPIN {/' "$AV"
+            else
+              sed -i '' 's/if let pin = airlift\.pairPIN {/if airlift.pairPIN != nil {/' "$AV"
+            fi
+          fi
 
           sed -i '' '/^natsuk1-app\.tar\.gz$/d; /^natsuk1\.ipa$/d; /^reference\/$/d' .gitignore 2>/dev/null || true
           sed -i '' '/necp\.c.*probes/d' docs/architecture.md 2>/dev/null || true
 
           if [ -f docs/ai-hints.md ]; then
-            sed -i '' '/^## NECP STATUS$/,/^## IOKIT STATUS$/d' docs/ai-hints.md 2>/dev/null || true
-            sed -i '' '/^## IOKIT STATUS$/,/^## BSD SYSCALL STATUS$/d' docs/ai-hints.md 2>/dev/null || true
-            sed -i '' '/^## BSD SYSCALL STATUS$/,/^## NEW SURFACE/d' docs/ai-hints.md 2>/dev/null || true
-            sed -i '' '/^## NEW SURFACE$/,/^## WHAT A PRIMITIVE LOOKS LIKE$/d' docs/ai-hints.md 2>/dev/null || true
-            sed -i '' '/^## TAINT METHOD$/,/^## HOW TO WRITE GHIDRA/d' docs/ai-hints.md 2>/dev/null || true
-            sed -i '' '/^## HOW TO WRITE GHIDRA/,/^## WORKFLOW$/d' docs/ai-hints.md 2>/dev/null || true
-            sed -i '' '/^## LOGGING FOR EXPLOIT$/,/^## COMMON ERRORS/d' docs/ai-hints.md 2>/dev/null || true
-            sed -i '' '/^## COMMON ERRORS/,/^## GRAPPA/d' docs/ai-hints.md 2>/dev/null || true
-            sed -i '' '/^## GRAPPA/,/^## UI \/ SWIFTUI/d' docs/ai-hints.md 2>/dev/null || true
-            sed -i '' '/^## NEXT STEPS$/,/^## WHAT NOT TO DO$/d' docs/ai-hints.md 2>/dev/null || true
-            sed -i '' '/^## WHAT NOT TO DO$/,$d' docs/ai-hints.md 2>/dev/null || true
+            sed -i '' '/^## NECP STATUS$/,/^## IOKIT STATUS$/d' docs/ai-hints.md
+            sed -i '' '/^## IOKIT STATUS$/,/^## BSD SYSCALL STATUS$/d' docs/ai-hints.md
+            sed -i '' '/^## BSD SYSCALL STATUS$/,/^## NEW SURFACE/d' docs/ai-hints.md
+            sed -i '' '/^## NEW SURFACE$/,/^## WHAT A PRIMITIVE LOOKS LIKE$/d' docs/ai-hints.md
+            sed -i '' '/^## TAINT METHOD$/,/^## HOW TO WRITE GHIDRA/d' docs/ai-hints.md
+            sed -i '' '/^## HOW TO WRITE GHIDRA/,/^## WORKFLOW$/d' docs/ai-hints.md
+            sed -i '' '/^## LOGGING FOR EXPLOIT$/,/^## COMMON ERRORS/d' docs/ai-hints.md
+            sed -i '' '/^## COMMON ERRORS/,/^## GRAPPA/d' docs/ai-hints.md
+            sed -i '' '/^## GRAPPA/,/^## UI \/ SWIFTUI/d' docs/ai-hints.md
+            sed -i '' '/^## NEXT STEPS$/,/^## WHAT NOT TO DO$/d' docs/ai-hints.md
+            sed -i '' '/^## WHAT NOT TO DO$/,$d' docs/ai-hints.md
           fi
 
           if ! grep -q 'CODE AND WORKFLOW STYLE' docs/ai-hints.md 2>/dev/null; then
             printf '\n## CODE AND WORKFLOW STYLE\n\n' >> docs/ai-hints.md
             printf -- '- No comments in code or workflows.\n' >> docs/ai-hints.md
-            printf -- '- Keep Cleanup idempotent with sed and perl.\n' >> docs/ai-hints.md
-            printf -- '- Never rewrite if let pin = airlift.pairPIN.\n' >> docs/ai-hints.md
+            printf -- '- Keep cleanup idempotent with sed and perl.\n' >> docs/ai-hints.md
+            printf -- '- Never rewrite if let pin = airlift.pairPIN unless Text PIN pin was removed first.\n' >> docs/ai-hints.md
             printf -- '- Remove nk_necp_cancel lines with sed, do not rename.\n' >> docs/ai-hints.md
           fi
 
@@ -116,13 +122,14 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "chore: drop NECP, fix optional binding [skip ci]"
+            git commit -m "chore: reset cache, drop NECP [skip ci]"
             git push
           fi
 
       - name: Generate project
         run: |
-          [ -d natsuk1.xcodeproj ] || xcodegen generate
+          rm -rf natsuk1.xcodeproj
+          xcodegen generate
 
       - name: Build
         run: |
