@@ -31,10 +31,10 @@ jobs:
             ~/Library/Caches/Homebrew
             natsuk1/External
             build
-          key: nk-v11-static
+          key: nk-v12-static
           restore-keys: |
+            nk-v12-
             nk-v11-
-            nk-v10-
 
       - name: Cleanup
         run: |
@@ -43,37 +43,412 @@ jobs:
           rm -f natsuk1/Views/SimpleList.swift
           find . -name .DS_Store -delete
 
-      - name: Validate ai files present
+      - name: Write ai-think.md
         run: |
-          set -euo pipefail
-          test -f ai-think.md || { echo "missing ai-think.md"; exit 1; }
-          test -f ai-hints-curated.md || { echo "missing ai-hints-curated.md"; exit 1; }
-          echo "ai-think.md: $(wc -c < ai-think.md) bytes"
-          echo "ai-hints-curated.md: $(wc -c < ai-hints-curated.md) bytes"
+          cat > ai-think.md <<'AI_THINK_EOF'
+          # How to Think
 
-      - name: Merge curated into ai-hints.md
+          You are working with a human researcher on low-level systems problems.
+          They are technical, they move fast, they do not need basics explained.
+          Every message they send is either a question, a task, or a result dump.
+          Read the message, decide which one it is, respond accordingly.
+
+          ## Before you answer anything
+
+          1. Search the web. Latest information on the topic. If about an API,
+             check current version. If about a tool, check release notes. If
+             about a bug, check the CVE list. Cite URLs.
+          2. Think in full. Enumerate plausible interpretations. Pick the one
+             matching what the user actually said, not the easiest to answer.
+             If two interpretations are equally plausible, say so and ask.
+          3. Plan the answer. Smallest correct response. Do not pad. Do not
+             summarize what the user already knows.
+
+          If web search is not available, say so at the very top. Do not
+          pretend you searched. Do not guess.
+
+          ## How to read the user
+
+          - Short, terse, lowercase: they are in flow. Match that rhythm.
+          - Long with code dump: they are stuck. Read the dump first. Do not
+            ask them to re-paste anything already visible.
+          - Angry or frustrated: they hit an error you caused or missed.
+            Acknowledge the specific failure, do not defend. Fix it.
+          - Question about state: answer with the state, not a proposal.
+
+          ## How to write code
+
+          Scripts run in constrained environments: Ghidra headless, Jython 2.7,
+          CI runners, container builds. Rules:
+
+          - Prefer explicit over clever. Long script with obvious loops beats
+            short script with a clever generator.
+          - Every external call gets a timeout. No infinite loops. No
+            unbounded recursion. No while True without a counter.
+          - Every I/O gets a try/except. Assume failure.
+          - Every iteration gets a log line.
+          - Every script writes output to a file, and only one file.
+          - Wrap main in try/except. On crash, write traceback to output file.
+          - No string concatenation with plus. Use percent formatting or
+            format() or f-strings. Editors mangle quote-plus-identifier.
+          - No hex literals at the start of tuple or list elements. Declare
+            named constants from decimal or hex strings first.
+
+          ## How to analyze results
+
+          - Read the whole dump. Do not skim.
+          - Identify what is confirmed, what is hypothesis, what is unexamined.
+          - When you find a candidate primitive, immediately search for the
+            counter-evidence: bound check, CARRY flag, trap. Never present a
+            candidate without checking.
+          - If the answer is no primitive here, say it plainly. Do not invent
+            a path forward just to have something to say.
+          - If the answer is I need more data, say exactly what to run and
+            what to send back. One command, one file, one format.
+
+          ## How to report
+
+          - Lead with the conclusion. Closed, bounded, no primitive first.
+          - Short code blocks. Long decompiles trimmed to 20 key lines.
+          - Mark confirmed vs unconfirmed explicitly.
+          - If you found an anomaly, name it and say what would resolve it.
+          - If the user hypothesis is wrong, say so and cite the line.
+
+          ## When to stop
+
+          - After two or three attempts at the same thing, stop. Report what
+            you tried, why it failed, what to try next.
+          - Do not keep guessing at a syntax error. Ask for the failing line.
+          - Do not keep tweaking a failing script if the fix is not obvious.
+            Rewrite from scratch with the constraint that broke it in mind.
+          - Do not answer beyond your confidence.
+
+          ## What never to do
+
+          - Never claim a fact about a specific version without checking.
+          - Never invent an offset, an API name, or a function signature.
+          - Never present a primitive without walking through the bound check.
+          - Never ignore a search result because it contradicts your belief.
+          - Never apologize excessively. One sentence, then fix it.
+          - Never write code with plus between quotes and identifiers.
+          - Never put hex literals at the start of tuple or list elements.
+          - Never write a script with no timeouts.
+          - Never write a script that writes to more than one output file.
+          - Never submit a script without validating syntax first.
+
+          ## How to write GitHub Actions workflows
+
+          This section will save hours of invalid YAML fights.
+
+          ### Block scalar indentation
+
+          Inside a run: | block, every line of content must be indented MORE
+          than the run: key itself. A line at column 0 inside run: | kills
+          YAML parsing with invalid yaml syntax.
+
+          Bad:
+          run: |
+            echo start
+          content at column 0
+
+          ### Never put long content inside run: |
+
+          Any markdown, source file, or multi-line text over 30 lines should
+          be a separate file committed to the repo. The workflow reads it.
+
+          ### If you must inline content, indent every line
+
+          Every line of the heredoc body must have the SAME number of leading
+          spaces. Use only spaces, never tabs. Standard is 10 spaces for a
+          step-level block.
+
+          ### Heredoc markers
+
+          <<'EOF' quoted does not expand variables. Use this for content that
+          may contain dollar signs. <<EOF unquoted expands variables.
+
+          ### Validate before pushing
+
+          python3 -c "import yaml; yaml.safe_load(open('.github/workflows/foo.yml')); print('ok')"
+
+          If Python yaml parses it, GitHub will parse it. If Python yaml
+          fails, GitHub fails with the same line number.
+
+          ### Quote ${{ }} in string contexts
+
+          key: ${{ foo }} is fine. key: prefix-${{ foo }}-suffix may be parsed
+          as YAML mapping. Quote it: key: "prefix-${{ foo }}-suffix".
+
+          ### Split large workflows
+
+          If a workflow exceeds 500 lines, split into multiple files with
+          different trigger conditions. Long workflows are hard to debug.
+          AI_THINK_EOF
+          echo "ai-think.md: $(wc -c < ai-think.md) bytes"
+
+      - name: Strip old curated block
         run: |
-          python3 - <<'PYEOF'
-          import io, os
-          curated_path = "ai-hints-curated.md"
-          hints_path = "ai-hints.md"
-          new = io.open(curated_path, encoding="utf-8").read().rstrip()
-          ms = "<!-- AI-HINTS-CURATED-START -->"
-          me = "<!-- AI-HINTS-CURATED-END -->"
-          block = ms + "\n" + new + "\n" + me
-          if os.path.exists(hints_path):
-              s = io.open(hints_path, encoding="utf-8").read()
-              if ms in s and me in s:
-                  i = s.index(ms)
-                  j = s.index(me) + len(me)
-                  s = s[:i] + block + s[j:]
-              else:
-                  s = s.rstrip() + "\n\n" + block + "\n"
-          else:
-              s = block + "\n"
-          io.open(hints_path, "w", encoding="utf-8").write(s)
-          print("ai-hints.md: %d bytes" % len(s.encode("utf-8")))
-          PYEOF
+          python3 -c "import io,os;p='ai-hints.md';s=io.open(p).read() if os.path.exists(p) else '';ms='<!-- AI-HINTS-CURATED-START -->';me='<!-- AI-HINTS-CURATED-END -->';i=s.find(ms);j=s.find(me);s=(s[:i]+s[j+len(me):]) if i>=0 and j>=0 else s;io.open(p,'w').write(s.rstrip()+'\n')"
+
+      - name: Append curated to ai-hints.md
+        run: |
+          cat >> ai-hints.md <<'HINTS_EOF'
+
+          <!-- AI-HINTS-CURATED-START -->
+
+          ## PROJECT IDENTITY
+
+          natsuk1: on-device iOS kernel research toolkit plus AirTraffic exploit.
+          - target: iPhone14,5 (iPhone 13, A15) / iOS 27.0 / build 24A437
+          - kernel: xnu-13432.2.10~2 / RELEASE_ARM64_T8110 / arm64e
+          - signing: ad-hoc, empty entitlements, works on LiveContainer and SideStore
+          - license: MIT, author murk-sus
+
+          What it does:
+          - pairs the iPhone as host via RPPairing on the 10.7.0.x tunnel
+          - opens RSD tunnel, enumerates services (AFC, ATC, StreamingZip)
+          - uploads a symlink payload via StreamingZip plus AFC to reach a target dir
+          - drives AirTraffic ATC sync (Grappa token, AssetManifest, FileComplete)
+          - reads back a canary through the symlink target to confirm the write
+          - NECP probes for kernel info disclosure (KASLR via op 0x0D)
+          - full NECP / IOKit / BSD-syscall taint analysis of the kernelcache
+
+          Stack:
+          - SwiftUI app: natsuk1/natsuk1.swift, Views/, Helpers/
+          - C probes: natsuk1/Exploit/necp.c, nk_api.c
+          - ObjC: natsuk1/Exploit/GrappaHelper.m
+          - AirliftFFI stub: natsuk1/External/AirliftFFI.xcframework/ios-arm64/
+          - Offsets DB: natsuk1/Offsets/
+          - CI: fix_and_release.yml (build) plus extract_offsets.yml (analysis)
+
+          ## MANDATORY BEHAVIOR
+
+          For every user message, before answering:
+
+          1. Use web search. Latest on iOS 27 kernel internals, XNU changelog
+             2026, Apple security advisories 2026, blacktop/ipsw release notes,
+             blacktop symbolicator signatures, Ghidra 12.x headless API,
+             Jython 2.7 compat, LiveContainer / SideStore / AltStore / TrollStore
+             iOS 27 status, SwiftUI iOS 27 regressions, NECP / mbuf / socket /
+             IOKit bugs 2025-2026, Apple developer forums iOS 27 threads.
+          2. Use extended reasoning. Enumerate alternatives, weigh tradeoffs,
+             then commit. No hedging.
+          3. If web search is unavailable, say so explicitly at the top.
+          4. Cite source URLs for any fact that could change.
+          5. Never claim a version does not exist without checking.
+          6. Never claim an API exists without checking current syntax.
+          7. Never guess offsets. Only use values verified by Ghidra on the
+             exact kernelcache being analyzed.
+
+          ## UPDATE
+
+          - date: 2026-09-27
+          - device: iPhone14,5 / iOS 27.0 / 24A437
+          - kernel: xnu-13432.2.10~2 RELEASE_ARM64_T8110
+          - signature: ad-hoc, empty entitlements
+
+          ## NECP STATUS
+
+          Working: op 0x03 returns 1 byte, op 0x04 and 0x1A return 280-byte
+          TLV, op 0x0D returns user VA (KASLR leak).
+
+          Closed: op 0x05 / 0x0C / 0x0F return -1, op 0x18 empty, op 0x19 -1,
+          TLV overflow rejected, add_flow len in [0x24, 0xF0] accepted,
+          remove_flow twice ret=0, copy_result_inner kptr count 0,
+          copy_interface no data.
+
+          Taint verdict (v48): 24 sources scanned, all propagate taint.
+          649 findings, every depth=0 sink bounded. Both deep kalloc sites
+          (0xA1C6B80, 0xA3ACA70) are internal packet/string parsers with
+          CARRY4 checks. NECP as user-facing primitive: CLOSED.
+
+          ## IOKIT STATUS
+
+          - iokit_user_client_trap calls FUN_fffffff00a9ad62c = io_connect_method
+            - param_3 in [0x18, 0x800] with CARRY8 + cap 0x800 double-check
+            - copyin to stack buffer 0x800, bounded: CLOSED
+          - is_io_service_open_extended: no depth-0 sinks reachable
+          - Per-driver externalMethod tables and MIG Mach-routine handlers
+            NOT scanned. Remaining IOKit surface.
+
+          ## BSD SYSCALL STATUS
+
+          Sysent parsed via PAC unwrap: unpacked 557/558, dup 117 (FreeBSD
+          aliases). Formula: sy_call = KERNEL_BASE + (raw AND 0xFFFFFFFF).
+          300 syscalls passed narg>0 filter. 87 sources produced findings,
+          1116 sink hits.
+
+          Syscall index anomaly: NECP cluster sits at sysent[503]/[504], not
+          [501]/[502]. Needs verification via sysent[490..540] dump.
+
+          Depth-0 copyin sites reviewed manually (9 functions). All bounded:
+          - 0xA6CEB4C ioctl-family, cap 0x1fff
+          - 0xA78D724 recvmsg, iovlen < 0x401
+          - 0xA74BF88 ioctl-family, cap 0x1fff
+          - 0xA74EA2C / 0xA74E884 forward to kdebug loggers, bounded
+          - 0xA70E210 cap 0x10, stack only
+          - 0xA78AE18 / 0xA78A1E8 cap 0x80 stack, or 0xA78A39C cap 0xff
+          - 0xA743B90 cap 0x800
+
+          BSD syscalls as user-facing primitive: CLOSED for shallow paths.
+
+          ## WHAT A PRIMITIVE LOOKS LIKE
+
+          Real primitive requires ALL of:
+          1. user-controlled size in kalloc_type / kalloc_zone
+          2. no pre-validation between decode and alloc
+          3. copyin / copyout / memmove with size that does NOT match allocation
+
+          Common false positives:
+          - ioctl cmd >> 16 AND mask, capped at 0x1fff before alloc
+          - if (size > CONST) return error immediately before
+          - (user_a + user_b) * CONST with CARRY4 / CARRY8 check
+          - stack buffer fixed N, size checked against N
+          - SoftwareBreakpoint(0x5519) on the mismatch path (hardening trap)
+
+          ## TAINT METHOD (kernel_rw.py)
+
+          Sources: user-controlled parameter functions.
+          Sinks: kalloc_type, kalloc_zone, copyin, copyout, memmove, memset.
+
+          1. HighFunction from DecompInterface
+          2. Get parameter varnodes via hf.getLocalSymbolMap(), NOT
+             getFunctionPrototype().getStorage() (silently returns 0 matches)
+          3. Compare varnodes by key addr.toString() plus colon plus str(size)
+          4. Iterate hf.getPcodeOps(): input tainted implies output tainted
+          5. For each PcodeOp.CALL resolve target via getInput(0).isAddress().
+             If sink, check size-arg varnode. Otherwise recurse with tainted idx.
+          6. Cap depth, worklist, total time.
+
+          ## HOW TO WRITE GHIDRA JYTHON SCRIPTS
+
+          ### String handling
+          Never use plus between quotes and identifiers. Editors mangle it.
+          Use percent formatting: log("[-] %s" % e)
+
+          ### Tuple literals
+          Never put 0x at position 0. Use named constants:
+          A_ADD_FLOW = int("FFFFFFF00A4E843C", 16)
+          TARGETS = [(A_ADD_FLOW, "necp_client_add_flow")]
+
+          ### Dictionary access
+          Use get(), not bracket in assignment:
+          v = SINK_MAP.get(target)
+          if v is not None: sname = v[0]; sidx = v[1]
+
+          ### PcodeOp address
+          PcodeOpAST has no getAddress(). Use getSeqnum().getTarget().getOffset().
+
+          ### Function boundaries
+          Call ensure_function for un-decompiled addresses. DisassembleCommand
+          then CreateFunctionCmd, fallback to FunctionManager.createFunction.
+
+          ### Parameter varnodes
+          hf.getLocalSymbolMap() is the only correct path. Wrap sym.isParameter,
+          sym.getCategoryIndex, sym.getHighVariable().getInstances.
+
+          ### Varnode identity
+          Compare by vn_key string "addr:size", never by Java object identity.
+
+          ### Imports
+          Wrap Ghidra command imports in try/except with HAS_* flags.
+
+          ### Decompiler instance
+          One DecompInterface cached in a module-level global. Never recreate.
+
+          ### Timeouts
+          decompileFunction(f, sec, monitor). 30-45 sec medium, 90 sec large.
+          One un-capped function hangs the whole CI job.
+
+          ### Crash-proof main
+          Wrap main in try/except, write FATAL plus traceback to output file.
+
+          ### Validation
+          python3 -c "import ast,sys; ast.parse(open('scripts/kernel_rw.py').read()); print('ok')"
+
+          ## WORKFLOW
+
+          Only two workflows: fix_and_release.yml (build) and extract_offsets.yml
+          (analysis). Cache: ghidra, ipsw, symbolicator, kernelcache,
+          ghidra_project. Never hashFiles on kernelcache. Warm run 3-6 min.
+          Never delete cached dirs.
+
+          kernel_rw.py writes exactly ONE file: result.txt.
+
+          Ghidra headless:
+          analyzeHeadless <proj_dir> <proj_name> -process <name> -noanalysis
+            -scriptPath <repo>/scripts -postScript kernel_rw.py
+
+          ## COMMON ERRORS AND FIXES
+
+          - unterminated string literal: editor inserted quote before 0x. Use int().
+          - quote-plus-identifier: use percent formatting.
+          - unmatched close paren: use .get() instead of bracket.
+          - PcodeOpAST has no getAddress: use getSeqnum().getTarget()
+          - seed=0 on every source: use getLocalSymbolMap()
+          - tainted=0 after seed>0: compare vn_key strings not Java objects
+          - no func for a known symbol: ensure_function + DisassembleCommand
+          - parsed unpacked 0: wrong PAC formula, use KERNEL_BASE + low32
+          - Grappa rc=-5 after patch: restore tokens with nk-grappa-restored
+          - SyncFailed at ATC: transient, ignore if readback succeeds
+
+          ## GRAPPA / RPPAIRING CONFIRMED WORKING
+
+          tunnel 10.7.0.1:49152 via raw RPPairing, RSD publishes 85 services,
+          AFC connects, StreamingZip extracts, ATC Capabilities / InstalledAssets
+          / AssetMetrics / SyncAllowed, Grappa 84 bytes from static fallback,
+          ReadyForSync / AssetManifest / FileComplete 3/3, canary readback matches.
+
+          Do NOT collapse kAuthenticGrappaTokens to NULL. Do NOT expect
+          host-side Grappa on iOS. Do NOT treat SyncFailed as fatal.
+
+          ## UI / SWIFTUI iOS 27
+
+          - overlay(RespringView()) causes CA UAF and SIGSEGV. Use UIHostingController
+          - List with conditional Section else Section crashes
+          - scaleEffect inside if breaks ConditionalContent
+          - Published mutation from Task causes race and UAF
+          - RuntimeView must not show green when slide or base equal default dash
+          - respring button lives only in ToolsView
+
+          ## NEXT STEPS
+
+          1. Dump sysent[490..540] to resolve NECP index anomaly
+          2. If NECP at 503/504, rewrite necp.c constants and rerun
+          3. Scan IOKit per-driver externalMethod dispatch tables
+          4. Scan MIG Mach-routine handlers
+          5. If all closed statically, pivot to concurrency analysis
+
+          Do not spend more than 2-3 attempts on the same primitive.
+
+          ## WHAT NOT TO DO
+
+          - Do not create fix_and_test.yml or build_and_release.yml
+          - Do not use hashFiles on kernelcache
+          - Do not run blind syscall sweeps
+          - Do not call proc_info, csops, task_info sweep, mach_port_names > 32
+          - Do not use non-empty entitlements
+          - Do not mutate Published from Task
+          - Do not put RespringView in the SwiftUI tree
+          - Do not commit natsuk1.xcodeproj
+          - Do not trust offsets without Ghidra verification
+          - Do not answer without web search first
+          - Do not delete ghidra / ghidra_project / kernelcache / symbolicator
+          - Do not collapse the Grappa token array to NULL
+          - Do not use plus between string literals and identifiers in Jython
+          - Do not use bracket access on dict or list in assignment position
+          - Do not put 0x literals at position 0 of a tuple
+          - Do not put content at column 0 inside a YAML run pipe block
+          - Do not inline markdown or source code over 30 lines in a workflow
+
+          <!-- AI-HINTS-CURATED-END -->
+          HINTS_EOF
+          echo "ai-hints.md: $(wc -c < ai-hints.md) bytes"
+
+      - name: Update README
+        run: |
+          printf '%s\n' "# natsuk1" "" "iOS 27 kernel research toolkit." "" "AI researchers read ai-hints.md and ai-think.md before answering anything." > README.md
+          echo "README.md: $(wc -c < README.md) bytes"
 
       - name: Vendor AirliftFFI
         run: |
@@ -84,81 +459,74 @@ jobs:
             exit 0
           fi
           mkdir -p "$A/Headers"
-          python3 - <<'PY'
-          import io, os
-          base = "natsuk1/External/AirliftFFI.xcframework/ios-arm64"
-          os.makedirs(base + "/Headers", exist_ok=True)
-          h = []
-          a = h.append
-          a("#ifndef AIRLIFT_H")
-          a("#define AIRLIFT_H")
-          a("#include <stdint.h>")
-          a("#include <stddef.h>")
-          a("#ifdef __cplusplus")
-          a('extern "C" {')
-          a("#endif")
-          a("typedef struct {")
-          a("  char *host_alt_irk_hex;")
-          a("  char *device_name;")
-          a("  char *pairing_file_path;")
-          a("  char *error;")
-          a("} ALPairResult;")
-          a("typedef void (*ALLogCb)(void*, const char*);")
-          a("typedef void (*ALPairReadyCb)(void*, const char*, uint16_t,")
-          a("  const char**, const char**, size_t);")
-          a("typedef void (*ALPairPinCb)(const char*, void*);")
-          a("void al_log_init(ALLogCb, void*);")
-          a("int32_t al_pairing_run_host(const char*, uint16_t,")
-          a("  const char*, const char*, const char*, const char*,")
-          a("  ALPairReadyCb, ALPairPinCb, void*, ALPairResult*);")
-          a("void al_pairing_result_free(ALPairResult*);")
-          a("int32_t al_exploit_run(const char*, const char*,")
-          a("  const char*, const char*, char**, char**);")
-          a("int32_t al_find_app_container(const char*, const char*,")
-          a("  const char*, const char*, char**, char**);")
-          a("int32_t al_device_respring(const char*, const char*,")
-          a("  const char*, char**);")
-          a("void al_string_free(char*);")
-          a("#ifdef __cplusplus")
-          a("}")
-          a("#endif")
-          a("#endif")
-          io.open(base + "/Headers/airlift.h", "w").write("\n".join(h) + "\n")
-          c = []
-          a = c.append
-          a('#include "airlift.h"')
-          a("#include <stdlib.h>")
-          a("#include <string.h>")
-          a("static char* D(const char*s){")
-          a("  if(!s)return 0;size_t n=strlen(s)+1;char*p=malloc(n);")
-          a("  if(p)memcpy(p,s,n);return p;}")
-          a("static void E(char**o,const char*m){if(o)*o=D(m);}")
-          a("void al_log_init(ALLogCb c,void*x){(void)c;(void)x;}")
-          a("int32_t al_pairing_run_host(const char*b,uint16_t p,")
-          a("const char*n,const char*m,const char*o,const char*i,")
-          a("ALPairReadyCb r,ALPairPinCb q,void*x,ALPairResult*y){")
-          a("(void)b;(void)p;(void)n;(void)m;(void)o;(void)i;")
-          a("(void)r;(void)q;(void)x;")
-          a("if(y){y->host_alt_irk_hex=0;y->device_name=0;")
-          a("y->pairing_file_path=0;y->error=D(\"stub\");}")
-          a("("return -1;}")
-         n a("void al_pairing_result_free(ALPairResult*r){")
-          a("if(!r)return;free(r->host_alt_irk_hex);free(r->device_name);")
-          a("free(r->pairing_file_path);free(r->error);}")
-          a("int32_t al_exploit_run(const char*a,const char*b,")
-          a("const char*c,const char*d,char**j,char**e){")
-          a("(void)a;(void)b;(void)c;(void)d;if(j)*j=0;")
-          a("E(e,\"stub\");return -1;}")
-          a("int32_t al_find_app_container(const char*a,const char*b,")
-          a("const char*c,const char*d,char**o,char**e){")
-          a("(void)a;(void)b;(void)c;(void)d;if(o)*o=0;")
-          a("E(e,\"stub\");return -1;}")
-          a("int32_t al_device_respring(const char*a,const char*b,")
-          a("const char*c,char**e){(void)a;(void)b;(void)c;")
-          a("E(e,\"rule14\");return -1;}")
-          a("void al_string_free(char*s){free(s);}")
-          io.open("/tmp/airlift_stub.c", "w").write("\n".join(c) + "\n")
-          PY
+          cat > "$A/Headers/airlift.h" <<'AIRLIFT_H_EOF'
+          #ifndef AIRLIFT_H
+          #define AIRLIFT_H
+          #include <stdint.h>
+          #include <stddef.h>
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          typedef struct {
+            char *host_alt_irk_hex;
+            char *device_name;
+            char *pairing_file_path;
+            char *error;
+          } ALPairResult;
+          typedef void (*ALLogCb)(void*, const char*);
+          typedef void (*ALPairReadyCb)(void*, const char*, uint16_t,
+            const char**, const char**, size_t);
+          typedef void (*ALPairPinCb)(const char*, void*);
+          void al_log_init(ALLogCb, void*);
+          int32_t al_pairing_run_host(const char*, uint16_t,
+            const char*, const char*, const char*, const char*,
+            ALPairReadyCb, ALPairPinCb, void*, ALPairResult*);
+          void al_pairing_result_free(ALPairResult*);
+          int32_t al_exploit_run(const char*, const char*,
+            const char*, const char*, char**, char**);
+          int32_t al_find_app_container(const char*, const char*,
+            const char*, const char*, char**, char**);
+          int32_t al_device_respring(const char*, const char*,
+            const char*, char**);
+          void al_string_free(char*);
+          #ifdef __cplusplus
+          }
+          #endif
+          #endif
+          AIRLIFT_H_EOF
+          cat > /tmp/airlift_stub.c <<'AIRLIFT_C_EOF'
+          #include "airlift.h"
+          #include <stdlib.h>
+          #include <string.h>
+          static char* D(const char*s){
+            if(!s)return 0;size_t n=strlen(s)+1;char*p=malloc(n);
+            if(p)memcpy(p,s,n);return p;}
+          static void E(char**o,const char*m){if(o)*o=D(m);}
+          void al_log_init(ALLogCb c,void*x){(void)c;(void)x;}
+          int32_t al_pairing_run_host(const char*b,uint16_t p,
+          const char*n,const char*m,const char*o,const char*i,
+          ALPairReadyCb r,ALPairPinCb q,void*x,ALPairResult*y){
+          (void)b;(void)p;(void)n;(void)m;(void)o;(void)i;
+          (void)r;(void)q;(void)x;
+          if(y){y->host_alt_irk_hex=0;y->device_name=0;
+          y->pairing_file_path=0;y->error=D("stub");}
+          return -1;}
+          void al_pairing_result_free(ALPairResult*r){
+          if(!r)return;free(r->host_alt_irk_hex);free(r->device_name);
+          free(r->pairing_file_path);free(r->error);}
+          int32_t al_exploit_run(const char*a,const char*b,
+          const char*c,const char*d,char**j,char**e){
+          (void)a;(void)b;(void)c;(void)d;if(j)*j=0;
+          E(e,"stub");return -1;}
+          int32_t al_find_app_container(const char*a,const char*b,
+          const char*c,const char*d,char**o,char**e){
+          (void)a;(void)b;(void)c;(void)d;if(o)*o=0;
+          E(e,"stub");return -1;}
+          int32_t al_device_respring(const char*a,const char*b,
+          const char*c,char**e){(void)a;(void)b;(void)c;
+          E(e,"rule14");return -1;}
+          void al_string_free(char*s){free(s);}
+          AIRLIFT_C_EOF
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           xcrun --sdk iphoneos clang -arch arm64 -Oz -isysroot "$SDK" -c /tmp/airlift_stub.c -o /tmp/airlift_stub.o
           xcrun libtool -static -o "$A/libairlift_ffi.a" /tmp/airlift_stub.o 2>/dev/null || xcrun ar rcs "$A/libairlift_ffi.a" /tmp/airlift_stub.o
@@ -166,97 +534,15 @@ jobs:
 
       - name: Patch sources
         run: |
-          python3 - <<'PY'
-          import io, os
-          def P(p, fn):
-              if not os.path.exists(p): return
-              s = io.open(p, encoding="utf-8").read()
-              t = fn(s)
-              if t != s:
-                  io.open(p, "w", encoding="utf-8").write(t)
-                  print("ok " + p)
-          def remove_respring_gate(s):
-              k = '        guard UserDefaults.standard.bool(forKey: "allow_device_respring") else {\n'
-              i = s.find(k)
-              if i < 0: return s
-              j = s.find('        }\n', i)
-              if j < 0: return s
-              return s[:i] + s[j+len('        }\n'):]
-          def remove_settings_toggle(s):
-              a = '    @AppStorage("allow_device_respring") private var r: Bool = false\n'
-              b = '                    Toggle("Allow device respring", isOn: $r)\n'
-              s = s.replace(a, '', 1)
-              s = s.replace(b, '', 1)
-              return s
-          def grappa_restore(s):
-              if "nk-grappa-restored" in s: return s
-              k = "kAuthenticGrappaTokens[] = {"
-              i = s.find(k)
-              if i < 0: return s
-              j = s.find("};", i)
-              if j < 0: return s
-              body = s[i+len(k):j]
-              if "NULL" not in body and body.strip(): return s
-              toks = [
-                  "01012ba6a01f2ccf66a02613d5b72e0bc916004058a001a6874d18b5bd7b3395e25d79fa3ffcc67e718106d485c51540b828d1620e9f94f582d3bcc6f97e9088c923095ad8d36ab568fb45df61e286d25354b04c",
-                  "0101efa33b1586f410087474b2ccaf8cdb4d0040e5aee6017fdcf774a51c1980b4238076e86218af5a5f169470df90b73f4fc893a22da94fb9745c10f23df0620cfe3f19be3f2ab37d2f7590d8597ab51ebcced0",
-                  "0101aab479a6d8226f3e1d7a57a2501337e50240e54444b5f1d04101205a7a2f3d148d18440e2edef03d37fcdc7423c0bb441b4c4a355169d511d67ae3466fdf8865e69a8aed45867801ea8e1bbb48889ba0b834",
-                  "010194ab2ece86e05d7313e4075a947ab3be0240c9237c46b3c519d2ec297304413dab741827016e5eb9af8792bc2b3d6f12be25397931f41bffb887d042b97057c03ed8d72a3acb72378d30f7a073e3d7590f62",
-                  "01018cec0ea2c25446c90133d435eaafb0150240c6c28dd42f62f8907133c462fc8b6def05e543ab2d59952f6eb3b38e382d492cd2881beceaeaea67fc1331f77fca50fde6bed35622009670e6d6e4a36b09c088",
-                  "0101243b2587f14dd812751c6710730f46d50440fe2e5e9ccfe70200487e14c131412381fd7c214241b182ca04ebe0c1f3cdd54ac17eef31705c06289e02f672fa8c0d9dff167f1c925df876d5814d3265f55b06",
-                  "01016f8908f8f972bdc8fe99002f7648e86c024011a469c4320bb7e44137756dde3ecfbff08a55081e532c12a06101c6ae5283a014512d977eafad06c34b1f116422f6bf72ef56f8d734d37db287b170be7a3a82",
-                  "01015c5fcc103d0460f5bbfd48c387806e8e0340e3323ed780fbeccc2908c059d9a81e75976bf058b411f62a9a6e1df7ba307f69226942373f484690799b230bc60e99036f40eae25229aff6bb31ab74820e68a9",
-                  "0101f3f542aaa17252a8f81b3dc5b007adc304408d2496cee3af54113ffa9fba392b4143d4c38e4d79680e8e9feb554e450c1f89220c02375a9063b3a62bf61f62bd073991ebf215c6c2e28938d1aa53ed580c02",
-                  "0101fc26f7e89d1635d86b5c886df69f526a0040038b6c33049f6bd5cc526b4ee7ccce614135d2c73f8326d9af6d28399a231510917493d4fdaa395b4d1c1e1b09bdf3fe6fb7e16ad6d5f5cc18b93730874e6f4e",
-              ]
-              mid = "\n// nk-grappa-restored\n"
-              for t in toks:
-                  mid = mid + '    "' + t + '",\n'
-              mid = mid + "    NULL\n"
-              return s[:i+len(k)] + mid + s[j:]
-          def necp(s):
-              if "Do not mask" in s: return s
-              return s.replace("        size_t sz = test_sizes[i] & 0xFFFF;\n", "        size_t sz = (size_t)test_sizes[i];\n", 1)
-          def offsets(s):
-              if "?? Bundle.main.url(forResource: name" in s: return s
-              a = 'return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")\n'
-              b = a + '                ?? Bundle.main.url(forResource: name, withExtension: ext)\n'
-              return s.replace(a, b, 1)
-          Patsuk1/Helpers/AirliftBridge.swift", remove_respring_gate)
-          P("natsuk1/Views/SettingsView.swift", remove_settings_toggle)
-          P("natsuk1/Exploit/GrappaHelper.m", grappa_restore)
-          P("natsuk1/Exploit/necp.c", necp)
-          P("natsuk1/Helpers/OffsetsStore.swift", offsets)
-          PY
+          python3 -c "import io,os;p='natsuk1/Helpers/AirliftBridge.swift';s=io.open(p).read() if os.path.exists(p) else '';k='        guard UserDefaults.standard.bool(forKey: \"allow_device_respring\") else {';i=s.find(k);j=s.find('        }'+chr(10),i) if i>=0 else -1;t=s[:i]+s[j+len('        }'+chr(10)):] if i>=0 and j else>=0 else s;io.open(p,'w').write(t) if t!=s else None;print('airliftbridge:', 'patched' if t!=s 'nochange')"
+          python3 -c "import io,os;p='natsuk1/Views/SettingsView.swift';s=io.open(p).read() if os.path.exists(p) else '';a='    @AppStorage(\"allow_device_respring\") private var r: Bool = false'+chr(10);b='                    Toggle(\"Allow device respring\", isOn: \$r)'+chr(10);t=s.replace(a,'',1).replace(b,'',1);io.open(p,'w').write(t) if t!=s else None;print('settings:', 'patched' if t!=s else 'nochange')"
+          python3 -c "import io,os;p='natsuk1/Exploit/necp.c';s=io.open(p).read() if os.path.exists(p) else '';a='        size_t sz = test_sizes[i] & 0xFFFF;'+chr(10);b='        size_t sz = (size_t)test_sizes[i];'+chr(10);t=s.replace(a,b,1);io.open(p,'w').write(t) if t!=s else None;print('necp:', 'patched' if t!=s else 'nochange')"
+          python3 -c "import io,os;p='natsuk1/Helpers/OffsetsStore.swift';s=io.open(p).read() if os.path.exists(p) else '';a='return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: \"Offsets\")'+chr(10);b=a+'                ?? Bundle.main.url(forResource: name, withExtension: ext)'+chr(10);t=s.replace(a,b,1) if '?? Bundle.main.url(forResource: name' not in s else s;io.open(p,'w').write(t) if t!=s else None;print('offsets:', 'patched' if t!=s else 'nochange')"
+          python3 -c "import io,os;p='natsuk1/Exploit/GrappaHelper.m';s=io.open(p).read() if os.path.exists(p) else '';toks=['01012ba6a01f2ccf66a02613d5b72e0bc916004058a001a6874d18b5bd7b3395e25d79fa3ffcc67e718106d485c51540b828d1620e9f94f582d3bcc6f97e9088c923095ad8d36ab568fb45df61e286d25354b04c','0101efa33b1586f410087474b2ccaf8cdb4d0040e5aee6017fdcf774a51c1980b4238076e86218af5a5f169470df90b73f4fc893a22da94fb9745c10f23df0620cfe3f19be3f2ab37d2f7590d8597ab51ebcced0','0101aab479a6d8226f3e1d7a57a2501337e50240e54444b5f1d04101205a7a2f3d148d18440e2edef03d37fcdc7423c0bb441b4c4a355169d511d67ae3466fdf8865e69a8aed45867801ea8e1bbb48889ba0b834','010194ab2ece86e05d7313e4075a947ab3be0240c9237c46b3c519d2ec297304413dab741827016e5eb9af8792bc2b3d6f12be25397931f41bffb887d042b97057c03ed8d72a3acb72378d30f7a073e3d7590f62','01018cec0ea2c25446c90133d435eaafb0150240c6c28dd42f62f8907133c462fc8b6def05e543ab2d59952f6eb3b38e382d492cd2881beceaeaea67fc1331f77fca50fde6bed35622009670e6d6e4a36b09c088','0101243b2587f14dd812751c6710730f46d50440fe2e5e9ccfe70200487e14c131412381fd7c214241b182ca04ebe0c1f3cdd54ac17eef31705c06289e02f672fa8c0d9dff167f1c925df876d5814d3265f55b06','01016f8908f8f972bdc8fe99002f7648e86c024011a469c4320bb7e44137756dde3ecfbff08a55081e532c12a06101c6ae5283a014512d977eafad06c34b1f116422f6bf72ef56f8d734d37db287b170be7a3a82','01015c5fcc103d0460f5bbfd48c387806e8e0340e3323ed780fbeccc2908c059d9a81e75976bf058b411f62a9a6e1df7ba307f69226942373f484690799b230bc60e99036f40eae25229aff6bb31ab74820e68a9','0101f3f542aaa17252a8f81b3dc5b007adc304408d2496cee3af54113ffa9fba392b4143d4c38e4d79680e8e9feb554e450c1f89220c02375a9063b3a62bf61f62bd073991ebf215c6c2e28938d1aa53ed580c02','0101fc26f7e89d1635d86b5c886df69f526a0040038b6c33049f6bd5cc526b4ee7ccce614135d2c73f8326d9af6d28399a231510917493d4fdaa395b4d1c1e1b09bdf3fe6fb7e16ad6d5f5cc18b93730874e6f4e'];k='kAuthenticGrappaTokens[] = {';i=s.find(k);j=s.find('};',i) if i>=0 else -1;body=s[i+len(k):j] if i>=0 and j>=0 else '';mark='// nk-grappa-restored';t=s if (mark in s) or (i<0) or (j<0) or ('NULL' not in body and body.strip()) else s[:i+len(k)]+chr(10)+mark+chr(10)+''.join(['    \"'+x+'\",'+chr(10) for x in toks])+'    NULL'+chr(10)+s[j:];io.open(p,'w').write(t) if t!=s else None;print('grappa:', 'patched' if t!=s else 'nochange')"
 
       - name: Entitlements
         run: |
-          python3 - <<'PY'
-          import io
-          s = '<?xml version="1.0" encoding="UTF-8"?>\n'
-          s = s + '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
-          s = s + '<plist version="1.0">\n<dict>\n</dict>\n</plist>\n'
-          io.open("natsuk1/Resources/natsuk1.entitlements", "w").write(s)
-          PY
-
-      - name: Update README
-        run: |
-          python3 - <<'PY'
-          import io, os
-          p = "README.md"
-          head = ""
-          if os.path.exists(p):
-              s = io.open(p, encoding="utf-8").read()
-              ms = "<!-- AUTO-RULES-START -->"
-              if ms in s:
-                  head = s[:s.index(ms)]
-              else:
-                  head = s
-          if not head.strip():
-              head = "# natsuk1\n\niOS 27 kernel research toolkit.\n\n"
-          hint = "AI researchers read ai-hints.md and ai-think.md before answering anything.\n"
-          io.open(p, "w", encoding="utf-8").write(head.rstrip() + "\n\n" + hint)
-          PY
+          printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' '<plist version="1.0">' '<dict>' '</dict>' '</plist>' > natsuk1/Resources/natsuk1.entitlements
 
       - name: Install tools
         run: |
@@ -299,7 +585,7 @@ jobs:
           fi
           R="${{ github.repository }}"
           U="https://github.com/$R/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v11.0 ($((SIZE/1024)) KB)
+          NOTES="natsuk1 v12.0 ($((SIZE/1024)) KB)
 
           Install:
           - IPA: $U
@@ -322,5 +608,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "v11.0: workflow reads ai files from repo [skip ci]"
+          git commit -m "v12.0: heredoc-only workflow + ai-think + curated hints [skip ci]"
           git push
