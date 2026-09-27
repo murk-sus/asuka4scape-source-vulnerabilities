@@ -321,3 +321,11 @@ Fixes applied automatically by the workflow:
 - DeviceInfoView: use DeviceName.machineID().
 - DeviceName.full(), OffsetsStore.activeVersion removed as dead.
 - NECP removed entirely (closed).
+
+## NECP REMOVAL AND SWIFT OPTIONAL BINDING
+
+- NECP is fully closed on iOS 27, removed from repo entirely.
+- Do not restore nk_necp_run or nk_necp_cancel in nk_api.
+- All Swift call sites of nk_necp_cancel must be deleted, not renamed.
+- Keep if let pin = airlift.pairPIN intact, Text uses pin.
+- Never rewrite it to if airlift.pairPIN != nil.
