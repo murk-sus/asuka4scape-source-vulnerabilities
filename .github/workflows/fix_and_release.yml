@@ -30,14 +30,45 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v45-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v45-
+          key: nk-v47-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v47-
 
       - name: Install tools
         run: |
           set -e
           command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
           command -v ldid >/dev/null 2>&1 || brew install ldid
+
+      - name: Fetch carrier assets
+        run: |
+          set -euo pipefail
+          ROOT=natsuk1/Resources/CarrierAssets
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/CarrierLab.bundle/signatures" "$ROOT/Docomo_jp.bundle/signatures"
+          mkdir -p "$ROOT/BundleLinksSource"
+          ln -sf "/var/mobile/Library/Carrier Bundles/iPhone/CarrierLab.bundle" \
+            "$ROOT/BundleLinksSource/25001"
+          ln -sf "/var/mobile/Library/Carrier Bundles/iPhone/CarrierLab.bundle" \
+            "$ROOT/BundleLinksSource/25001_GID1-AA"
+          BASE="https://raw.githubusercontent.com/VCTGomes/ios-carrier-bundle/cecd5594349df0bf51723a247028bad5f40a7965/carrier-bundles/27.0-24A437.V53_V54_V57OS"
+          for f in \
+            "CarrierLab.bundle/Info.plist" \
+            "CarrierLab.bundle/carrier.plist" \
+            "CarrierLab.bundle/overrides_V53_V54_V57.der.pri" \
+            "CarrierLab.bundle/overrides_V53_V54_V57.plist" \
+            "CarrierLab.bundle/signatures/common.plist" \
+            "CarrierLab.bundle/signatures/overrides_V53_V54_V57.plist" \
+            "Docomo_jp.bundle/Info.plist" \
+            "Docomo_jp.bundle/carrier.plist" \
+            "Docomo_jp.bundle/overrides_V53_V54_V57.der.pri" \
+            "Docomo_jp.bundle/overrides_V53_V54_V57.plist" \
+            "Docomo_jp.bundle/profile.mobileconfig" \
+            "Docomo_jp.bundle/signatures/common.plist" \
+            "Docomo_jp.bundle/signatures/overrides_V53_V54_V57.plist" ; do
+            curl -fsSL "$BASE/$f" -o "$ROOT/$f"
+            test -s "$ROOT/$f"
+          done
+          ls -la "$ROOT/BundleLinksSource"
 
       - name: Write project.yml
         run: |
@@ -148,60 +179,216 @@ jobs:
                   ENABLE_ONLY_ACTIVE_RESOURCES: YES
           PROJECT_EOF
 
-      - name: Write PairingGenerator
+      - name: Write AirliftBridge
         run: |
           set -euo pipefail
-          mkdir -p natsuk1/Helpers
-          cat > natsuk1/Helpers/PairingGenerator.swift <<'PAIRING_EOF'
+          cat > natsuk1/Helpers/AirliftBridge.swift <<'SWIFT_EOF'
           import Foundation
+          import Combine
 
-          final class PairingGenerator {
-              static let shared = PairingGenerator()
-              private init() {}
+          final class AirliftBridge: ObservableObject, @unchecked Sendable {
+              static let shared = AirliftBridge()
+              enum State: Equatable { case idle, pairing, ready(pairingPath: String), running, done(ok: Bool, message: String) }
 
-              enum GeneratorError: LocalizedError {
-                  case missingFile(String)
-                  case notAPlist(String)
-                  case writeFailed(String)
+              @Published private(set) var state: State = .idle
+              @Published private(set) var pairPIN: String? = nil
+              @Published private(set) var pairingStatus: String = ""
+              @Published private(set) var exploitLog: [String] = []
+              @Published var target: String = "/var/mobile/Library/SpringBoard"
+              private var loggedLines: [String] = []
 
-                  var errorDescription: String? {
-                      switch self {
-                      case .missingFile(let s): return "Pairing file missing: \(s)"
-                      case .notAPlist(let s): return "Pairing file is not a plist: \(s)"
-                      case .writeFailed(let s): return "Write failed: \(s)"
+              private init() {
+                  al_log_init({ _, msg in
+                      guard let msg = msg else { return }
+                      let line = String(cString: msg)
+                      DispatchQueue.main.async { AirliftBridge.shared.appendLog(line) }
+                  }, nil)
+              }
+
+              private func appendLog(_ s: String) {
+                  DispatchQueue.main.async {
+                      self.loggedLines.append(s)
+                      if self.loggedLines.count > 800 { self.loggedLines.removeFirst(self.loggedLines.count - 600) }
+                      self.exploitLog = self.loggedLines
+                  }
+              }
+
+              func clearLog() {
+                  DispatchQueue.main.async {
+                      self.loggedLines.removeAll()
+                      self.exploitLog = []
+                  }
+              }
+
+              func pairingFilePath() -> String { PairingController.pairingFilePath() }
+
+              func hasPairing() -> Bool {
+                  let p = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: p) else { return false }
+                  let size = (try? FileManager.default.attributesOfItem(atPath: p)[.size] as? Int) ?? 0
+                  return size > 0
+              }
+
+              private func setState(_ s: State) { DispatchQueue.main.async { self.state = s } }
+              private func setStatus(_ s: String) { DispatchQueue.main.async { self.pairingStatus = s } }
+              private func setPIN(_ p: String?) { DispatchQueue.main.async { self.pairPIN = p } }
+
+              func runPairing() {
+                  guard !hasPairing() else {
+                      setState(.ready(pairingPath: pairingFilePath()))
+                      return
+                  }
+                  setState(.pairing)
+                  setStatus("Starting host...")
+                  setPIN(nil)
+                  let ctrl = PairingController.shared
+                  Task {
+                      do {
+                          let path = try await ctrl.startAndWait()
+                          self.setState(.ready(pairingPath: path))
+                          self.setStatus("Paired")
+                          self.setPIN(nil)
+                      } catch is CancellationError {
+                          self.setState(.idle)
+                          self.setStatus("Cancelled")
+                      } catch {
+                          self.setState(.idle)
+                          self.setStatus("Failed: \(error.localizedDescription)")
+                      }
+                  }
+                  Task {
+                      var iterations = 0
+                      while iterations < 900 {
+                          let status = ctrl.pairingStatus
+                          let pin = ctrl.pairingPIN
+                          let running = ctrl.running
+                          self.setStatus(status)
+                          self.setPIN(pin)
+                          if !running { break }
+                          try? await Task.sleep(nanoseconds: 200_000_000)
+                          iterations += 1
                       }
                   }
               }
 
-              @discardableResult
-              func generateMergedPairing(rppPath: String, outputPath: String) throws -> String {
-                  let fm = FileManager.default
-                  guard fm.fileExists(atPath: rppPath) else {
-                      throw GeneratorError.missingFile(rppPath)
-                  }
-                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: rppPath)), !data.isEmpty else {
-                      throw GeneratorError.missingFile("empty or unreadable: \(rppPath)")
-                  }
-                  guard let plist = try? PropertyListSerialization.propertyList(
-                      from: data, options: [], format: nil) as? [String: Any] else {
-                      throw GeneratorError.notAPlist(rppPath)
-                  }
-                  guard !plist.isEmpty else {
-                      throw GeneratorError.notAPlist("empty plist: \(rppPath)")
-                  }
+              func cancelPairing() {
+                  PairingController.shared.softCancel()
+                  setState(.idle)
+                  setStatus("")
+                  setPIN(nil)
+              }
 
-                  let canonical = PairingController.syncCanonicalPairingFile(from: rppPath)
-                  if outputPath != canonical {
-                      do {
-                          try data.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
-                      } catch {
-                          throw GeneratorError.writeFailed(error.localizedDescription)
+              func deletePairing() {
+                  let fm = FileManager.default
+                  let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                  let candidates = [
+                      docs.appendingPathComponent("natsuk1_pairing.plist"),
+                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing"),
+                      docs.appendingPathComponent("pairingFile.plist"),
+                  ]
+                  for url in candidates {
+                      if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
+                  }
+                  if let custom = PairingController.customPairingFilePath, fm.fileExists(atPath: custom) {
+                      try? fm.removeItem(atPath: custom)
+                  }
+                  PairingController.customPairingFilePath = nil
+                  if let files = try? fm.contentsOfDirectory(atPath: docs.path) {
+                      for f in files {
+                          guard f.hasSuffix(".plist") || f.hasSuffix(".mobilepairing") || f.hasSuffix(".mobilepair") else { continue }
+                          try? fm.removeItem(at: docs.appendingPathComponent(f))
                       }
                   }
-                  return canonical
+                  UserDefaults.standard.removeObject(forKey: "natsuk1PairingHostAltIRK")
+                  UserDefaults.standard.removeObject(forKey: "natsuk1PairingPath")
+                  setState(.idle)
+                  setStatus("")
+                  setPIN(nil)
+              }
+
+              func runExploit() {
+                  let pairingPath = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairingPath) else {
+                      setState(.done(ok: false, message: "No pairing file"))
+                      return
+                  }
+                  setState(.running)
+                  DispatchQueue.main.async {
+                      self.loggedLines.removeAll()
+                      self.exploitLog = []
+                  }
+                  let t = target
+                  let bridge = self
+                  bridge.appendLog("[exploit] path=\(pairingPath) target=\(t)")
+                  Task.detached {
+                      var outJson: UnsafeMutablePointer<CChar>? = nil
+                      var outError: UnsafeMutablePointer<CChar>? = nil
+                      let rc: Int32 = pairingPath.withCString { pc in
+                          t.withCString { tc in
+                              al_exploit_run(pc, tc, nil, nil, &outJson, &outError)
+                          }
+                      }
+                      let jsonStr = outJson.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
+                      let errStr = outError.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
+                      if rc == 0 {
+                          let msg = jsonStr ?? "OK"
+                          bridge.appendLog("[exploit] ok: \(msg)")
+                          bridge.setState(.done(ok: true, message: msg))
+                      } else {
+                          let msg = errStr ?? "rc=\(rc)"
+                          bridge.appendLog("[exploit] fail: \(msg)")
+                          bridge.setState(.done(ok: false, message: msg))
+                      }
+                  }
+              }
+
+              func cancelExploit() {
+                  appendLog("[exploit] cancel requested")
+                  setState(.done(ok: false, message: "cancelled"))
+              }
+
+              func respring() {
+                  let pairingPath = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairingPath) else {
+                      appendLog("[respring] no pairing file")
+                      return
+                  }
+                  let bridge = self
+                  Task.detached {
+                      var outError: UnsafeMutablePointer<CChar>? = nil
+                      let rc: Int32 = pairingPath.withCString { pc in
+                          al_device_respring(pc, nil, nil, &outError)
+                      }
+                      let errStr = outError.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
+                      if rc == 0 {
+                          bridge.appendLog("[respring] ok")
+                      } else {
+                          bridge.appendLog("[respring] rc=\(rc) \(errStr ?? "")")
+                      }
+                  }
+              }
+
+              func findContainer(bundleID: String) async -> String? {
+                  let pairingPath = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairingPath) else { return nil }
+                  return await withCheckedContinuation { cont in
+                      DispatchQueue.global(qos: .userInitiated).async {
+                          var outContainer: UnsafeMutablePointer<CChar>? = nil
+                          var outError: UnsafeMutablePointer<CChar>? = nil
+                          let rc: Int32 = pairingPath.withCString { pc in
+                              bundleID.withCString { bc in
+                                  al_find_app_container(pc, bc, nil, nil, &outContainer, &outError)
+                              }
+                          }
+                          let containerStr = outContainer.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
+                          if let p = outError { al_string_free(p) }
+                          if rc == 0, let c = containerStr { cont.resume(returning: c) }
+                          else { cont.resume(returning: nil) }
+                      }
+                  }
               }
           }
-          PAIRING_EOF
+          SWIFT_EOF
 
       - name: Write CarrierLabBridge
         run: |
@@ -237,7 +424,7 @@ jobs:
               }
 
               private let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
-              private let bundleLinks = "/var/mobile/Library/Carrier Bundles"
+              private let bundleLinks = "/var/mobile/Library/Carrier Bundles/BundleLinks"
 
               func carrierRootPath() -> String { carrierRoot }
               func bundleLinksPath() -> String { bundleLinks }
@@ -312,6 +499,50 @@ jobs:
                       return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "inject rc=\(rc)" : errMsg), detail: errMsg)
                   }
                   return ProbeResult(state: .ok, detail: "injected")
+              }
+
+              func installSymlinks(names: [String], destination: String) -> ProbeResult {
+                  let pre = probe()
+                  guard pre.ok else { return pre }
+                  guard let pairingPath = findPairingFile() else {
+                      return ProbeResult(state: .noPairing, detail: "no pairing path")
+                  }
+                  let fm = FileManager.default
+                  let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                  let staging = docs.appendingPathComponent("BundleLinksStaging", isDirectory: true)
+                  try? fm.createDirectory(at: staging, withIntermediateDirectories: true)
+                  let targetPath = carrierRoot + "/CarrierLab.bundle"
+                  var lastErr = ""
+                  for name in names {
+                      let linkPath = staging.appendingPathComponent(name).path
+                      try? fm.removeItem(atPath: linkPath)
+                      do {
+                          try fm.createSymbolicLink(atPath: linkPath, withDestinationPath: targetPath)
+                      } catch {
+                          lastErr = "symlink \(name): \(error.localizedDescription)"
+                          continue
+                      }
+                      var outError: UnsafeMutablePointer<CChar>? = nil
+                      var rc: Int32 = -1
+                      pairingPath.withCString { pc in
+                          linkPath.withCString { sc in
+                              destination.withCString { tc in
+                                  name.withCString { nc in
+                                      rc = al_exploit_inject_folder(pc, sc, tc, nc, nil, nil, &outError)
+                                  }
+                              }
+                          }
+                      }
+                      let errMsg = outError.flatMap { String(cString: $0) } ?? ""
+                      if let p = outError { al_string_free(p) }
+                      if rc != 0 {
+                          lastErr = errMsg.isEmpty ? "inject link \(name) rc=\(rc)" : errMsg
+                      }
+                  }
+                  if !lastErr.isEmpty {
+                      return ProbeResult(state: .ffiFailed(lastErr), detail: lastErr)
+                  }
+                  return ProbeResult(state: .ok, detail: "links installed")
               }
 
               func writeFile(source: String, target: String) -> ProbeResult {
@@ -401,12 +632,12 @@ jobs:
                       originalBackupPath: state.backupURL().path,
                       ipccTriggerPath: docomoBundle.path,
                       lastError: nil,
-                      aliases: nil)
+                      aliases: ["25001", "25001_GID1-AA"])
                   state.save(s)
 
                   let r1 = bridge.injectFolder(
                       sourceFolder: carrierBundle.path,
-                      targetFolder: bridge.bundleLinksPath(),
+                      targetFolder: bridge.carrierRootPath(),
                       folderName: "CarrierLab.bundle")
                   if !r1.ok {
                       var bad = s
@@ -428,10 +659,19 @@ jobs:
                       return r2
                   }
 
+                  let r3 = bridge.installSymlinks(
+                      names: ["25001", "25001_GID1-AA"],
+                      destination: bridge.bundleLinksPath())
+
                   var done = s
-                  done.status = .placed
+                  done.status = r3.ok ? .placed : .failed
+                  if !r3.ok { done.lastError = r3.message }
                   state.save(done)
-                  return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed")
+
+                  DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                      AirliftBridge.shared.respring()
+                  }
+                  return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed, links=\(r3.ok)")
               }
 
               func reload() -> CarrierLabBridge.ProbeResult {
@@ -439,10 +679,16 @@ jobs:
                       return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."), detail: "no session")
                   }
                   _ = s
-                  return bridge.injectFolder(
+                  let r = bridge.injectFolder(
                       sourceFolder: docomoBundleURL().path,
                       targetFolder: bridge.carrierRootPath(),
                       folderName: "Docomo_jp.bundle")
+                  if r.ok {
+                      DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                          AirliftBridge.shared.respring()
+                      }
+                  }
+                  return r
               }
 
               func finish() {
@@ -467,7 +713,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: pass-through pairing, inject_folder [skip ci]"
+            git commit -m "feat: symlinks for 25001, clean respring, carrier activation [skip ci]"
             git push
           fi
 
@@ -477,15 +723,14 @@ jobs:
           test -d natsuk1/Resources/CarrierAssets/CarrierLab.bundle
           test -f natsuk1/Resources/CarrierAssets/CarrierLab.bundle/carrier.plist
           test -f natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/carrier.plist
+          test -L natsuk1/Resources/CarrierAssets/BundleLinksSource/25001
+          test -L natsuk1/Resources/CarrierAssets/BundleLinksSource/25001_GID1-AA
           grep -q 'CarrierAssets' project.yml
           grep -q 'lc++' project.yml
-          grep -q 'natsuk1/Support/bridging.h' project.yml
-          grep -q 'al_exploit_inject_folder' natsuk1/CarrierLab/CarrierLabBridge.swift
-          grep -q 'injectFolder' natsuk1/CarrierLab/CarrierLabInstaller.swift
-          ! grep -q '_silgen_name' natsuk1/CarrierLab/CarrierLabBridge.swift
-          ! grep -q '_silgen_name' natsuk1/CarrierLab/CarrierLabInstaller.swift
-          ! grep -q 'lockdownd' natsuk1/Helpers/PairingGenerator.swift
-          grep -q 'syncCanonicalPairingFile' natsuk1/Helpers/PairingGenerator.swift
+          grep -q 'installSymlinks' natsuk1/CarrierLab/CarrierLabBridge.swift
+          grep -q 'installSymlinks' natsuk1/CarrierLab/CarrierLabInstaller.swift
+          grep -q 'AirliftBridge.shared.respring' natsuk1/CarrierLab/CarrierLabInstaller.swift
+          ! grep -q 'RespringView' natsuk1/App/natsuk1.swift
           rm -rf natsuk1.xcodeproj
           xcodegen generate
 
@@ -513,6 +758,14 @@ jobs:
             -skipMacroValidation \
             build -quiet
 
+      - name: Verify symlinks in app
+        run: |
+          set -euo pipefail
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -print -quit)
+          test -n "$APP"
+          echo "=== BundleLinksSource in .app ==="
+          ls -la "$APP/CarrierAssets/BundleLinksSource" || echo "not present in .app"
+
       - name: Package and Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -535,7 +788,7 @@ jobs:
           gh release view development >/dev/null 2>&1 && gh release delete development --yes --cleanup-tag || true
           R="${{ github.repository }}"
           IPA="https://github.com/$R/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v45.0 ($((SIZE/1024)) KB)
+          NOTES="natsuk1 v47.0 ($((SIZE/1024)) KB)
 
           **Install**
 
