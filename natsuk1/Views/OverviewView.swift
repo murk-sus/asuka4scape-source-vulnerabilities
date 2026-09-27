@@ -9,7 +9,7 @@ struct OverviewView: View {
         NavigationStack {
             List {
                 Section {
-                    Button { state.necp_run() } label: {
+                    Button { state.run() } label: {
                         HStack {
                             Text("Run Exploit")
                             Spacer()

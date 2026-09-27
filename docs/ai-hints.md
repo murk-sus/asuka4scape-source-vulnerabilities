@@ -260,3 +260,27 @@ Fixes applied automatically by the workflow:
 - Keep Cleanup idempotent with sed and perl.
 - Never rewrite if let pin = airlift.pairPIN.
 - Remove nk_necp_cancel lines with sed, do not rename.
+
+## CURRENT STATUS
+
+Build iPhone14,5 / iOS 27.0 / 24A437.
+
+- No kernel R/W primitive found on this build.
+- NECP closed at depth-0 sinks, code removed from repo.
+- Airlift works via static Grappa token fallback.
+- Offsets shipped with verified false, do not trust.
+- IOKit not probed beyond shallow externalMethod dispatch.
+- BSD syscalls 557 of 558 unpacked, shallow paths bounded.
+
+## AIRLIFTVIEW KEEP
+
+- Keep if let pin = airlift.pairPIN, Text reads pin.
+- Do not rewrite to if airlift.pairPIN != nil.
+
+## CI IDEMPOTENCE
+
+- Every cleanup mutation must be idempotent.
+- Commit only if git diff --cached is non-empty.
+- Use skip ci in every commit message from CI.
+- Cache key must change when project.yml changes.
+- rm -rf natsuk1.xcodeproj before xcodegen generate.

@@ -21,7 +21,6 @@ private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line i
     while p.pointee != 0 { bytes.append(UInt8(bitPattern: p.pointee)); p = p.advanced(by: 1) }
     let _line = String(decoding: bytes, as: UTF8.self)
     LockedBuffer.shared.append(_line)
-    CrashLog.shared.writeLine(_line)
     AppState.shared.parseLogLine(_line)
 }
 private func osVersionString() -> String {
@@ -48,7 +47,6 @@ struct RootView: View {
         ContentView()
             .environmentObject(state).environmentObject(offsets).environmentObject(airlift)
             .onAppear {
-                CrashLog.shared.install()
                 nk_set_log(cCallback)
                 if state.log.isEmpty {
                     state.append("[*] natsuk1 v\(appVersionString())")
@@ -61,7 +59,6 @@ struct RootView: View {
             }
             .onChange(of: keep_alive_audio) { _, v in if v { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() } }
             .onChange(of: keep_alive_location) { _, v in if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() } }
-            .onChange(of: scenePhase) { _, phase in if phase == .background { CrashLog.shared.markCleanShutdown() } }
     }
 }
 final class AppState: ObservableObject, @unchecked Sendable {
@@ -125,18 +122,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         if running { return }
         running = true; status = .running
         Task.detached {
-            _ = nk_full_exploit()
-            await MainActor.run {
-                AppState.shared.running = false
-                AppState.shared.status = .ok
-            }
-        }
-    }
-    func necp_run() {
-        if running { return }
-        running = true; status = .running
-        Task.detached {
-            let rc = nk_run()
+            let rc = nk_full_exploit()
             await MainActor.run {
                 AppState.shared.running = false
                 AppState.shared.status = (rc == 0) ? .ok : .failed
