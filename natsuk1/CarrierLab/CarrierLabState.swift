@@ -13,6 +13,7 @@ final class CarrierLabState: ObservableObject, @unchecked Sendable {
         var originalBackupPath: String?
         var ipccTriggerPath: String?
         var lastError: String?
+        var aliases: [String]?
     }
 
     @Published private(set) var session: Session?

@@ -1,38 +1,67 @@
 import Foundation
+import UIKit
 
 final class CarrierLabBridge: @unchecked Sendable {
     static let shared = CarrierLabBridge()
 
     enum CarrierError: LocalizedError {
-        case noPairing
-        case notImplemented(String)
+        case airliftUnavailable
         case remote(String)
+        case io(String)
 
         var errorDescription: String? {
             switch self {
-            case .noPairing: return "No pairing file. Pair via Airlift first."
-            case .notImplemented(let s): return "Not implemented: " + s
+            case .airliftUnavailable: return "Airlift недоступен. Проверьте pairing и запустите Airlift ещё раз."
             case .remote(let s): return s
+            case .io(let s): return "I/O: " + s
             }
         }
     }
 
-    private let carrierRoot = "/var/mobile/Library/Carrier Bundles"
-    private let bundleLinks = "/var/mobile/Library/Carrier Bundles/BundleLinks"
+    private let carrierRoot = CarrierConstants.carrierTarget
+    private let bundleLinks = CarrierConstants.carrierLinks
 
-    func carrierRootPath() -> String { carrierRoot }
-    func bundleLinksPath() -> String { bundleLinks }
+    private var lastProbeOK = false
+    private var lastProbeMessage = "не проверялся"
+
+    func probe() -> (ok: Bool, message: String) {
+        var outErr: UnsafeMutablePointer<CChar>? = nil
+        var outJson: UnsafeMutablePointer<CChar>? = nil
+        let probeFile = NSTemporaryDirectory() + "/carrierlab-probe-\(UUID().uuidString).txt"
+        try? "probe".data(using: .utf8)?.write(to: URL(fileURLWithPath: probeFile))
+        var rc: Int32 = -1
+        probeFile.withCString { pf in
+            "/var/mobile/Library/Carrier Bundles/.carrierlab-probe".withCString { tf in
+                rc = al_exploit_run(pf, tf, nil, nil, &outJson, &outErr)
+            }
+        }
+        let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
+        if let p = outErr { al_string_free(p) }
+        if let p = outJson { al_string_free(p) }
+        try? FileManager.default.removeItem(atPath: probeFile)
+        if rc == 0 {
+            lastProbeOK = true
+            lastProbeMessage = "OK"
+        } else {
+            lastProbeOK = false
+            lastProbeMessage = errMsg.isEmpty ? "rc=\(rc)" : errMsg
+        }
+        return (lastProbeOK, lastProbeMessage)
+    }
+
+    func isAvailable() -> Bool { lastProbeOK }
+    func probeMessage() -> String { lastProbeMessage }
 
     func writeFile(source: String, target: String) throws {
-        let pairing = PairingController.pairingFilePath()
-        guard FileManager.default.fileExists(atPath: pairing) else { throw CarrierError.noPairing }
+        let (ok, msg) = probe()
+        guard ok else { throw CarrierError.airliftUnavailable }
+        _ = msg
         var outJson: UnsafeMutablePointer<CChar>? = nil
         var outErr: UnsafeMutablePointer<CChar>? = nil
-        let rc: Int32 = pairing.withCString { pc in
-            source.withCString { sc in
-                target.withCString { tc in
-                    al_exploit_run(pc, tc, nil, nil, &outJson, &outErr)
-                }
+        var rc: Int32 = -1
+        source.withCString { sc in
+            target.withCString { tc in
+                rc = al_exploit_run(sc, tc, nil, nil, &outJson, &outErr)
             }
         }
         if let p = outJson { al_string_free(p) }
@@ -41,15 +70,6 @@ final class CarrierLabBridge: @unchecked Sendable {
         if rc != 0 { throw CarrierError.remote(errMsg.isEmpty ? "rc=\(rc)" : errMsg) }
     }
 
-    func readFile(path: String) throws -> Data {
-        throw CarrierError.notImplemented("al_read_file")
-    }
-
-    func removePath(_ path: String) throws {
-        throw CarrierError.notImplemented("al_remove_path")
-    }
-
-    func symlink(link: String, target: String) throws {
-        throw CarrierError.notImplemented("al_make_symlink")
-    }
+    func bundleLinksPath() -> String { bundleLinks + "/iPhone" }
+    func carrierRootPath() -> String { carrierRoot }
 }
