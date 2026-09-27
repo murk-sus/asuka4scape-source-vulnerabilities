@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build:
     runs-on: macos-26
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
         with:
@@ -25,435 +25,233 @@ jobs:
         with:
           xcode-version: "26.5"
 
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Caches/Homebrew
-            natsuk1.xcodeproj
-          key: nk-v44-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v44-
-
       - name: Install tools
         run: |
           set -e
           command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
           command -v ldid >/dev/null 2>&1 || brew install ldid
 
-      - name: Write project.yml
+      - name: Fetch carrier assets
         run: |
           set -euo pipefail
-          cat > project.yml <<'PROJECT_EOF'
-          name: natsuk1
-          options:
-            bundleIdPrefix: com.natsuk1
-            deploymentTarget:
-              iOS: "26.0"
-            createIntermediateGroups: true
-            groupSortPosition: top
-            projectFormat: xcode15_0
-            generateEmptyDirectories: false
+          ROOT=natsuk1/Resources/CarrierAssets
+          mkdir -p "$ROOT/CarrierLab.bundle/signatures" "$ROOT/Docomo_jp.bundle/signatures"
+          BASE="https://raw.githubusercontent.com/VCTGomes/ios-carrier-bundle/cecd5594349df0bf51723a247028bad5f40a7965/carrier-bundles/27.0-24A437.V53_V54_V57OS"
+          for f in \
+            "CarrierLab.bundle/Info.plist" \
+            "CarrierLab.bundle/carrier.plist" \
+            "CarrierLab.bundle/overrides_V53_V54_V57.der.pri" \
+            "CarrierLab.bundle/overrides_V53_V54_V57.plist" \
+            "CarrierLab.bundle/signatures/common.plist" \
+            "CarrierLab.bundle/signatures/overrides_V53_V54_V57.plist" \
+            "Docomo_jp.bundle/Info.plist" \
+            "Docomo_jp.bundle/carrier.plist" \
+            "Docomo_jp.bundle/overrides_V53_V54_V57.der.pri" \
+            "Docomo_jp.bundle/overrides_V53_V54_V57.plist" \
+            "Docomo_jp.bundle/profile.mobileconfig" \
+            "Docomo_jp.bundle/signatures/common.plist" \
+            "Docomo_jp.bundle/signatures/overrides_V53_V54_V57.plist" \
+            ; do
+            curl -fsSL "$BASE/$f" -o "$ROOT/$f"
+            test -s "$ROOT/$f"
+          done
 
-          configs:
-            Debug: debug
-            Release: release
-
-          settings:
-            base:
-              SWIFT_VERSION: "5.0"
-              SWIFT_STRICT_CONCURRENCY: minimal
-              IPHONEOS_DEPLOYMENT_TARGET: "26.0"
-              CLANG_ENABLE_MODULES: YES
-              CLANG_MODULES_AUTOLINK: NO
-              CLANG_ENABLE_OBJC_ARC: YES
-              ENABLE_BITCODE: NO
-              CODE_SIGN_IDENTITY: ""
-              CODE_SIGNING_REQUIRED: NO
-              CODE_SIGNING_ALLOWED: NO
-              ENABLE_USER_SCRIPT_SANDBOXING: NO
-              ENABLE_MODULE_VERIFIER: NO
-              VALIDATE_PRODUCT: NO
-              ALWAYS_SEARCH_USER_PATHS: NO
-              GCC_NO_COMMON_BLOCKS: YES
-              CLANG_LTO: NO
-              LLVM_LTO: NO
-            configs:
-              Debug:
-                SWIFT_OPTIMIZATION_LEVEL: "-Onone"
-                SWIFT_COMPILATION_MODE: singlefile
-                GCC_OPTIMIZATION_LEVEL: "0"
-                ONLY_ACTIVE_ARCH: YES
-                DEBUG_INFORMATION_FORMAT: dwarf
-                SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
-                ENABLE_TESTABILITY: YES
-              Release:
-                SWIFT_OPTIMIZATION_LEVEL: "-Osize"
-                SWIFT_COMPILATION_MODE: wholemodule
-                SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
-                GCC_OPTIMIZATION_LEVEL: "s"
-                ONLY_ACTIVE_ARCH: NO
-                DEBUG_INFORMATION_FORMAT: dwarf
-                ENABLE_NS_ASSERTIONS: NO
-                ENABLE_TESTABILITY: NO
-                GCC_INLINES_ARE_PRIVATE_EXTERN: YES
-                GCC_SYMBOLS_PRIVATE_EXTERN: YES
-                DEAD_CODE_STRIPPING: YES
-                DEPLOYMENT_POSTPROCESSING: YES
-                STRIP_INSTALLED_PRODUCT: YES
-                STRIP_STYLE: all
-                STRIPFLAGS: "-S -x"
-                COPY_PHASE_STRIP: YES
-                LLVM_LTO: NO
-
-          targets:
-            natsuk1:
-              type: application
-              platform: iOS
-              sources:
-                - path: natsuk1/App
-                - path: natsuk1/CarrierLab
-                - path: natsuk1/Exploit
-                - path: natsuk1/Helpers
-                - path: natsuk1/Views
-                - path: natsuk1/Support/bridging.h
-                - path: natsuk1/Resources/Assets.xcassets
-                  buildPhase: resources
-                - path: natsuk1/Resources/CarrierAssets
-                  type: folder
-                  buildPhase: resources
-                - path: natsuk1/Offsets
-                  type: folder
-                  buildPhase: resources
-              dependencies:
-                - sdk: Foundation.framework
-                - sdk: UIKit.framework
-                - sdk: WebKit.framework
-                - sdk: AVFoundation.framework
-                - sdk: CoreLocation.framework
-              settings:
-                base:
-                  PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit
-                  PRODUCT_NAME: natsuk1
-                  INFOPLIST_FILE: natsuk1/Resources/Info.plist
-                  CODE_SIGN_ENTITLEMENTS: natsuk1/Resources/natsuk1.entitlements
-                  SWIFT_OBJC_BRIDGING_HEADER: natsuk1/Support/bridging.h
-                  SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h
-                  OTHER_SWIFT_FLAGS: "$(inherited) -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks"
-                  OTHER_CFLAGS: -fno-autolink -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
-                  OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a -lc++ -ObjC
-                  HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/Exploit/Core $(SRCROOT)/natsuk1/Exploit/Airlift $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/Headers"
-                  TARGETED_DEVICE_FAMILY: "1"
-                  GENERATE_INFOPLIST_FILE: NO
-                  ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-                  ASSETCATALOG_COMPILER_OPTIMIZATION: space
-                  ENABLE_ONLY_ACTIVE_RESOURCES: YES
-          PROJECT_EOF
-      - name: Write PairingGenerator
+      - name: Apply patch
         run: |
           set -euo pipefail
-          mkdir -p natsuk1/Helpers
-          cat > natsuk1/Helpers/PairingGenerator.swift <<'PAIRING_EOF'
-          import Foundation
+          cat > /tmp/natsuk1_payload.b64 <<'PAYLOAD_EOF'
+          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
+          PAYLOAD_EOF
+          python3 - <<'DECODE_EOF'
+          import base64, hashlib, io, sys, tarfile
+          blob = open("/tmp/natsuk1_payload.b64").read()
+          packed = base64.b64decode("".join(blob.split()))
+          if hashlib.sha256(packed).hexdigest() != "17ea8cadb4d245f6795a1327b02fcecc33e8ed946ebb22223fac8d722c1a2d4b":
+              sys.exit("payload corrupted")
+          tar = tarfile.open(fileobj=io.BytesIO(packed), mode="r:xz")
+          try:
+              tar.extractall(".", filter="data")
+          except TypeError:
+              tar.extractall(".")
+          print("payload ok:", len(tar.getnames()), "file(s)")
+          DECODE_EOF
 
-          final class PairingGenerator {
-              static let shared = PairingGenerator()
-              private init() {}
-
-              enum GeneratorError: LocalizedError {
-                  case missingFile(String)
-                  case notAPlist(String)
-                  case writeFailed(String)
-
-                  var errorDescription: String? {
-                      switch self {
-                      case .missingFile(let s): return "Pairing file missing: \(s)"
-                      case .notAPlist(let s): return "Pairing file is not a plist: \(s)"
-                      case .writeFailed(let s): return "Write failed: \(s)"
-                      }
-                  }
-              }
-
-              @discardableResult
-              func generateMergedPairing(rppPath: String, outputPath: String) throws -> String {
-                  let fm = FileManager.default
-                  guard fm.fileExists(atPath: rppPath) else {
-                      throw GeneratorError.missingFile(rppPath)
-                  }
-                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: rppPath)), !data.isEmpty else {
-                      throw GeneratorError.missingFile("empty or unreadable: \(rppPath)")
-                  }
-                  guard let plist = try? PropertyListSerialization.propertyList(
-                      from: data, options: [], format: nil) as? [String: Any] else {
-                      throw GeneratorError.notAPlist(rppPath)
-                  }
-                  guard !plist.isEmpty else {
-                      throw GeneratorError.notAPlist("empty plist: \(rppPath)")
-                  }
-
-                  let canonical = PairingController.syncCanonicalPairingFile(from: rppPath)
-                  if outputPath != canonical {
-                      do {
-                          try data.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
-                      } catch {
-                          throw GeneratorError.writeFailed(error.localizedDescription)
-                      }
-                  }
-                  return canonical
-              }
-          }
-          PAIRING_EOF
-      - name: Write CarrierLabBridge
+      - name: Move legacy entry point
         run: |
           set -euo pipefail
-          mkdir -p natsuk1/CarrierLab
-          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'BRIDGE_EOF'
-          import Foundation
+          mkdir -p natsuk1/App
+          if [ -f natsuk1/natsuk1.swift ] && [ ! -f natsuk1/App/natsuk1.swift ]; then
+            git mv natsuk1/natsuk1.swift natsuk1/App/natsuk1.swift
+          fi
+          test -f natsuk1/App/natsuk1.swift
 
-          final class CarrierLabBridge: @unchecked Sendable {
-              static let shared = CarrierLabBridge()
-
-              enum ProbeState {
-                  case ok
-                  case noVPN
-                  case noPairing
-                  case pairingInvalid
-                  case ffiFailed(String)
-              }
-
-              struct ProbeResult {
-                  let state: ProbeState
-                  let detail: String
-                  var ok: Bool { if case .ok = state { return true }; return false }
-                  var message: String {
-                      switch state {
-                      case .ok: return "ready"
-                      case .noVPN: return "No loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
-                      case .noPairing: return "No pairing file. Open Tools / Airlift and run Start Pairing."
-                      case .pairingInvalid: return detail
-                      case .ffiFailed(let s): return s
-                      }
-                  }
-              }
-
-              private let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
-              private let bundleLinks = "/var/mobile/Library/Carrier Bundles"
-
-              func carrierRootPath() -> String { carrierRoot }
-              func bundleLinksPath() -> String { bundleLinks }
-
-              func findPairingFile() -> String? {
-                  let fm = FileManager.default
-                  let canonical = PairingController.pairingFilePath()
-                  if fm.fileExists(atPath: canonical) {
-                      let size = (try? fm.attributesOfItem(atPath: canonical)[.size] as? Int) ?? 0
-                      if size > 0 { return canonical }
-                  }
-                  let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                  let candidates = [
-                      docs.appendingPathComponent("natsuk1_pairing.plist").path,
-                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing").path,
-                  ]
-                  for c in candidates {
-                      if fm.fileExists(atPath: c) {
-                          let size = (try? fm.attributesOfItem(atPath: c)[.size] as? Int) ?? 0
-                          if size > 0 { return c }
-                      }
-                  }
-                  return nil
-              }
-
-              private func validatePairingFile(_ path: String) -> (Bool, String) {
-                  let fm = FileManager.default
-                  guard fm.fileExists(atPath: path) else { return (false, "missing") }
-                  let size = (try? fm.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
-                  if size < 50 { return (false, "Pairing file too small (\(size) bytes).") }
-                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
-                      return (false, "Pairing file unreadable.")
-                  }
-                  guard let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
-                        let dict = obj as? [String: Any] else {
-                      return (false, "Pairing file not a plist (\(size) bytes).")
-                  }
-                  if dict.isEmpty { return (false, "Pairing plist empty.") }
-                  return (true, "Pairing ok (\(size) bytes, \(dict.count) keys)")
-              }
-
-              func probe() -> ProbeResult {
-                  if !NetworkStatus.loopbackVPNUp() { return ProbeResult(state: .noVPN, detail: "no loopback VPN") }
-                  guard let pairing = findPairingFile() else {
-                      return ProbeResult(state: .noPairing, detail: "missing")
-                  }
-                  let (ok, msg) = validatePairingFile(pairing)
-                  if !ok { return ProbeResult(state: .pairingInvalid, detail: msg) }
-                  return ProbeResult(state: .ok, detail: msg)
-              }
-
-              func injectFolder(sourceFolder: String, targetFolder: String, folderName: String) -> ProbeResult {
-                  let pre = probe()
-                  guard pre.ok else { return pre }
-                  guard let pairingPath = findPairingFile() else {
-                      return ProbeResult(state: .noPairing, detail: "no pairing path")
-                  }
-                  var outError: UnsafeMutablePointer<CChar>? = nil
-                  var rc: Int32 = -1
-                  pairingPath.withCString { pc in
-                      sourceFolder.withCString { sc in
-                          targetFolder.withCString { tc in
-                              folderName.withCString { nc in
-                                  rc = al_exploit_inject_folder(pc, sc, tc, nc, nil, nil, &outError)
-                              }
-                          }
-                      }
-                  }
-                  let errMsg = outError.flatMap { String(cString: $0) } ?? ""
-                  if let p = outError { al_string_free(p) }
-                  if rc != 0 {
-                      return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "inject rc=\(rc)" : errMsg), detail: errMsg)
-                  }
-                  return ProbeResult(state: .ok, detail: "injected")
-              }
-
-              func writeFile(source: String, target: String) -> ProbeResult {
-                  let pre = probe()
-                  guard pre.ok else { return pre }
-                  guard let pairingPath = findPairingFile() else {
-                      return ProbeResult(state: .noPairing, detail: "no pairing path")
-                  }
-                  var outJson: UnsafeMutablePointer<CChar>? = nil
-                  var outErr: UnsafeMutablePointer<CChar>? = nil
-                  var rc: Int32 = -1
-                  pairingPath.withCString { pc in
-                      source.withCString { sc in
-                          target.withCString { tc in
-                              rc = al_exploit_run(pc, tc, nil, nil, &outJson, &outErr)
-                          }
-                      }
-                  }
-                  let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
-                  if let p = outJson { al_string_free(p) }
-                  if let p = outErr { al_string_free(p) }
-                  if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
-                  return ProbeResult(state: .ok, detail: "ok")
-              }
-          }
-          BRIDGE_EOF
-      - name: Write CarrierLabInstaller
+      - name: Verify sources
         run: |
           set -euo pipefail
-          mkdir -p natsuk1/CarrierLab
-          cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'INSTALLER_EOF'
-          import Foundation
+          test -f natsuk1/App/natsuk1.swift
+          test -f natsuk1/Resources/Info.plist
+          test -f natsuk1/Resources/natsuk1.entitlements
+          grep -q 'probeTimeoutMS' natsuk1/Helpers/LockdownPair.swift
+          grep -q 'perHostTimeout' natsuk1/Helpers/LockdownPair.swift
+          grep -q 'totalTimeout' natsuk1/Helpers/LockdownPair.swift
+          grep -q 'isProtectedDataAvailable' natsuk1/Helpers/LockdownPair.swift
+          grep -q 'func requestCancel' natsuk1/Helpers/LockdownPair.swift
+          grep -q 'lockdownd_pair' natsuk1/Helpers/LockdownPair.swift
+          grep -q 'idevice_pairing_file_serialize' natsuk1/Helpers/LockdownPair.swift
+          grep -q 'func cancelMinting' natsuk1/Helpers/PairingGenerator.swift
+          grep -q 'LockdownPair.cancelled' natsuk1/Helpers/AirliftBridge.swift
+          grep -q 'hasLockdown' natsuk1/Helpers/AirliftBridge.swift
+          grep -q 'defaultSlots' natsuk1/CarrierLab/CarrierLabBridge.swift
+          grep -q 'no files in directory' natsuk1/CarrierLab/CarrierLabBridge.swift
+          grep -q 'slotsWritten' natsuk1/CarrierLab/CarrierLabInstaller.swift
+          grep -q 'func diagnose' natsuk1/CarrierLab/CarrierLabInstaller.swift
+          grep -q 'slots' natsuk1/CarrierLab/CarrierLabState.swift
+          grep -q 'Copy All' natsuk1/CarrierLab/CarrierLabView.swift
+          grep -q 'logActionsSection' natsuk1/CarrierLab/CarrierLabView.swift
+          grep -q 'idevice_shim.h' natsuk1/Support/bridging.h
+          grep -q 'NATSUK1_IDEVICE_SHIM_H' natsuk1/Support/idevice_shim.h
+          grep -q 'sdk: Network.framework' project.yml
+          grep -q 'SRCROOT)/natsuk1/Support' project.yml
+          grep -q 'lc++' project.yml
+          grep -q 'libairlift_ffi.a' project.yml
+          ! grep -q 'Task' natsuk1/Helpers/AirliftBridge.swift
+          ! grep -q 'Task' natsuk1/Helpers/PairingGenerator.swift
+          ! grep -q 'al_device_respring' natsuk1/Helpers/AirliftBridge.swift
+          ! grep -q 'al_find_app_container' natsuk1/Helpers/AirliftBridge.swift
+          ! grep -q 'lockdownd_pair_record_free' natsuk1/Helpers/PairingGenerator.swift
+          ! grep -q '_silgen_name' natsuk1/Helpers/LockdownPair.swift
+          ! grep -q 'natsuk1/External' project.yml
 
-          final class CarrierLabInstaller: @unchecked Sendable {
-              static let shared = CarrierLabInstaller()
+      - name: Validate project.yml
+        run: |
+          set -euo pipefail
+          if command -v ruby >/dev/null 2>&1; then
+            ruby -ryaml -e 'd=YAML.load_file("project.yml"); sdk=d["targets"]["natsuk1"]["dependencies"].map{|e| e["sdk"]}; need=%w[Foundation.framework UIKit.framework WebKit.framework AVFoundation.framework CoreLocation.framework Network.framework]; miss=need-sdk; abort("missing dependencies: "+miss.join(",")) unless miss.empty?; src=d["targets"]["natsuk1"]["sources"].map{|e| e["path"]}; abort("bad sources") unless src.include?("natsuk1/CarrierLab") && src.include?("natsuk1/App"); puts "project.yml ok: "+sdk.size.to_s+" frameworks"'
+          else
+            echo "ruby unavailable, skipping pre-parse"
+          fi
 
-              private let state = CarrierLabState.shared
-              private let bridge = CarrierLabBridge.shared
-
-              struct CheckResult {
-                  let probe: CarrierLabBridge.ProbeResult
-                  let carrierRootExists: Bool
-                  let bundleLinksExists: Bool
-                  let resourcesBundled: Bool
-                  let backupPresent: Bool
-                  let status: CarrierLabState.Status
-              }
-
-              func carrierBundleURL() -> URL {
-                  Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/CarrierLab.bundle")
-              }
-
-              func docomoBundleURL() -> URL {
-                  Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/Docomo_jp.bundle")
-              }
-
-              func check() -> CheckResult {
-                  let fm = FileManager.default
-                  let probe = bridge.probe()
-                  return CheckResult(
-                      probe: probe,
-                      carrierRootExists: fm.fileExists(atPath: bridge.carrierRootPath()),
-                      bundleLinksExists: fm.fileExists(atPath: bridge.bundleLinksPath()),
-                      resourcesBundled: fm.fileExists(atPath: carrierBundleURL().path),
-                      backupPresent: state.hasBackup(),
-                      status: state.session?.status ?? .clean
-                  )
-              }
-
-              func install() -> CarrierLabBridge.ProbeResult {
-                  let carrierBundle = carrierBundleURL()
-                  let docomoBundle = docomoBundleURL()
-                  guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
-                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle missing"), detail: "missing")
-                  }
-                  guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
-                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"), detail: "missing")
-                  }
-                  let pre = bridge.probe()
-                  guard pre.ok else { return pre }
-
-                  let s = CarrierLabState.Session(
-                      status: .placing,
-                      startedAt: Date(),
-                      carrierBundlePath: carrierBundle.path,
-                      originalBackupPath: state.backupURL().path,
-                      ipccTriggerPath: docomoBundle.path,
-                      lastError: nil,
-                      aliases: nil)
-                  state.save(s)
-
-                  let r1 = bridge.injectFolder(
-                      sourceFolder: carrierBundle.path,
-                      targetFolder: bridge.bundleLinksPath(),
-                      folderName: "CarrierLab.bundle")
-                  if !r1.ok {
-                      var bad = s
-                      bad.status = .failed
-                      bad.lastError = r1.message
-                      state.save(bad)
-                      return r1
-                  }
-
-                  let r2 = bridge.injectFolder(
-                      sourceFolder: docomoBundle.path,
-                      targetFolder: bridge.carrierRootPath(),
-                      folderName: "Docomo_jp.bundle")
-                  if !r2.ok {
-                      var bad = s
-                      bad.status = .failed
-                      bad.lastError = r2.message
-                      state.save(bad)
-                      return r2
-                  }
-
-                  var done = s
-                  done.status = .placed
-                  state.save(done)
-                  return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed")
-              }
-
-              func reload() -> CarrierLabBridge.ProbeResult {
-                  guard let s = state.session, s.status == .placed || s.status == .finished else {
-                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."), detail: "no session")
-                  }
-                  _ = s
-                  return bridge.injectFolder(
-                      sourceFolder: docomoBundleURL().path,
-                      targetFolder: bridge.carrierRootPath(),
-                      folderName: "Docomo_jp.bundle")
-              }
-
-              func finish() {
-                  guard let s = state.session else { return }
-                  var done = s
-                  done.status = .finished
-                  state.save(done)
-              }
-
-              func reset() {
-                  state.clear()
-              }
-          }
-          INSTALLER_EOF
       - name: Commit
         run: |
           set -euo pipefail
@@ -463,25 +261,13 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: pass-through pairing, inject_folder, no lockdown gate [skip ci]"
+            git commit -m "fix: bounded lockdown minting, CarrierLab slots and log actions [skip ci]"
             git push
           fi
 
       - name: Generate project
         run: |
           set -euo pipefail
-          test -d natsuk1/Resources/CarrierAssets/CarrierLab.bundle
-          test -f natsuk1/Resources/CarrierAssets/CarrierLab.bundle/carrier.plist
-          test -f natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/carrier.plist
-          grep -q 'CarrierAssets' project.yml
-          grep -q 'lc++' project.yml
-          grep -q 'natsuk1/Support/bridging.h' project.yml
-          grep -q 'al_exploit_inject_folder' natsuk1/CarrierLab/CarrierLabBridge.swift
-          grep -q 'injectFolder' natsuk1/CarrierLab/CarrierLabInstaller.swift
-          ! grep -q '_silgen_name' natsuk1/CarrierLab/CarrierLabBridge.swift
-          ! grep -q '_silgen_name' natsuk1/CarrierLab/CarrierLabInstaller.swift
-          ! grep -q 'lockdownd' natsuk1/Helpers/PairingGenerator.swift
-          grep -q 'syncCanonicalPairingFile' natsuk1/Helpers/PairingGenerator.swift
           rm -rf natsuk1.xcodeproj
           xcodegen generate
 
@@ -531,7 +317,7 @@ jobs:
           gh release view development >/dev/null 2>&1 && gh release delete development --yes --cleanup-tag || true
           R="${{ github.repository }}"
           IPA="https://github.com/$R/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v44.0 ($((SIZE/1024)) KB)
+          NOTES="natsuk1 v48.0 ($((SIZE/1024)) KB)
 
           **Install**
 
