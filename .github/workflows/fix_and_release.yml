@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v48-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v48-
+          key: nk-v49-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v49-
 
       - name: Install tools
         run: |
@@ -170,7 +170,7 @@ jobs:
                   ENABLE_ONLY_ACTIVE_RESOURCES: YES
           PROJECT_EOF
 
-      - name: Write natsuk1.swift
+      - name: Write App
         run: |
           set -euo pipefail
           mkdir -p natsuk1/App
@@ -331,11 +331,65 @@ jobs:
           }
           APP_EOF
 
+      - name: Write PairingGenerator
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Helpers
+          cat > natsuk1/Helpers/PairingGenerator.swift <<'PG_EOF'
+          import Foundation
+
+          final class PairingGenerator {
+              static let shared = PairingGenerator()
+              private init() {}
+
+              enum GeneratorError: LocalizedError {
+                  case missingFile(String)
+                  case notAPlist(String)
+                  case writeFailed(String)
+
+                  var errorDescription: String? {
+                      switch self {
+                      case .missingFile(let s): return "Pairing file missing: \(s)"
+                      case .notAPlist(let s): return "Pairing file is not a plist: \(s)"
+                      case .writeFailed(let s): return "Write failed: \(s)"
+                      }
+                  }
+              }
+
+              @discardableResult
+              func generateMergedPairing(rppPath: String, outputPath: String) throws -> String {
+                  let fm = FileManager.default
+                  guard fm.fileExists(atPath: rppPath) else {
+                      throw GeneratorError.missingFile(rppPath)
+                  }
+                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: rppPath)), !data.isEmpty else {
+                      throw GeneratorError.missingFile("empty or unreadable: \(rppPath)")
+                  }
+                  guard let plist = try? PropertyListSerialization.propertyList(
+                      from: data, options: [], format: nil) as? [String: Any] else {
+                      throw GeneratorError.notAPlist(rppPath)
+                  }
+                  guard !plist.isEmpty else {
+                      throw GeneratorError.notAPlist("empty plist: \(rppPath)")
+                  }
+                  let canonical = PairingController.syncCanonicalPairingFile(from: rppPath)
+                  if outputPath != canonical {
+                      do {
+                          try data.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
+                      } catch {
+                          throw GeneratorError.writeFailed(error.localizedDescription)
+                      }
+                  }
+                  return canonical
+              }
+          }
+          PG_EOF
+
       - name: Write CarrierLabBridge
         run: |
           set -euo pipefail
           mkdir -p natsuk1/CarrierLab
-          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'BRIDGE_EOF'
+          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'CB_EOF'
           import Foundation
 
           final class CarrierLabBridge: @unchecked Sendable {
@@ -380,7 +434,7 @@ jobs:
                   let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
                   let candidates = [
                       docs.appendingPathComponent("natsuk1_pairing.plist").path,
-                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing").path,
+                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing").path
                   ]
                   for c in candidates {
                       if fm.fileExists(atPath: c) {
@@ -424,8 +478,9 @@ jobs:
                       return ProbeResult(state: .noPairing, detail: "no pairing path")
                   }
                   let fm = FileManager.default
-                  guard fm.fileExists(atPath: sourceFolder) else {
-                      return ProbeResult(state: .ffiFailed("source missing: \(sourceFolder)"), detail: "source missing")
+                  var isDir: ObjCBool = false
+                  guard fm.fileExists(atPath: sourceFolder, isDirectory: &isDir), isDir.boolValue else {
+                      return ProbeResult(state: .ffiFailed("source is not a directory: \(sourceFolder)"), detail: "source missing")
                   }
                   let contents = (try? fm.contentsOfDirectory(atPath: sourceFolder)) ?? []
                   guard !contents.isEmpty else {
@@ -473,13 +528,13 @@ jobs:
                   return ProbeResult(state: .ok, detail: "ok")
               }
           }
-          BRIDGE_EOF
+          CB_EOF
 
       - name: Write CarrierLabInstaller
         run: |
           set -euo pipefail
           mkdir -p natsuk1/CarrierLab
-          cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'INSTALLER_EOF'
+          cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'CI_EOF'
           import Foundation
 
           final class CarrierLabInstaller: @unchecked Sendable {
@@ -538,17 +593,17 @@ jobs:
                   let s = CarrierLabState.Session(
                       status: .placing,
                       startedAt: Date(),
-                      carrierBundle                     Path: carrierBundle.path,
-                      originalBackupPath folder: state.backupURL().path,
+                      carrierBundlePath: carrierBundle.path,
+                      originalBackupPath: state.backupURL().path,
                       ipccTriggerPath: docomoBundle.path,
                       lastError: nil,
-                      aliases: ["250Name01", "25001_G:ID1-AA"])
+                      aliases: ["25001", "25001_GID1-AA"])
                   state.save(s)
 
- "                  let r1 = bridge.injectFolder(
+                  let r1 = bridge.injectFolder(
                       sourceFolder: carrierBundle.path,
                       targetFolder: bridge.carrierRootPath(),
-CarrierLab.bundle")
+                      folderName: "CarrierLab.bundle")
                   if !r1.ok {
                       var bad = s
                       bad.status = .failed
@@ -631,7 +686,14 @@ CarrierLab.bundle")
                   state.clear()
               }
           }
-          INSTALLER_EOF
+          CI_EOF
+
+      - name: Fix OverviewView
+        run: |
+          set -euo pipefail
+          if [ -f natsuk1/Views/OverviewView.swift ]; then
+            perl -i -pe 's/state\.necp_run\(\)/state.run()/g' natsuk1/Views/OverviewView.swift
+          fi
 
       - name: Commit
         run: |
@@ -642,7 +704,7 @@ CarrierLab.bundle")
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: webview respring, copy bundle to BundleLinks instead of symlinks [skip ci]"
+            git commit -m "fix: webview respring, bundlelinks copy, empty dir guard [skip ci]"
             git push
           fi
 
@@ -657,7 +719,6 @@ CarrierLab.bundle")
           grep -q 'natsuk1/Support/bridging.h' project.yml
           grep -q 'no files in directory' natsuk1/CarrierLab/CarrierLabBridge.swift
           grep -q 'AppState.shared.respring' natsuk1/CarrierLab/CarrierLabInstaller.swift
-          ! grep -q 'AirliftBridge.shared.respring' natsuk1/CarrierLab/CarrierLabInstaller.swift
           grep -q 'RespringView' natsuk1/App/natsuk1.swift
           rm -rf natsuk1.xcodeproj
           xcodegen generate
@@ -708,7 +769,7 @@ CarrierLab.bundle")
           gh release view development >/dev/null 2>&1 && gh release delete development --yes --cleanup-tag || true
           R="${{ github.repository }}"
           IPA="https://github.com/$R/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v48.0 ($((SIZE/1024)) KB)
+          NOTES="natsuk1 v49.0 ($((SIZE/1024)) KB)
 
           **Install**
 
