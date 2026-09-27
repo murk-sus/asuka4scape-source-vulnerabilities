@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v27-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v27-
+          key: nk-v28-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v28-
 
       - name: Install tools
         run: |
@@ -494,7 +494,7 @@ jobs:
               func writeFile(source: String, target: String) -> ProbeResult {
                   let pre = probe()
                   guard pre.ok else { return pre }
-                  let pairingPath = CarrierLabBridge.shared.probePairingPath()
+                  let pairingPath = findPairingFile() ?? ""
                   guard !pairingPath.isEmpty else {
                       return ProbeResult(state: .noPairing, detail: "no pairing path")
                   }
@@ -513,10 +513,6 @@ jobs:
                   if let p = outErr { al_string_free(p) }
                   if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
                   return ProbeResult(state: .ok, detail: "ok")
-              }
-
-              private func probePairingPath() -> String {
-                  return findPairingFile() ?? ""
               }
           }
           SWIFT_EOF
@@ -754,6 +750,7 @@ jobs:
                           Image(systemName: clState.airliftOK ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                               .font(.system(size: 22))
                               .foregroundStyle(clState.airliftOK ? .green : .orange)
+                              .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.45), radius: 3)
                           VStack(alignment: .leading, spacing: 3) {
                               Text("Airlift")
                               Text(clState.airliftOK ? "Connected" : "Not ready")
@@ -977,6 +974,7 @@ jobs:
                           Image(systemName: loopbackVPNUp ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                               .font(.system(size: 22))
                               .foregroundStyle(loopbackVPNUp ? .green : .orange)
+                              .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.45), radius: 3)
                           VStack(alignment: .leading, spacing: 3) {
                               Text("LocalDevVPN")
                               Text(loopbackVPNUp ? "Connected" : "Not connected")
@@ -1478,6 +1476,9 @@ jobs:
           - reload re-writes Docomo_jp.bundle only.
           - reset clears session, does not revert the phone.
           - view auto-refreshes every 5 s silent, no log spam on silent refresh.
+          - probe() checks only VPN and pairing file validity. Never call al_exploit_run from probe.
+            FFI expects device at 10.7.0.3, LocalDevVPN gives 10.7.0.1. Direct FFI call always times out.
+            Actual writes still use al_exploit_run and may fail if the FFI cannot reach the device.
 
           ## UI STYLE
 
@@ -1500,10 +1501,10 @@ jobs:
           Cause: @Published setter called on non-main thread.
           Fix: all @Published mutations via DispatchQueue.main.async unconditionally.
 
-          ### "failed to parse raw pairing file from bytes"
-          Cause: FFI expects pairing file with specific extension (.mobiledevicepairing) or specific path.
-          Fix: search all candidate paths: natsuk1_pairing.plist, ALTPairingFile.mobiledevicepairing, pairingFile.plist, any plist in Documents, nested Data/Application.
-          Do not reject pairing file for missing specific keys. Only require it parses as plist and is not empty.
+          ### "raw RPPairing timed out after 6s"
+          Cause: AirliftFFI connects to 10.7.0.3:49152 but LocalDevVPN gives device IP 10.7.0.1.
+          Fix: probe() no longer calls al_exploit_run. Only checks VPN and pairing file.
+          The actual write still calls al_exploit_run and will fail if the FFI cannot reach the device.
           HINTS_EOF
 
       - name: Commit
@@ -1515,7 +1516,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: pairing file discovery, delete pairing, glow everywhere [skip ci]"
+            git commit -m "fix: probe without FFI call, device IP mismatch, glow everywhere [skip ci]"
             git push
           fi
 
