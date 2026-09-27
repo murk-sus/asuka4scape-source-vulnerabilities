@@ -98,15 +98,3 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_OPTIMIZATION: space
         ENABLE_ONLY_ACTIVE_RESOURCES: YES
-
-  natsuk1Tests:
-    type: bundle.unit-test
-    platform: iOS
-    sources:
-      - path: natsuk1Tests
-    dependencies:
-      - target: natsuk1
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit.tests
-        GENERATE_INFOPLIST_FILE: YES
