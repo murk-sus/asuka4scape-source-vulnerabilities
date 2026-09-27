@@ -294,3 +294,13 @@ CarrierLab UI wraps AirLift file writes to /var/mobile/Library/Carrier Bundles.
 - reload: only after install, re-triggers IPCC read.
 - finish: marks session done.
 - TODO: al_read_file, al_remove_path, al_make_symlink in AirliftFFI.
+
+## USER WORKFLOW RULES
+
+- Never use sed/perl to modify project.yml. Rewrite fully via cat heredoc.
+- Never mutate @Published from background thread. Use DispatchQueue.main.async or @MainActor.
+- Do not touch AirliftBridge.swift or PairingController.swift without explicit request.
+- Do not add "type INSTALL" style confirmations.
+- AirLift probe must distinguish: no VPN / no pairing / too-small pairing / FFI error.
+- Read hints before every workflow change. Remove dead steps each run.
+- No comments in code or workflows.
