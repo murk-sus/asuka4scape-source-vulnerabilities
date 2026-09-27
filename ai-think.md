@@ -22,10 +22,9 @@ pretend you searched. Do not guess.
 
 ## How to read the user
 
-- Short, terse, lowercase: they are in flow. Match that rhythm. One
-  or two paragraphs, not five.
-- Long with code dump: they are stuck. Read the whole dump first.
-  Do not ask them to re-paste anything already visible.
+- Short, terse, lowercase: they are in flow. Match that rhythm.
+- Long with code dump: they are stuck. Read the dump first. Do not
+  ask them to re-paste anything already visible.
 - Angry or frustrated: they hit an error you caused or missed.
   Acknowledge the specific failure, do not defend. Fix it.
 - Question about state: answer with the state, not a proposal.
@@ -99,7 +98,7 @@ later), follow these rules to get the best result:
 - Explicitly request think step by step before critical reasoning.
 - DeepSeek V3/R1 are not as strong as Claude/GPT at following long
   agentic instructions. Keep rules short and ordered by priority.
-- When it drifts into repetition, say stop. answer the question and
+- When it drifts into repetition, say stop, answer the question and
   re-state the specific question.
 - DeepSeek is prone to hallucinating Ghidra API names. Always require
   it to cite the exact API call it wants to use, and verify against
@@ -109,11 +108,11 @@ later), follow these rules to get the best result:
   accuracy noticeably.
 - Provide the exact build identity every time: iPhone14,5 / iOS
   27.0 / 24A437 / xnu-13432.2.10~2. Never say iOS 27 alone.
-- If it starts answering questions it made up, reset with: stop.
-  you are guessing. here is the actual data: ... and paste raw.
+- If it starts answering questions it made up, reset with: stop,
+  you are guessing, here is the actual data: ... and paste raw.
 - DeepSeek R1 writes think tags. Ignore the raw think content,
   read only the final answer, but do check the think block if the
-  answer looks wrong — the error is usually visible there.
+  answer looks wrong, the error is usually visible there.
 - DeepSeek V3.1 and later have long context. Use it: paste the full
   decompile, not a trimmed excerpt. Trimming breaks pattern match.
 
@@ -136,36 +135,30 @@ scripting, GPT for planning.
 
 ## How to write GitHub Actions workflows
 
-This section will save hours of invalid YAML fights.
+Block scalar indentation: inside a run pipe block, every line of
+content must be indented MORE than the run key itself. A line at
+column 0 inside a run pipe block kills YAML parsing with invalid
+yaml syntax.
 
-### Block scalar indentation
+Never put long content inside a run pipe block. Any markdown,
+source file, or multi-line text over 30 lines should be a separate
+file committed to the repo. The workflow reads it.
 
-Inside a run: | block, every line of content must be indented MORE
-than the run: key itself. A line at column 0 inside run: | kills
-YAML parsing with invalid yaml syntax.
+If you must inline content, indent every line. Every line of the
+heredoc body must have the SAME number of leading spaces. Use only
+spaces, never tabs. Standard is 10 spaces for a step-level block.
 
-### Never put long content inside run: |
+Heredoc markers: a quoted EOF does not expand variables. Use this
+for content that may contain dollar signs. An unquoted EOF expands
+variables.
 
-Any markdown, source file, or multi-line text over 30 lines should
-be a separate file committed to the repo. The workflow reads it.
-
-### If you must inline content, indent every line
-
-Every line of the heredoc body must have the SAME number of leading
-spaces. Use only spaces, never tabs. Standard is 10 spaces.
-
-### Heredoc markers
-
-<<'EOF' quoted does not expand variables. Use this for content that
-may contain dollar signs. <<EOF unquoted expands variables.
-
-### Validate before pushing
-
+Validate before pushing:
 python3 -c "import yaml; yaml.safe_load(open('.github/workflows/foo.yml')); print('ok')"
-
 If Python yaml parses it, GitHub will parse it.
 
-### Split large workflows
+Quote dollar-brace expressions in string contexts. Plain is fine.
+With prefix or suffix, may be parsed as YAML mapping. Quote it.
 
-If a workflow exceeds 500 lines, split into multiple files with
-different trigger conditions. Long workflows are hard to debug.
+Split large workflows. If a workflow exceeds 500 lines, split into
+multiple files with different trigger conditions. Long workflows
+are hard to debug and slow to iterate.
