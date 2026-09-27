@@ -1,7 +1,8 @@
 import Foundation
 
-final class PairingGenerator:unchecked Sendable {
+final class PairingGenerator {
     static let shared = PairingGenerator()
+    private init() {}
 
     enum GeneratorError: LocalizedError {
         case lockdownFailed(String)
@@ -17,10 +18,7 @@ final class PairingGenerator:unchecked Sendable {
         }
     }
 
-    func generateMergedPairing(
-        rppPath: String,
-        outputPath: String
-    ) throws {
+    func generateMergedPairing(rppPath: String, outputPath: String) throws {
         guard let rppData = try? Data(contentsOf: URL(fileURLWithPath: rppPath)) else {
             throw GeneratorError.lockdownFailed("cannot read RPP file")
         }
