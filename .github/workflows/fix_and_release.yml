@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build:
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
         with:
@@ -31,17 +31,28 @@ jobs:
             ~/Library/Caches/Homebrew
             natsuk1/External
             build
-          key: nk-v14-static
+          key: nk-v20-static
           restore-keys: |
-            nk-v14-
-            nk-v13-
+            nk-v20-
+            nk-v19-
+            nk-v18-
 
-      - name: Cleanup
+      - name: Cleanup repo
         run: |
-          rm -f .github/workflows/build_and_release.yml
-          rm -f .github/workflows/fix_and_test.yml
-          rm -f natsuk1/Views/SimpleList.swift
-          find . -name .DS_Store -delete
+          set -e
+          rm -f .github/workflows/build_and_release.yml || true
+          rm -f .github/workflows/fix_and_test.yml || true
+          rm -f natsuk1/Views/SimpleList.swift || true
+          rm -f ai-hints-curated.md || true
+          rm -f result.txt offsets.json primitives.json dump.txt kernel.log symbols.json || true
+          rm -rf natsuk1/External || true
+          find . -name .DS_Store -delete || true
+
+      - name: Install tools
+        run: |
+          set -e
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          command -v ldid >/dev/null 2>&1 || brew install ldid
 
       - name: Write ai-think.md
         run: |
@@ -70,10 +81,9 @@ jobs:
 
           ## How to read the user
 
-          - Short, terse, lowercase: they are in flow. Match that rhythm. One
-            or two paragraphs, not five.
-          - Long with code dump: they are stuck. Read the whole dump first.
-            Do not ask them to re-paste anything already visible.
+          - Short, terse, lowercase: they are in flow. Match that rhythm.
+          - Long with code dump: they are stuck. Read the dump first. Do not
+            ask them to re-paste anything already visible.
           - Angry or frustrated: they hit an error you caused or missed.
             Acknowledge the specific failure, do not defend. Fix it.
           - Question about state: answer with the state, not a proposal.
@@ -147,7 +157,7 @@ jobs:
           - Explicitly request think step by step before critical reasoning.
           - DeepSeek V3/R1 are not as strong as Claude/GPT at following long
             agentic instructions. Keep rules short and ordered by priority.
-          - When it drifts into repetition, say stop. answer the question and
+          - When it drifts into repetition, say stop, answer the question and
             re-state the specific question.
           - DeepSeek is prone to hallucinating Ghidra API names. Always require
             it to cite the exact API call it wants to use, and verify against
@@ -157,11 +167,11 @@ jobs:
             accuracy noticeably.
           - Provide the exact build identity every time: iPhone14,5 / iOS
             27.0 / 24A437 / xnu-13432.2.10~2. Never say iOS 27 alone.
-          - If it starts answering questions it made up, reset with: stop.
-            you are guessing. here is the actual data: ... and paste raw.
+          - If it starts answering questions it made up, reset with: stop,
+            you are guessing, here is the actual data: ... and paste raw.
           - DeepSeek R1 writes think tags. Ignore the raw think content,
             read only the final answer, but do check the think block if the
-            answer looks wrong — the error is usually visible there.
+            answer looks wrong, the error is usually visible there.
           - DeepSeek V3.1 and later have long context. Use it: paste the full
             decompile, not a trimmed excerpt. Trimming breaks pattern match.
 
@@ -186,146 +196,85 @@ jobs:
 
           This section will save hours of invalid YAML fights.
 
-          ### Block scalar indentation
+          Block scalar indentation: inside a run pipe block, every line of
+          content must be indented MORE than the run key itself. A line at
+          column 0 inside a run pipe block kills YAML parsing with invalid
+          yaml syntax.
 
-          Inside a run: | block, every line of content must be indented MORE
-          than the run: key itself. A line at column 0 inside run: | kills
-          YAML parsing with invalid yaml syntax.
+          Never put long content inside a run pipe block. Any markdown,
+          source file, or multi-line text over 30 lines should be a separate
+          file committed to the repo. The workflow reads it.
 
-          ### Never put long content inside run: |
+          If you must inline content, indent every line. Every line of the
+          heredoc body must have the SAME number of leading spaces. Use only
+          spaces, never tabs. Standard is 10 spaces for a step-level block.
 
-          Any markdown, source file, or multi-line text over 30 lines should
-          be a separate file committed to the repo. The workflow reads it.
+          Heredoc markers: a quoted EOF does not expand variables. Use this
+          for content that may contain dollar signs. An unquoted EOF expands
+          variables.
 
-          ### If you must inline content, indent every line
-
-          Every line of the heredoc body must have the SAME number of leading
-          spaces. Use only spaces, never tabs. Standard is 10 spaces.
-
-          ### Heredoc markers
-
-          <<'EOF' quoted does not expand variables. Use this for content that
-          may contain dollar signs. <<EOF unquoted expands variables.
-
-          ### Validate before pushing
-
+          Validate before pushing:
           python3 -c "import yaml; yaml.safe_load(open('.github/workflows/foo.yml')); print('ok')"
-
           If Python yaml parses it, GitHub will parse it.
 
-          ### Split large workflows
+          Quote dollar-brace expressions in string contexts. Plain is fine.
+          With prefix or suffix, may be parsed as YAML mapping. Quote it.
 
-          If a workflow exceeds 500 lines, split into multiple files with
-          different trigger conditions. Long workflows are hard to debug.
+          Split large workflows. If a workflow exceeds 500 lines, split into
+          multiple files with different trigger conditions. Long workflows
+          are hard to debug and slow to iterate.
           AI_THINK_EOF
-          echo "ai-think.md: $(wc -c < ai-think.md) bytes"
+          wc -c ai-think.md
 
-      - name: Write ai-hints-curated.md
+      - name: Write ai-hints.md
         run: |
-          cat > ai-hints-curated.md <<'AI_HINTS_CURATED_EOF'
+          cat > ai-hints.md <<'AI_HINTS_EOF'
+          # natsuk1 AI RESEARCH BRIEF
+
+          Read this file before answering anything about this repo.
+          Single source of truth for the state of research, tooling
+          conventions, and hard-won rules for scripts that run in Ghidra
+          headless CI without crashing on the first parse.
+
           ## PROJECT IDENTITY
 
-          natsuk1: on-device iOS kernel research toolkit plus AirTraffic exploit.
+          natsuk1: on-device iOS kernel research toolkit plus AirTraffic
+          exploit.
+
           - target: iPhone14,5 (iPhone 13, A15) / iOS 27.0 / build 24A437
           - kernel: xnu-13432.2.10~2 / RELEASE_ARM64_T8110 / arm64e
-          - signing: ad-hoc, empty entitlements, works on LiveContainer and SideStore
-          - license: MIT, author murk-sus
+          - signing: ad-hoc, empty entitlements, works on LiveContainer and
+            SideStore
+          - author: murk-sus, license MIT
 
           What it does:
           - pairs the iPhone as host via RPPairing on the 10.7.0.x tunnel
           - opens RSD tunnel, enumerates services (AFC, ATC, StreamingZip)
           - uploads a symlink payload via StreamingZip plus AFC
-          - drives AirTraffic ATC sync (Grappa token, AssetManifest, FileComplete)
-          - reads back a canary through the symlink target to confirm the write
-          - NECP probes for kernel info disclosure (KASLR via op 0x0D)
+          - drives AirTraffic ATC sync (Grappa, AssetManifest, FileComplete)
+          - reads back a canary through the symlink target
+          - NECP probes for kernel information disclosure
           - full NECP / IOKit / BSD-syscall taint analysis of the kernelcache
 
           Stack:
           - SwiftUI app: natsuk1/natsuk1.swift, Views/, Helpers/
           - C probes: natsuk1/Exploit/necp.c, nk_api.c
           - ObjC: natsuk1/Exploit/GrappaHelper.m
-          - AirliftFFI stub: natsuk1/External/AirliftFFI.xcframework/ios-arm64/
+          - AirliftFFI stub: generated by CI, not committed
           - Offsets DB: natsuk1/Offsets/
           - CI: fix_and_release.yml (build) plus extract_offsets.yml (analysis)
-
-          ## OFFSETS FOR PRIMITIVES (VERIFIED)
-
-          These are the ONLY verified addresses for iPhone14,5 / iOS 27.0 /
-          24A437. If a script reports a different value, the script is wrong.
-
-          Kernel base and slide:
-          - KERNEL_BASE  = 0xFFFFFFF007004000
-          - KERNEL_SLIDE = 0x3D00000
-          - SYSENT_BASE  = 0xFFFFFFF007C19270 (NOT 0x...A0, that is +2 off)
-
-          Sysent layout (stride 24 bytes):
-          - sy_call at +0x00 (u64, ptrauth-signed)
-          - sy_arg at +0x08 (u32 or u16)
-          - flags at +0x10 (u32)
-          - sy_narg at +0x14 (u16)
-
-          PAC unwrap formula (verified twice):
-          - sy_call_unwrapped = KERNEL_BASE + (raw AND 0xFFFFFFFF)
-          - sysent[503] -> necp_open
-          - sysent[502] -> getentropy
-          - sysent[0] -> exit (with correct base)
-
-          Sink addresses:
-          - kalloc_type = 0xFFFFFFF00A200988
-          - kalloc_zone = 0xFFFFFFF00A20141C
-          - copyin      = 0xFFFFFFF00A368EC0
-          - copyout     = 0xFFFFFFF00A369A3C
-          - memmove     = 0xFFFFFFF00AA40D30
-          - memset      = 0xFFFFFFF00AA40EE0
-
-          NECP function addresses:
-          - necp_open               = 0xFFFFFFF00A4E411C
-          - necp_client_action      = 0xFFFFFFF00A4E5C28
-          - necp_match_policy       = 0xFFFFFFF00A4F75D8
-          - necp_session_open       = 0xFFFFFFF00A4B4C3C
-          - necp_session_action     = 0xFFFFFFF00A4BD438
-          - necp_client_add_flow    = 0xFFFFFFF00A4E843C
-          - necp_client_remove_flow = 0xFFFFFFF00A4E93C4
-          - necp_client_add_client  = 0xFFFFFFF00A4E60DC
-          - necp_client_copy_result = 0xFFFFFFF00A4E7BE8
-          - necp_client_copy_list   = 0xFFFFFFF00A4E80FC
-
-          Syscall numbers (OFFICIAL, do not shift):
-          - 490..500 mach_eventlink family
-          - 500 = getentropy (async variant, second getentropy)
-          - 501 = necp_open
-          - 502 = necp_client_action
-          - 503 = work_interval_ctl
-          - 504 = getentropy (async)
-          - 505 = __nexus_open
-          - 506 = __nexus_register
-          - 507 = __nexus_deregister
-          - 508 = __nexus_create
-          - 509 = __nexus_destroy
-          - 510 = __nexus_get_opt
-          - 511 = __nexus_set_opt
-          - 512 = __channel_open
-          - 513 = __channel_get_info
-          - 514 = __channel_sync
-          - 515 = __channel_get_opt
-          - 516 = __channel_set_opt
-          - 517 = ulock_wait
-          - 518 = ulock_wake
-          - 546 = ulock_wait2
-
-          App syscall constants in necp.c are CORRECT (501/502). Do NOT
-          change them. The parser was reading a shifted base, not the
-          syscall numbers.
 
           ## MANDATORY BEHAVIOR
 
           For every user message, before answering:
 
           1. Use web search. Latest on iOS 27 kernel internals, XNU changelog
-             2026, Apple security advisories 2026, blacktop/ipsw release notes,
-             Ghidra 12.x headless API, Jython 2.7 compat, LiveContainer /
-             SideStore / AltStore / TrollStore iOS 27 status, SwiftUI iOS 27
-             regressions, NECP / mbuf / socket / IOKit bugs 2025-2026.
+             2026, Apple security advisories 2026, blacktop/ipsw release
+             notes, blacktop symbolicator signatures, Ghidra 12.x headless
+             API, Jython 2.7 compatibility, LiveContainer / SideStore /
+             AltStore / TrollStore iOS 27 status, SwiftUI iOS 27 regressions,
+             NECP / mbuf / socket / IOKit bugs 2025-2026, Apple developer
+             forums iOS 27 threads.
           2. Use extended reasoning. Enumerate alternatives, weigh tradeoffs,
              then commit. No hedging.
           3. If web search unavailable, say so explicitly at the top.
@@ -335,109 +284,249 @@ jobs:
           7. Never guess offsets. Only use values from this file or verified
              by Ghidra on the exact kernelcache.
 
+          ## VERIFIED OFFSETS
+
+          These are the ONLY verified values for iPhone14,5 / iOS 27.0 /
+          24A437 / xnu-13432.2.10~2.
+
+          Kernel base and slide:
+          - KERNEL_BASE  = 0xFFFFFFF007004000
+          - KERNEL_SLIDE = 0x3D00000
+          - SYSENT_BASE  = 0xFFFFFFF007C192D0 (NOT 0x...A0, NOT 0x...70,
+            those are off by 2 and 4 respectively)
+          - SYSENT_STRIDE = 24
+          - SYSENT_COUNT = 558
+
+          Sysent layout: sy_call at +0x00 (u64 ptrauth-signed), sy_arg at
+          +0x08, flags at +0x10 (u32), sy_narg at +0x14 (u16).
+
+          PAC unwrap formula (verified):
+          sy_call_unwrapped = KERNEL_BASE + (raw AND 0xFFFFFFFF)
+
+          Verified anchors:
+          - sysent[92]   = fcntl
+          - sysent[94]   = nosys
+          - sysent[462]  = necp_match_policy
+          - sysent[501]  = necp_open            (0xFFFFFFF00A4E411C)
+          - sysent[502]  = necp_client_action   (0xFFFFFFF00A4E5C28)
+          - sysent[503]  = work_interval_ctl
+          - sysent[504]  = getentropy (async)
+          - sysent[505]  = __nexus_open
+          - sysent[512]  = __channel_open
+          - sysent[524]  = necp_session_open    (0xFFFFFFF00A4B4C3C)
+          - sysent[525]  = necp_session_action  (0xFFFFFFF00A4BD438)
+          - sysent[546]  = ulock_wait2
+
+          Sink addresses:
+          - kalloc_type  = 0xFFFFFFF00A200988
+          - kalloc_zone  = 0xFFFFFFF00A20141C
+          - copyin       = 0xFFFFFFF00A368EC0
+          - copyout      = 0xFFFFFFF00A369A3C
+          - memmove      = 0xFFFFFFF00AA40D30
+          - memset       = 0xFFFFFFF00AA40EE0
+          - kfree_type   = 0xFFFFFFF00A201000
+          - ref_dec      = 0xFFFFFFF00A4E3278 (release_or_free)
+
+          NECP op-handler addresses (24 total):
+          - necp_open                      0xFFFFFFF00A4E411C
+          - necp_client_action             0xFFFFFFF00A4E5C28
+          - necp_add_client                0xFFFFFFF00A4E60DC
+          - necp_claim                     0xFFFFFFF00A4E7158
+          - necp_remove_client             0xFFFFFFF00A4E76F4
+          - necp_copy_result               0xFFFFFFF00A4E7BE8
+          - necp_copy_list                 0xFFFFFFF00A4E80FC
+          - necp_add_flow                  0xFFFFFFF00A4E843C
+          - necp_remove_flow               0xFFFFFFF00A4E93C4
+          - necp_request_nexus             0xFFFFFFF00A4E9904
+          - necp_agent_action              0xFFFFFFF00A4EA0B4
+          - necp_copy_agent                0xFFFFFFF00A4EA778
+          - necp_copy_parameters           0xFFFFFFF00A4EA8A0
+          - necp_copy_agent_alt            0xFFFFFFF00A4EAB50
+          - necp_copy_interface            0xFFFFFFF00A4EAC7C
+          - necp_get_iface_addr            0xFFFFFFF00A4EB2B4
+          - necp_sysctl_arena              0xFFFFFFF00A4EB704
+          - necp_copy_route_stats          0xFFFFFFF00A4EBA0C
+          - necp_update_cache              0xFFFFFFF00A4EBD58
+          - necp_copy_update               0xFFFFFFF00A4EC264
+          - necp_sign                      0xFFFFFFF00A4EC5D8
+          - necp_validate                  0xFFFFFFF00A4EC9EC
+          - necp_get_signed_id             0xFFFFFFF00A4ECC4C
+          - necp_set_signed_id             0xFFFFFFF00A4ECE88
+          - necp_get_flow_stats            0xFFFFFFF00A4ED170
+
+          NECP internal:
+          - necp_handler_core              0xFFFFFFF00A501454
+          - necp_tlv_packer                0xFFFFFFF00A4C3558
+          - necp_copy_state                0xFFFFFFF00A4ED8BC
+          - necp_session_lookup            0xFFFFFFF00A4ED864
+          - necp_raw_lookup                0xFFFFFFF00A4DB8D4
+          - necp_release_session           0xFFFFFFF00A4E5284
+          - necp_ref_dec                   0xFFFFFFF00A4E3278
+          - necp_add_flow_core             0xFFFFFFF00A4E843C
+          - necp_match_policy              0xFFFFFFF00A4F75D8
+          - necp_session_open              0xFFFFFFF00A4B4C3C
+          - necp_session_action            0xFFFFFFF00A4BD438
+
+          IOKit:
+          - iokit_user_client_trap         0xFFFFFFF00A98C2E8
+          - is_io_service_open_extended    0xFFFFFFF00A988758
+          - io_connect_method              0xFFFFFFF00A9AD62C
+
+          New syscalls 27.0:
+          - nexus:   0xA802220 .. 0xA803FE8
+          - channel: 0xA7DACEC .. 0xA7DCF00
+          - ulock:   0xA754778, 0xA755798, 0xA7547C0
+
           ## NECP STATUS
 
-          Working: op 0x03 returns 1 byte, op 0x04 and 0x1A return 280-byte
-          TLV, op 0x0D returns user VA (KASLR leak).
+          Working:
+          - op 0x03 returns 1 byte
+          - op 0x04 and 0x1A return 280-byte TLV
+          - op 0x0D returns caller VA (NOT a kernel pointer, no leak)
 
-          Closed: op 0x05 / 0x0C / 0x0F return -1, op 0x18 empty, op 0x19 -1,
-          TLV overflow rejected, add_flow len in [0x24, 0xF0] accepted,
-          remove_flow twice ret=0, copy_result_inner kptr count 0.
+          Closed (bounded, no primitive):
+          - op 0x05 copy_list returns -1
+          - op 0x0C copy_parameters returns -1
+          - op 0x0F copy_update returns -1
+          - op 0x18 get_signed_id returns empty
+          - op 0x19 set_signed_id returns -1
+          - TLV overflow len=0xFFFFFFFF rejected
+          - add_flow len in [0x24, 0xF0] accepted
+          - remove_flow twice returns ret=0
+          - copy_result_inner kptr count 0
+          - copy_interface idx 1..10 no data
 
-          Taint verdict (v48): 24 sources scanned, all propagate. 649
-          findings, every depth=0 sink bounded. Both deep kalloc sites
-          (0xA1C6B80, 0xA3ACA70) are internal parsers with CARRY4 checks.
-          NECP as user-facing primitive: CLOSED.
+          Taint verdict (v48, v57, v58, v59, v60, v66, v71, v72, v73):
+          - 24 NECP sources + 18 session_action cases scanned
+          - all propagate taint, all depth-0 sinks bounded
+          - both deep kalloc_type sites (0xA1C6B80, 0xA3ACA70) are internal
+            packet/string parsers with CARRY4 overflow checks
+          - necp_session_action cases 0x03, 0x06, 0x07, 0x0d, 0x0e, 0x10,
+            0x11, 0x12 all bounded via unsigned-range-check idiom
+          - necp_match_policy bounded via (uVar5 - 0x401 < 0xfffffffffffffc00)
+          - NECP as user-facing primitive: CLOSED
 
           ## IOKIT STATUS
 
           - iokit_user_client_trap calls io_connect_method (0xA9AD62C)
-            - param_3 in [0x18, 0x800] with CARRY8 + cap 0x800
-            - copyin to stack buffer 0x800, bounded: CLOSED
+          - param_3 in [0x18, 0x800] with CARRY8 plus cap 0x800 double-check
+          - copyin to stack buffer 0x800, bounded
           - is_io_service_open_extended: no depth-0 sinks reachable
-          - Per-driver externalMethod tables and MIG Mach-routine handlers
-            NOT scanned. Remaining IOKit surface.
+          - per-driver externalMethod dispatch tables: scanner v64 found
+            only 4 candidates, all bounded via memmove wrappers
+          - MIG Mach-routine handlers NOT scanned (next surface)
 
           ## BSD SYSCALL STATUS
 
-          300 syscalls passed narg>0 filter, 87 sources produced findings.
-          Depth-0 copyin sites reviewed (9 functions), all bounded:
-          - 0xA6CEB4C ioctl-family, cap 0x1fff
-          - 0xA78D724 recvmsg, iovlen < 0x401
-          - 0xA74BF88 ioctl-family, cap 0x1fff
-          - 0xA74EA2C / 0xA74E884 forward to kdebug loggers, bounded
-          - 0xA70E210 cap 0x10, stack only
-          - 0xA78AE18 / 0xA78A1E8 cap 0x80 stack, or 0xA78A39C cap 0xff
-          - 0xA743B90 cap 0x800
+          - sysent parsed via PAC unwrap: 557/558 unpacked, 117 dup aliases
+          - 300 syscalls passed narg>0 filter
+          - 87 sources produced findings
+          - depth-0 copyin sites reviewed (9 functions), all bounded:
+            0xA6CEB4C ioctl-family cap 0x1fff
+            0xA78D724 recvmsg iovlen < 0x401
+            0xA74BF88 ioctl-family cap 0x1fff
+            0xA74EA2C / 0xA74E884 forward to kdebug loggers
+            0xA70E210 cap 0x10 stack only
+            0xA78AE18 / 0xA78A1E8 cap 0x80 stack
+            0xA743B90 cap 0x800
+          - BSD syscalls as user-facing primitive: CLOSED for shallow paths
 
-          BSD syscalls as user-facing primitive: CLOSED for shallow paths.
+          ## NEW SURFACE (iOS 27 additions)
 
-          ## NEW ATTACK SURFACE (iOS 27 additions)
-
-          These syscalls are new in iOS 27 and were not present in prior
-          versions. Young code, smaller audience, weaker review. Highest
-          priority for primitive hunting.
-
-          - 505..511: __nexus_open / register / deregister / create / destroy
-                      / get_opt / set_opt (7 syscalls, driver-kit-like)
-          - 512..516: __channel_open / get_info / sync / get_opt / set_opt
-                      (5 syscalls, userspace channel API)
-          - 517..518: ulock_wait / ulock_wake
-          - 546: ulock_wait2
-
-          Next taint scan target: 505..518 plus 546. Same methodology as
-          NECP v48.
+          - nexus:   505..511 (open/register/deregister/create/destroy/get_opt/set_opt)
+          - channel: 512..516 (open/get_info/sync/get_opt/set_opt)
+          - ulock:   517..518 (wait/wake) plus 546 (wait2)
+          - all closed at depth >= 6, no shallow user->sink
+          - __channel_sync has kalloc_type at d=8/d=9, copyin at d=6, bounded
 
           ## WHAT A PRIMITIVE LOOKS LIKE
 
-          Real primitive requires ALL of:
+          A real primitive requires ALL of:
           1. user-controlled size in kalloc_type / kalloc_zone
           2. no pre-validation between decode and alloc
-          3. copyin / copyout / memmove with size that does not match allocation
+          3. copyin / copyout / memmove with size not matching allocation
 
           Common false positives:
-          - ioctl cmd >> 16 AND mask, capped at 0x1fff before alloc
-          - if (size > CONST) return error immediately before
+          - ioctl cmd >> 16 AND mask, capped before alloc
+          - if (size > CONST) return error immediately before alloc
           - (user_a + user_b) * CONST with CARRY4 / CARRY8 check
-          - stack buffer fixed N, size checked against N
-          - SoftwareBreakpoint(0x5519) on mismatch (hardening trap)
+          - stack buffer fixed N, size checked against N, copyin(N)
+          - unsigned-range-check idiom: (x - MIN < MAX - MIN). This is
+            SAFE. Occurs everywhere in NECP. Never flag as INT_OVERFLOW.
+          - SoftwareBreakpoint(0x5519) on mismatch, hardening trap not vuln
 
           ## TAINT METHOD
 
-          Sources: user-controlled parameter functions.
-          Sinks: kalloc_type, kalloc_zone, copyin, copyout, memmove, memset.
+          Sources: user-controlled parameter functions. For each, treat all
+          parameters as tainted, propagate through SSA.
 
-          1. HighFunction from DecompInterface
-          2. Parameter varnodes via hf.getLocalSymbolMap()
-          3. Compare varnodes by key addr.toString() plus colon plus str(size)
-          4. Iterate hf.getPcodeOps(): input tainted implies output tainted
-          5. PcodeOp.CALL resolve target via getInput(0).isAddress()
-          6. If sink, check size-arg varnode, else recurse with tainted idx
-          7. Cap depth, worklist, total time
+          Sinks: kalloc_type, kalloc_zone, copyin, copyout, memmove, memset,
+          kfree_type, ref_dec.
+
+          1. Get HighFunction from DecompInterface.
+          2. Get parameter varnodes via hf.getLocalSymbolMap. NOT via
+             getFunctionPrototype().getStorage() which silently returns 0.
+          3. Compare varnodes by key addr.toString() plus colon plus str(size).
+             NOT by Java object identity.
+          4. Iterate hf.getPcodeOps. If any input is tainted, output becomes
+             tainted. Loop until no change.
+          5. For each PcodeOp.CALL, resolve target via getInput(0).isAddress().
+             If sink, check size-arg varnode. Otherwise recurse into callee
+             with tainted arg indices.
+          6. Cap depth (12), worklist (40000), total time (1800 sec).
 
           ## HOW TO WRITE GHIDRA JYTHON SCRIPTS
 
-          - Never use plus between quotes and identifiers. Use percent
-            formatting: log("[-] %s" % e)
-          - Never put 0x at position 0 of a tuple. Use int("...", 16) constants.
-          - Use .get() not bracket in assignment: v = SINK_MAP.get(target)
-          - PcodeOpAST has no getAddress(). Use getSeqnum().getTarget().
-          - Call ensure_function for un-decompiled addresses.
-          - Parameter varnodes: hf.getLocalSymbolMap() only.
-          - Varnode identity: vn_key string, never Java object identity.
-          - Wrap Ghidra imports in try/except with HAS_* flags.
-          - One DecompInterface cached in module global.
-          - decompileFunction has timeout: 30-45 sec medium, 90 sec large.
-          - Wrap main in try/except, write FATAL to output file.
-          - Validate syntax: python3 -c "import ast,sys; ast.parse(open(...).read())"
+          String handling: never use plus between quotes and identifiers.
+          Editors mangle it into invalid syntax. Use percent formatting.
+
+          Tuple literals: never put 0x at position 0. Use named constants.
+
+          Dictionary access: use .get() not bracket in assignment position.
+
+          PcodeOp address: PcodeOpAST has no getAddress(). Use
+          getSeqnum().getTarget().getOffset().
+
+          Function boundaries: call ensure_function for un-decompiled
+          addresses. DisassembleCommand then CreateFunctionCmd, fallback to
+          FunctionManager.createFunction.
+
+          Parameter varnodes: hf.getLocalSymbolMap() is the only correct
+          path. Wrap sym.isParameter, sym.getCategoryIndex,
+          sym.getHighVariable().getInstances.
+
+          Varnode identity: compare by vn_key string addr plus colon plus
+          size, never by Java object identity.
+
+          Imports: wrap Ghidra command imports in try/except with HAS flags.
+
+          Decompiler instance: one DecompInterface cached in module global.
+          Never recreate per function.
+
+          Timeouts: decompileFunction(f, sec, monitor). 30-45 sec medium,
+          90 sec large. One uncapped function hangs the whole CI job.
+
+          Crash-proof main: wrap main in try/except, write FATAL plus
+          traceback to output file.
+
+          Validation: python3 -c "import ast,sys; ast.parse(open(path).read())"
 
           ## WORKFLOW
 
-          Only two workflows: fix_and_release.yml (build) and extract_offsets.yml
-          (analysis). Cache: ghidra, ipsw, symbolicator, kernelcache,
-          ghidra_project. Warm run 3-6 min. Never hashFiles on kernelcache.
+          Two workflows only:
+          - fix_and_release.yml (build)
+          - extract_offsets.yml (Ghidra analysis)
 
-          kernel_rw.py writes exactly ONE file: result.txt.
+          Cache keys: ghidra, ipsw, symbolicator, kernelcache,
+          ghidra_project, symbols. Warm run 3-6 min. Never hashFiles on
+          kernelcache. Never delete cached dirs in cleanup.
+
+          kernel_rw.py writes exactly ONE file: result.txt, no more than
+          100 KB. No offsets.json, no primitives.json, no dump.txt.
+
+          Ghidra headless invocation:
+          analyzeHeadless <proj_dir> <proj_name> -process <name> -noanalysis
+            -scriptPath <repo>/scripts -postScript kernel_rw.py
 
           ## LOGGING FOR EXPLOIT (necp.c)
 
@@ -445,47 +534,78 @@ jobs:
           through the Swift callback into AppState.log and to CrashLog.
 
           Rules:
-          - Log every syscall result with errno: LI("PRE", "fd=%d errno=%d", fd, errno)
-          - Log raw return values from every NECP op: LI("RECAP", "op=0x%02x ret=%d", op, ret)
-          - Log every byte buffer length: LI("RECAP", "op=0x%02x got=%d bytes", op, ret)
+          - Log every syscall result with errno: LI(tag, fd=%d errno=%d, fd, errno)
+          - Log raw return values from every NECP op with op code and ret
+          - Log byte buffer length after every op
           - Log hexdumps only when ret is in range (0, 600]
-          - Log kptr scans separately: LO("SCAN", "[%04x] = 0x%llx", offset, value)
-          - Wrap each probe in TRACE("name") so log flow is visible
-          - Never log more than 2048 bytes per hexdump — Swift UI truncates
-          - Use percent formatting everywhere, never string concatenation
+          - Log kptr scans separately with offset and value
+          - Wrap each probe in TRACE so log flow is visible
+          - Never log more than 2048 bytes per hexdump
+          - Use percent formatting everywhere, never plus
           - Every probe ends with done or error marker for grepping
 
-          ## GRAPPA / RPPAIRING CONFIRMED WORKING
+          ## COMMON ERRORS AND FIXES
 
-          tunnel 10.7.0.1:49152 via raw RPPairing, RSD 85 services, AFC,
-          StreamingZip, ATC Capabilities/InstalledAssets/AssetMetrics/
-          SyncAllowed, Grappa 84 bytes from static fallback, ReadyForSync,
-          AssetManifest, FileComplete 3/3, canary readback matches.
+          unterminated string literal: editor inserted quote before 0x. Use
+          int("HEX", 16) constants.
+
+          quote-plus-identifier: use percent formatting.
+
+          unmatched close paren: use .get() instead of bracket.
+
+          PcodeOpAST has no getAddress: use getSeqnum().getTarget().
+
+          seed=0 on every source: use getLocalSymbolMap().
+
+          tainted=0 after seed>0: compare vn_key strings not Java objects.
+
+          no func for a known symbol: ensure_function plus DisassembleCommand.
+
+          parsed unpacked 0: wrong PAC formula, use KERNEL_BASE plus low32.
+
+          Grappa rc=-5 after patch: restore tokens with nk-grappa-restored.
+
+          SyncFailed at ATC: transient, ignore if readback succeeds.
+
+          ## GRAPPA RPPAIRING CONFIRMED WORKING
+
+          Pipeline (iOS 27, empty entitlements):
+          - tunnel up on 10.7.0.1:49152 via raw RPPairing
+          - RSD publishes about 85 services
+          - AFC connects, StreamingZip extracts
+          - ATC: Capabilities, InstalledAssets, AssetMetrics, SyncAllowed
+          - Grappa: 84 bytes generated from static fallback
+          - ReadyForSync, AssetManifest, FileComplete 3/3
+          - canary readback via AFC matches
+          - cleanup restores original Books.plist
 
           Do NOT collapse kAuthenticGrappaTokens to NULL. Do NOT expect
           host-side Grappa on iOS. Do NOT treat SyncFailed as fatal.
 
           ## UI / SWIFTUI iOS 27
 
-          - overlay(RespringView()) causes CA UAF and SIGSEGV
+          - overlay(RespringView()) causes CA UAF and SIGSEGV. Use
+            UIHostingController
           - List with conditional Section else Section crashes
           - scaleEffect inside if breaks ConditionalContent
           - Published mutation from Task causes race and UAF
-          - RuntimeView must not show green when slide/base equal dash
-          - respring button lives only in ToolsView
+          - RuntimeView must not show green when slide or base equal dash
+          - respring button lives only in ToolsView, not AirliftView
 
           ## NEXT STEPS
 
-          1. Taint-scan syscalls 505..518 and 546 (new iOS 27 API)
-          2. Scan IOKit per-driver externalMethod dispatch tables
-          3. Scan MIG Mach-routine handlers
-          4. If all closed statically, pivot to concurrency analysis
+          1. IOKit per-driver externalMethod scanner with array filter
+             (require at least 3 adjacent dispatch entries)
+          2. MIG Mach-routine handlers (mach_msg_trap dispatcher)
+          3. Concurrency analysis (UAF / TOCTOU) for specific lock pairs
+          4. If all closed statically, pivot to dynamic fuzzing
 
           Do not spend more than 2-3 attempts on the same primitive.
 
           ## WHAT NOT TO DO
 
-          - Do not change SYS_NECP_OPEN/ACTION in necp.c to 503/504
+          - Do not change SYS_NECP_OPEN/ACTION in necp.c (they are correct
+            at 501/502; only parser base was wrong)
           - Do not create fix_and_test.yml or build_and_release.yml
           - Do not use hashFiles on kernelcache
           - Do not run blind syscall sweeps
@@ -502,12 +622,9 @@ jobs:
           - Do not use bracket access on dict or list in assignment position
           - Do not put 0x literals at position 0 of a tuple
           - Do not put content at column 0 inside a YAML run pipe block
-          AI_HINTS_CURATED_EOF
-          echo "ai-hints-curated.md: $(wc -c < ai-hints-curated.md) bytes"
-
-      - name: Merge curated into ai-hints.md
-        run: |
-          python3 -c 'import io,os;c=io.open("ai-hints-curated.md").read().rstrip();ms="<!-- AI-HINTS-CURATED-START -->";me="<!-- AI-HINTS-CURATED-END -->";b=ms+"\n"+c+"\n"+me;s=io.open("ai-hints.md").read() if os.path.exists("ai-hints.md") else "";s=((s[:s.index(ms)]+b+s[s.index(me)+len(me):]) if (ms in s and me in s) else (s.rstrip()+"\n\n"+b+"\n" if s.strip() else b+"\n"));io.open("ai-hints.md","w").write(s);print("ai-hints.md",len(s.encode("utf-8")),"bytes")'
+          - Do not flag unsigned-range-check as INT_OVERFLOW (false positive)
+          AI_HINTS_EOF
+          wc -c ai-hints.md
 
       - name: Vendor AirliftFFI
         run: |
@@ -566,28 +683,47 @@ jobs:
           xcrun libtool -static -o "$A/libairlift_ffi.a" /tmp/airlift_stub.o 2>/dev/null || xcrun ar rcs "$A/libairlift_ffi.a" /tmp/airlift_stub.o
           xcrun strip -S "$A/libairlift_ffi.a" || true
 
-      - name: Patch sources
+      - name: Patch AirliftBridge
         run: |
-          python3 -c 'import io,os;P="natsuk1/Helpers/AirliftBridge.swift";s=io.open(P).read() if os.path.exists(P) else "";k="        guard UserDefaults.standard.bool(forKey: \"allow_device_respring\") else {";i=s.find(k);j=s.find("        }\n",i) if i>=0 else -1;t=(s[:i]+s[j+10:]) if i>=0 and j>=0 else s;io.open(P,"w").write(t) if t!=s else None;print("airliftbridge","ok" if t!=s else "noop")'
-          python3 -c 'import io,os;P="natsuk1/Views/SettingsView.swift";s=io.open(P).read() if os.path.exists(P) else "";a="    @AppStorage(\"allow_device_respring\") private var r: Bool = false\n";b="                    Toggle(\"Allow device respring\", isOn: $r)\n";t=s.replace(a,"",1).replace(b,"",1);io.open(P,"w").write(t) if t!=s else None;print("settings","ok" if t!=s else "noop")'
-          python3 -c 'import io,os;P="natsuk1/Exploit/necp.c";s=io.open(P).read() if os.path.exists(P) else "";a="        size_t sz = test_sizes[i] & 0xFFFF;\n";b="        size_t sz = (size_t)test_sizes[i];\n";t=s.replace(a,b,1);io.open(P,"w").write(t) if t!=s else None;print("necp-mask","ok" if t!=s else "noop")'
-          python3 -c 'import io,os;P="natsuk1/Helpers/OffsetsStore.swift";s=io.open(P).read() if os.path.exists(P) else "";a="return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: \"Offsets\")\n";b=a+"                ?? Bundle.main.url(forResource: name, withExtension: ext)\n";t=s.replace(a,b,1) if "?? Bundle.main.url(forResource: name" not in s else s;io.open(P,"w").write(t) if t!=s else None;print("offsets","ok" if t!=s else "noop")'
-          python3 -c 'import io,os;P="natsuk1/Exploit/GrappaHelper.m";s=io.open(P).read() if os.path.exists(P) else "";T=["01012ba6a01f2ccf66a02613d5b72e0bc916004058a001a6874d18b5bd7b3395e25d79fa3ffcc67e718106d485c51540b828d1620e9f94f582d3bcc6f97e9088c923095ad8d36ab568fb45df61e286d25354b04c","0101efa33b1586f410087474b2ccaf8cdb4d0040e5aee6017fdcf774a51c1980b4238076e86218af5a5f169470df90b73f4fc893a22da94fb9745c10f23df0620cfe3f19be3f2ab37d2f7590d8597ab51ebcced0","0101aab479a6d8226f3e1d7a57a2501337e50240e54444b5f1d04101205a7a2f3d148d18440e2edef03d37fcdc7423c0bb441b4c4a355169d511d67ae3466fdf8865e69a8aed45867801ea8e1bbb48889ba0b834","010194ab2ece86e05d7313e4075a947ab3be0240c9237c46b3c519d2ec297304413dab741827016e5eb9af8792bc2b3d6f12be25397931f41bffb887d042b97057c03ed8d72a3acb72378d30f7a073e3d7590f62","01018cec0ea2c25446c90133d435eaafb0150240c6c28dd42f62f8907133c462fc8b6def05e543ab2d59952f6eb3b38e382d492cd2881beceaeaea67fc1331f77fca50fde6bed35622009670e6d6e4a36b09c088","0101243b2587f14dd812751c6710730f46d50440fe2e5e9ccfe70200487e14c131412381fd7c214241b182ca04ebe0c1f3cdd54ac17eef31705c06289e02f672fa8c0d9dff167f1c925df876d5814d3265f55b06","01016f8908f8f972bdc8fe99002f7648e86c024011a469c4320bb7e44137756dde3ecfbff08a55081e532c12a06101c6ae5283a014512d977eafad06c34b1f116422f6bf72ef56f8d734d37db287b170be7a3a82","01015c5fcc103d0460f5bbfd48c387806e8e0340e3323ed780fbeccc2908c059d9a81e75976bf058b411f62a9a6e1df7ba307f69226942373f484690799b230bc60e99036f40eae25229aff6bb31ab74820e68a9","0101f3f542aaa17252a8f81b3dc5b007adc304408d2496cee3af54113ffa9fba392b4143d4c38e4d79680e8e9feb554e450c1f89220c02375a9063b3a62bf61f62bd073991ebf215c6c2e28938d1aa53ed580c02","0101fc26f7e89d1635d86b5c886df69f526a0040038b6c33049f6bd5cc526b4ee7ccce614135d2c73f8326d9af6d28399a231510917493d4fdaa395b4d1c1e1b09bdf3fe6fb7e16ad6d5f5cc18b93730874e6f4e"];k="kAuthenticGrappaTokens[] = {";i=s.find(k);j=s.find("};",i) if i>=0 else -1;body=s[i+len(k):j] if i>=0 and j>=0 else "";M="// nk-grappa-restored";t=s if (M in s) or (i<0) or (j<0) or ("NULL" not in body and body.strip()) else s[:i+len(k)]+"\n"+M+"\n"+"".join(["    \""+x+"\",\n" for x in T])+"    NULL\n"+s[j:];io.open(P,"w").write(t) if t!=s else None;print("grappa","ok" if t!=s else "noop")'
+          python3 -c 'import io,os;P="natsuk1/Helpers/AirliftBridge.swift";s=io.open(P).read() if os.path.exists(P) else "";k="        guard UserDefaults.standard.bool(forKey: \"allow_device_respring\") else {";i=s.find(k);j=s.find("        }"+chr(10),i) if i>=0 else -1;t=(s[:i]+s[j+10:]) if i>=0 and j>=0 else s;io.open(P,"w").write(t) if t!=s else None;print("airliftbridge","ok" if t!=s else "noop")'
+
+      - name: Patch SettingsView
+        run: |
+          python3 -c 'import io,os;P="natsuk1/Views/SettingsView.swift";s=io.open(P).read() if os.path.exists(P) else "";a="    @AppStorage(\"allow_device_respring\") private var r: Bool = false"+chr(10);b="                    Toggle(\"Allow device respring\", isOn: $r)"+chr(10);t=s.replace(a,"",1).replace(b,"",1);io.open(P,"w").write(t) if t!=s else None;print("settings","ok" if t!=s else "noop")'
+
+      - name: Patch necp.c
+        run: |
+          python3 -c 'import io,os;P="natsuk1/Exploit/necp.c";s=io.open(P).read() if os.path.exists(P) else "";a="        size_t sz = test_sizes[i] & 0xFFFF;"+chr(10);b="        size_t sz = (size_t)test_sizes[i];"+chr(10);t=s.replace(a,b,1);io.open(P,"w").write(t) if t!=s else None;print("necp","ok" if t!=s else "noop")'
+
+      - name: Patch OffsetsStore
+        run: |
+          python3 -c 'import io,os;P="natsuk1/Helpers/OffsetsStore.swift";s=io.open(P).read() if os.path.exists(P) else "";a="return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: \"Offsets\")"+chr(10);b=a+"                ?? Bundle.main.url(forResource: name, withExtension: ext)"+chr(10);t=s.replace(a,b,1) if "?? Bundle.main.url(forResource: name" not in s else s;io.open(P,"w").write(t) if t!=s else None;print("offsets","ok" if t!=s else "noop")'
+
+      - name: Patch GrappaHelper
+        run: |
+          python3 -c 'import io,os;P="natsuk1/Exploit/GrappaHelper.m";s=io.open(P).read() if os.path.exists(P) else "";T=["01012ba6a01f2ccf66a02613d5b72e0bc916004058a001a6874d18b5bd7b3395e25d79fa3ffcc67e718106d485c51540b828d1620e9f94f582d3bcc6f97e9088c923095ad8d36ab568fb45df61e286d25354b04c","0101efa33b1586f410087474b2ccaf8cdb4d0040e5aee6017fdcf774a51c1980b4238076e86218af5a5f169470df90b73f4fc893a22da94fb9745c10f23df0620cfe3f19be3f2ab37d2f7590d8597ab51ebcced0","0101aab479a6d8226f3e1d7a57a2501337e50240e54444b5f1d04101205a7a2f3d148d18440e2edef03d37fcdc7423c0bb441b4c4a355169d511d67ae3466fdf8865e69a8aed45867801ea8e1bbb48889ba0b834","010194ab2ece86e05d7313e4075a947ab3be0240c9237c46b3c519d2ec297304413dab741827016e5eb9af8792bc2b3d6f12be25397931f41bffb887d042b97057c03ed8d72a3acb72378d30f7a073e3d7590f62","01018cec0ea2c25446c90133d435eaafb0150240c6c28dd42f62f8907133c462fc8b6def05e543ab2d59952f6eb3b38e382d492cd2881beceaeaea67fc1331f77fca50fde6bed35622009670e6d6e4a36b09c088","0101243b2587f14dd812751c6710730f46d50440fe2e5e9ccfe70200487e14c131412381fd7c214241b182ca04ebe0c1f3cdd54ac17eef31705c06289e02f672fa8c0d9dff167f1c925df876d5814d3265f55b06","01016f8908f8f972bdc8fe99002f7648e86c024011a469c4320bb7e44137756dde3ecfbff08a55081e532c12a06101c6ae5283a014512d977eafad06c34b1f116422f6bf72ef56f8d734d37db287b170be7a3a82","01015c5fcc103d0460f5bbfd48c387806e8e0340e3323ed780fbeccc2908c059d9a81e75976bf058b411f62a9a6e1df7ba307f69226942373f484690799b230bc60e99036f40eae25229aff6bb31ab74820e68a9","0101f3f542aaa17252a8f81b3dc5b007adc304408d2496cee3af54113ffa9fba392b4143d4c38e4d79680e8e9feb554e450c1f89220c02375a9063b3a62bf61f62bd073991ebf215c6c2e28938d1aa53ed580c02","0101fc26f7e89d1635d86b5c886df69f526a0040038b6c33049f6bd5cc526b4ee7ccce614135d2c73f8326d9af6d28399a231510917493d4fdaa395b4d1c1e1b09bdf3fe6fb7e16ad6d5f5cc18b93730874e6f4e"];k="kAuthenticGrappaTokens[] = {";i=s.find(k);j=s.find("};",i) if i>=0 else -1;body=s[i+len(k):j] if i>=0 and j>=0 else "";M="// nk-grappa-restored";t=s if (M in s) or (i<0) or (j<0) or ("NULL" not in body and body.strip()) else s[:i+len(k)]+chr(10)+M+chr(10)+"".join(["    \""+x+"\","+chr(10) for x in T])+"    NULL"+chr(10)+s[j:];io.open(P,"w").write(t) if t!=s else None;print("grappa","ok" if t!=s else "noop")'
 
       - name: Entitlements
         run: |
-          printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' '<plist version="1.0">' '<dict>' '</dict>' '</plist>' > natsuk1/Resources/natsuk1.entitlements
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+            '<plist version="1.0">' \
+            '<dict>' \
+            '</dict>' \
+            '</plist>' \
+            > natsuk1/Resources/natsuk1.entitlements
 
       - name: Update README
         run: |
-          printf '%s\n' '# natsuk1' '' 'iOS 27 kernel research toolkit.' '' 'AI researchers read ai-hints.md and ai-think.md before answering anything.' > README.md
+          printf '%s\n' \
+            '# natsuk1' \
+            '' \
+            'iOS 27 kernel research toolkit.' \
+            '' \
+            'AI researchers read ai-hints.md and ai-think.md before answering anything.' \
+            > README.md
           wc -c README.md
-
-      - name: Install tools
-        run: |
-          set -e
-          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
-          command -v ldid >/dev/null 2>&1 || brew install ldid
 
       - name: Generate project
         run: xcodegen generate
@@ -595,7 +731,27 @@ jobs:
       - name: Build
         run: |
           set -euo pipefail
-          xcodebuild -project natsuk1.xcodeproj -scheme natsuk1 -configuration Release -sdk iphoneos -destination "generic/platform=iOS" -derivedDataPath build -parallelizeTargets -jobs "$(sysctl -n hw.ncpu)" CODE_SIGNING_ALLOWED=NO SWIFT_STRICT_CONCURRENCY=minimal SWIFT_APPROACHABLE_CONCURRENCY=NO SWIFT_OPTIMIZATION_LEVEL=-Osize GCC_OPTIMIZATION_LEVEL=s DEAD_CODE_STRIPPING=YES COPY_PHASE_STRIP=YES STRIP_INSTALLED_PRODUCT=YES STRIP_STYLE=all OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" -UseModernBuildSystem=YES build -quiet
+          xcodebuild \
+            -project natsuk1.xcodeproj \
+            -scheme natsuk1 \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            -parallelizeTargets \
+            -jobs "$(sysctl -n hw.ncpu)" \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_STRICT_CONCURRENCY=minimal \
+            SWIFT_APPROACHABLE_CONCURRENCY=NO \
+            SWIFT_OPTIMIZATION_LEVEL=-Osize \
+            GCC_OPTIMIZATION_LEVEL=s \
+            DEAD_CODE_STRIPPING=YES \
+            COPY_PHASE_STRIP=YES \
+            STRIP_INSTALLED_PRODUCT=YES \
+            STRIP_STYLE=all \
+            OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
+            -UseModernBuildSystem=YES \
+            build -quiet
 
       - name: Package
         env:
@@ -624,7 +780,7 @@ jobs:
           fi
           R="${{ github.repository }}"
           U="https://github.com/$R/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v14.0 ($((SIZE/1024)) KB)
+          NOTES="natsuk1 v20.0 ($((SIZE/1024)) KB)
 
           Install:
           - IPA: $U
@@ -635,7 +791,12 @@ jobs:
           - ESign: esign://install?url=$U
 
           $(git log -5 --pretty=format:'- %h %s')"
-          gh release create development natsuk1.ipa --target "${{ github.sha }}" --title "Development" --prerelease --latest=false --notes "$NOTES"
+          gh release create development natsuk1.ipa \
+            --target "${{ github.sha }}" \
+            --title "Development" \
+            --prerelease \
+            --latest=false \
+            --notes "$NOTES"
 
       - name: Commit
         run: |
@@ -647,5 +808,5 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          git commit -m "v14.0: DeepSeek guide + verified offsets + sysent fix [skip ci]"
+          git commit -m "v20.0: repo cleanup + ai-hints + ai-think + verified offsets [skip ci]"
           git push
