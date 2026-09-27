@@ -40,7 +40,8 @@ struct PathAccessView: View {
                     Spacer()
                     Text("\(results.filter { $0.exists }.count)/\(results.count)")
                         .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.green)
+                        .shadow(color: Color.green.opacity(0.45), radius: 3)
                 }
                 HStack {
                     Text("Readable")
@@ -48,7 +49,7 @@ struct PathAccessView: View {
                     Text("\(results.filter { $0.readable }.count)")
                         .font(.system(.body, design: .monospaced))
                         .foregroundStyle(.green)
-                        .shadow(color: Color.green.opacity(0.35), radius: 2)
+                        .shadow(color: Color.green.opacity(0.45), radius: 3)
                 }
                 HStack {
                     Text("Writable")
@@ -56,7 +57,7 @@ struct PathAccessView: View {
                     Text("\(results.filter { $0.writable }.count)")
                         .font(.system(.body, design: .monospaced))
                         .foregroundStyle(.orange)
-                        .shadow(color: Color.orange.opacity(0.35), radius: 2)
+                        .shadow(color: Color.orange.opacity(0.45), radius: 3)
                 }
                 Button { scan() } label: {
                     HStack {
@@ -97,7 +98,7 @@ struct PathAccessView: View {
             .padding(.vertical, 1)
             .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
             .foregroundStyle(color)
-            .shadow(color: color.opacity(0.25), radius: 1)
+            .shadow(color: color.opacity(0.45), radius: 3)
     }
 
     private func scan() {

@@ -34,7 +34,7 @@ struct CarrierLabView: View {
                     Text(clState.airliftOK ? "Connected" : "Not ready")
                         .font(.subheadline)
                         .foregroundStyle(clState.airliftOK ? .green : .orange)
-                        .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.35), radius: 2)
+                        .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.45), radius: 3)
                     if !clState.airliftOK {
                         Text(clState.airliftMessage)
                             .font(.footnote)
@@ -71,7 +71,7 @@ struct CarrierLabView: View {
                 Spacer()
                 Text(clState.resourcesOK ? "Bundled" : "Missing")
                     .foregroundStyle(clState.resourcesOK ? .green : .red)
-                    .shadow(color: (clState.resourcesOK ? Color.green : Color.red).opacity(0.35), radius: 2)
+                    .shadow(color: (clState.resourcesOK ? Color.green : Color.red).opacity(0.45), radius: 3)
             }
         } header: { Label("Resources", systemImage: "shippingbox") }
     }
@@ -84,7 +84,7 @@ struct CarrierLabView: View {
                 Text(statusText)
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(statusColor)
-                    .shadow(color: statusColor.opacity(0.35), radius: 2)
+                    .shadow(color: statusColor.opacity(0.45), radius: 3)
             }
             if let s = clState.session {
                 HStack {
@@ -105,11 +105,16 @@ struct CarrierLabView: View {
 
     private var actionsSection: some View {
         Section {
-            Button { runCheck() } label: { Text("Check") }.disabled(clState.busy)
-            Button { runInstall() } label: { Text("Install") }.disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
-            Button { runReload() } label: { Text("Reload") }.disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
-            Button { runFinish() } label: { Text("Finish") }.disabled(clState.busy)
-            Button(role: .destructive) { runReset() } label: { Text("Reset") }.disabled(clState.busy)
+            Button { runCheck() } label: { Text("Check") }
+                .disabled(clState.busy)
+            Button { runInstall() } label: { Text("Install") }
+                .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+            Button { runReload() } label: { Text("Reload") }
+                .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+            Button { runFinish() } label: { Text("Finish") }
+                .disabled(clState.busy)
+            Button(role: .destructive) { runReset() } label: { Text("Reset") }
+                .disabled(clState.busy)
         } header: { Label("Actions", systemImage: "wrench") }
     }
 

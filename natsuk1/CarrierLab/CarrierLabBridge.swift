@@ -28,7 +28,6 @@ final class CarrierLabBridge: @unchecked Sendable {
 
     private let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
     private let bundleLinks = "/var/mobile/Library/Carrier Bundles"
-    private let expectedKeys = ["public_key", "private_key", "identifier", "alt_irk"]
 
     func carrierRootPath() -> String { carrierRoot }
     func bundleLinksPath() -> String { bundleLinks }
@@ -37,10 +36,16 @@ final class CarrierLabBridge: @unchecked Sendable {
         let fm = FileManager.default
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
-        let direct = docs.appendingPathComponent("natsuk1_pairing.plist")
-        if fm.fileExists(atPath: direct.path) {
-            let size = (try? fm.attributesOfItem(atPath: direct.path)[.size] as? Int) ?? 0
-            if size > 0 { return direct.path }
+        let candidates = [
+            docs.appendingPathComponent("natsuk1_pairing.plist"),
+            docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing"),
+            docs.appendingPathComponent("pairingFile.plist"),
+        ]
+        for url in candidates {
+            if fm.fileExists(atPath: url.path) {
+                let size = (try? fm.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+                if size > 0 { return url.path }
+            }
         }
 
         let controller = PairingController.pairingFilePath()
@@ -53,7 +58,7 @@ final class CarrierLabBridge: @unchecked Sendable {
             for f in e where f.hasSuffix(".plist") || f.hasSuffix(".mobilepairing") || f.hasSuffix(".mobilepair") {
                 let p = docs.appendingPathComponent(f).path
                 let size = (try? fm.attributesOfItem(atPath: p)[.size] as? Int) ?? 0
-                if size > 200 { return p }
+                if size > 100 { return p }
             }
         }
 
@@ -76,7 +81,7 @@ final class CarrierLabBridge: @unchecked Sendable {
         guard fm.fileExists(atPath: path) else { return (false, "missing") }
         let attrs = try? fm.attributesOfItem(atPath: path)
         let size = (attrs?[.size] as? Int) ?? 0
-        if size < 100 { return (false, "Pairing file too small (\(size) bytes).") }
+        if size < 50 { return (false, "Pairing file too small (\(size) bytes).") }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
             return (false, "Pairing file unreadable.")
         }
@@ -84,12 +89,8 @@ final class CarrierLabBridge: @unchecked Sendable {
               let dict = obj as? [String: Any] else {
             return (false, "Pairing file not a plist (\(size) bytes).")
         }
-        var present: [String] = []
-        for k in expectedKeys where dict[k] != nil { present.append(k) }
-        if present.count < 3 {
-            return (false, "Pairing incomplete: \(present.count) of 4 keys.")
-        }
-        return (true, "Pairing ok (\(size) bytes)")
+        if dict.isEmpty { return (false, "Pairing plist empty.") }
+        return (true, "Pairing ok (\(size) bytes, \(dict.count) keys)")
     }
 
     func probe() -> ProbeResult {
@@ -99,33 +100,24 @@ final class CarrierLabBridge: @unchecked Sendable {
         }
         let (pairOk, pairMsg) = validatePairingFile(pairing)
         if !pairOk { return ProbeResult(state: .pairingInvalid, detail: pairMsg) }
-        let tmp = NSTemporaryDirectory() + "/carrierlab-probe-\(UUID().uuidString).txt"
-        try? "probe".data(using: .utf8)?.write(to: URL(fileURLWithPath: tmp))
-        var outJson: UnsafeMutablePointer<CChar>? = nil
-        var outErr: UnsafeMutablePointer<CChar>? = nil
-        var rc: Int32 = -1
-        tmp.withCString { sf in
-            "/var/mobile/Library/Carrier Bundles/.carrierlab-probe".withCString { tf in
-                rc = al_exploit_run(sf, tf, nil, nil, &outJson, &outErr)
-            }
-        }
-        let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
-        if let p = outJson { al_string_free(p) }
-        if let p = outErr { al_string_free(p) }
-        try? FileManager.default.removeItem(atPath: tmp)
-        if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
-        return ProbeResult(state: .ok, detail: "ready")
+        return ProbeResult(state: .ok, detail: pairMsg)
     }
 
     func writeFile(source: String, target: String) -> ProbeResult {
         let pre = probe()
         guard pre.ok else { return pre }
+        let pairingPath = CarrierLabBridge.shared.probePairingPath()
+        guard !pairingPath.isEmpty else {
+            return ProbeResult(state: .noPairing, detail: "no pairing path")
+        }
         var outJson: UnsafeMutablePointer<CChar>? = nil
         var outErr: UnsafeMutablePointer<CChar>? = nil
         var rc: Int32 = -1
-        source.withCString { sc in
-            target.withCString { tc in
-                rc = al_exploit_run(sc, tc, nil, nil, &outJson, &outErr)
+        pairingPath.withCString { pc in
+            source.withCString { sc in
+                target.withCString { tc in
+                    rc = al_exploit_run(pc, tc, nil, nil, &outJson, &outErr)
+                }
             }
         }
         let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
@@ -133,5 +125,9 @@ final class CarrierLabBridge: @unchecked Sendable {
         if let p = outErr { al_string_free(p) }
         if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
         return ProbeResult(state: .ok, detail: "ok")
+    }
+
+    private func probePairingPath() -> String {
+        return findPairingFile() ?? ""
     }
 }

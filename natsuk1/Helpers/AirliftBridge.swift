@@ -96,8 +96,14 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
     func deletePairing() {
         let fm = FileManager.default
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let canonicalURL = docs.appendingPathComponent("natsuk1_pairing.plist")
-        if fm.fileExists(atPath: canonicalURL.path) { try? fm.removeItem(at: canonicalURL) }
+        let candidates = [
+            docs.appendingPathComponent("natsuk1_pairing.plist"),
+            docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing"),
+            docs.appendingPathComponent("pairingFile.plist"),
+        ]
+        for url in candidates {
+            if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
+        }
         if let custom = PairingController.customPairingFilePath, fm.fileExists(atPath: custom) {
             try? fm.removeItem(atPath: custom)
         }
@@ -109,6 +115,7 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
             }
         }
         UserDefaults.standard.removeObject(forKey: "natsuk1PairingHostAltIRK")
+        UserDefaults.standard.removeObject(forKey: "natsuk1PairingPath")
         setState(.idle)
         setStatus("")
         setPIN(nil)
