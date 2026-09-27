@@ -46,101 +46,33 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          python3 - <<'PY'
-          import re
-
-          def drop_fn(src, sig):
-              i = src.find(sig)
-              if i < 0:
-                  return src
-              j = src.find("{", i)
-              depth, k = 0, j
-              while k < len(src):
-                  if src[k] == "{":
-                      depth += 1
-                  elif src[k] == "}":
-                      depth -= 1
-                      if depth == 0:
-                          break
-                  k += 1
-              end = k + 1
-              while end < len(src) and src[end] == "\n":
-                  end += 1
-              start = i
-              while start > 0 and src[start-1] == "\n":
-                  start -= 1
-              return src[:start] + src[end:]
-
-          def edit(path, sigs=(), reps=()):
-              try:
-                  s = open(path).read()
-              except FileNotFoundError:
-                  return
-              orig = s
-              for sig in sigs:
-                  s = drop_fn(s, sig)
-              for old, new in reps:
-                  s = s.replace(old, new)
-              if s != orig:
-                  open(path, "w").write(s)
-                  print("edited " + path)
-
-          edit("natsuk1/Helpers/NetworkStatus.swift",
-               sigs=["static func summarize(deviceIP:",
-                     "static func tunnelHostCandidates(",
-                     "static func host(_ value:",
-                     "static func isOwnAddress(_ deviceIP:"])
-
-          p = "natsuk1/Helpers/NetworkStatus.swift"
-          try:
-              s = open(p).read()
-          except FileNotFoundError:
-              s = None
-          if s is not None:
-              orig = s
-              s = re.sub(
-                  r",\s*\n?\s*netmask:\s*cur\.pointee\.ifa_netmask\.flatMap\(numericHost\)\s*\)",
-                  ")", s)
-              s = re.sub(r"\n\s*let netmask:\s*String\?", "", s)
-              if s != orig:
-                  open(p, "w").write(s)
-                  print("edited " + p)
-
-          edit("natsuk1/Helpers/DeviceName.swift",
-               sigs=["static func full()"])
-
-          edit("natsuk1/Helpers/OffsetsStore.swift",
-               sigs=["nonisolated static var activeVersion"])
-
-          edit("natsuk1/Views/DeviceInfoView.swift",
-               sigs=["private func machineID()"],
-               reps=[('row("Identifier", machineID())',
-                      'row("Identifier", DeviceName.machineID())')])
-
-          edit("natsuk1/Views/AirliftView.swift",
-               reps=[("if let pin = airlift.pairPIN {",
-                      "if airlift.pairPIN != nil {")])
-          PY
-
-          oxipng -o max --strip safe natsuk1/Resources/Assets.xcassets/AppIcon.appiconset/1024x1024.png || true
-
-          if ! grep -q '.swiftpm/' .gitignore; then
-            printf '\n# Swift\n*.xcworkspace\n.swiftpm/\n.build/\nPackage.resolved\n\n# Debug\n*.dSYM\n' >> .gitignore
+          NS=natsuk1/Helpers/NetworkStatus.swift
+          if [ -f "$NS" ]; then
+            perl -0777 -i -pe 's/Interface\(name: name, ipv4: ipv4,\s*\n\s*netmask:[^\n]*?\)\)\)/Interface(name: name, ipv4: ipv4)/g' "$NS"
+            perl -i -ne 'print unless /^\s+let netmask:\s*String\?$/' "$NS"
+            perl -0777 -i -pe 's/\n\s*static func summarize\(deviceIP:[^\n]*\{.*?\n\s*\}\n/\n/gs' "$NS" || true
+            perl -0777 -i -pe 's/\n\s*static func tunnelHostCandidates\([^\n]*\{.*?\n\s*\}\n/\n/gs' "$NS" || true
+            perl -0777 -i -pe 's/\n\s*static func host\(_ value:[^\n]*\{.*?\n\s*\}\n/\n/gs' "$NS" || true
+            perl -0777 -i -pe 's/\n\s*static func isOwnAddress\(_ deviceIP:[^\n]*\{.*?\n\s*\}\n/\n/gs' "$NS" || true
           fi
+
+          perl -0777 -i -pe 's/\n\s*static func full\(\)[^\n]*\{.*?\n\s*\}\n/\n/gs' natsuk1/Helpers/DeviceName.swift 2>/dev/null || true
+          perl -0777 -i -pe 's/\n\s*nonisolated static var activeVersion:[^\n]*\{.*?\n\s*\}\n/\n/gs' natsuk1/Helpers/OffsetsStore.swift 2>/dev/null || true
+          perl -i -pe 's/row\("Identifier", machineID\(\)\)/row("Identifier", DeviceName.machineID())/' natsuk1/Views/DeviceInfoView.swift 2>/dev/null || true
+          perl -i -pe 's/if let pin = airlift\.pairPIN \{/if airlift.pairPIN != nil {/' natsuk1/Views/AirliftView.swift 2>/dev/null || true
+
+          oxipng -o max --strip safe natsuk1/Resources/Assets.xcassets/AppIcon.appiconset/1024x1024.png 2>/dev/null || true
+
+          grep -q '.swiftpm/' .gitignore 2>/dev/null || printf '\n# Swift\n*.xcworkspace\n.swiftpm/\n.build/\nPackage.resolved\n\n# Debug\n*.dSYM\n' >> .gitignore
 
           git add -A
-          if git diff --cached --quiet; then
-            echo "no changes"
-          else
-            git commit -m "chore: fix NetworkStatus call site, drop dead code [skip ci]"
-            git push
-          fi
+          git diff --cached --quiet && echo "no changes" && exit 0
+          git commit -m "fix: NetworkStatus call site [skip ci]"
+          git push
 
       - name: Generate project
         run: |
-          if [ ! -d natsuk1.xcodeproj ]; then
-            xcodegen generate
-          fi
+          [ -d natsuk1.xcodeproj ] || xcodegen generate
 
       - name: Build
         run: |
