@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v28-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v28-
+          key: nk-v31-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v31-
 
       - name: Install tools
         run: |
@@ -425,8 +425,8 @@ jobs:
                   let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
                   let candidates = [
-                      docs.appendingPathComponent("natsuk1_pairing.plist"),
                       docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing"),
+                      docs.appendingPathComponent("natsuk1_pairing.plist"),
                       docs.appendingPathComponent("pairingFile.plist"),
                   ]
                   for url in candidates {
@@ -1457,15 +1457,18 @@ jobs:
 
           ## PAIRING FILE FORMAT
 
-          AirLift pairing plist keys:
+          AirLift pairing plistob keys:
           - public_key (data)
           - private_key (data)
           - identifier (string)
           - alt_irk (data)
           Validation: at least 3 of 4 keys present. Never check for UDID/HostCertificate/RootCertificate.
           Location: Documents/natsuk1_pairing.plist OR nested Documents/Data/Application/<UUID>/Documents/.
-          FFI might expect .mobiledevicepairing extension. Search all candidates.
+          FFI might expect .miledevicepairing extension. Search all candidates.
           Fallback: any .plist / .mobilepairing / .mobilepair file > 100 bytes in Documents.
+          AirliftFFI expects classic lockdown format with DeviceCertificate. RPPairing file alone is not enough.
+          SideInstaller merges both RPPairing and lockdown records into one plist.
+          Until merged file is generated, install will fail with TunnelFailureRsdUnreachable.
 
           ## CARRIERLAB
 
@@ -1477,8 +1480,6 @@ jobs:
           - reset clears session, does not revert the phone.
           - view auto-refreshes every 5 s silent, no log spam on silent refresh.
           - probe() checks only VPN and pairing file validity. Never call al_exploit_run from probe.
-            FFI expects device at 10.7.0.3, LocalDevVPN gives 10.7.0.1. Direct FFI call always times out.
-            Actual writes still use al_exploit_run and may fail if the FFI cannot reach the device.
 
           ## UI STYLE
 
@@ -1501,10 +1502,19 @@ jobs:
           Cause: @Published setter called on non-main thread.
           Fix: all @Published mutations via DispatchQueue.main.async unconditionally.
 
-          ### "raw RPPairing timed out after 6s"
-          Cause: AirliftFFI connects to 10.7.0.3:49152 but LocalDevVPN gives device IP 10.7.0.1.
-          Fix: probe() no longer calls al_exploit_run. Only checks VPN and pairing file.
-          The actual write still calls al_exploit_run and will fail if the FFI cannot reach the device.
+          ### "TunnelFailureRsdUnreachable" or "raw RPPairing timed out"
+          Cause: AirliftFFI expects classic lockdown pairing file with DeviceCertificate.
+          RPPairing file from PairingController only contains public_key, private_key, identifier, alt_irk.
+          Fix: SideInstaller merges both records into one plist. Need to generate merged file.
+          Until merged file exists, Install/Reload cannot work. Probe still works for VPN and file check.
+
+          ### extra argument 'netmask' in call
+          Cause: sed/perl patch removed struct field but not call site.
+          Fix: rewrite the file in full via cat heredoc, never patch partially.
+
+          ### cannot find 'CarrierLabView' in scope
+          Cause: project.yml lacked natsuk1/CarrierLab source path.
+          Fix: project.yml always written in full via cat heredoc, includes all paths.
           HINTS_EOF
 
       - name: Commit
@@ -1516,7 +1526,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: probe without FFI call, device IP mismatch, glow everywhere [skip ci]"
+            git commit -m "fix: pairing file format, remove dead code, apple-style glow [skip ci]"
             git push
           fi
 
