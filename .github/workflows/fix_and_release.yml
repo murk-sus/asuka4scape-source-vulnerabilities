@@ -30,37 +30,17 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-            tools
-          key: nk-v3-${{ hashFiles('project.yml') }}
+          key: nk-v4-${{ hashFiles('project.yml') }}
           restore-keys: |
-            nk-v3-
+            nk-v4-
 
       - name: Install tools
         run: |
-          set -euo pipefail
-          mkdir -p tools
-          cd tools
-          if [ ! -x xcodegen ]; then
-            curl -fsSL -o xcodegen.zip https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
-            unzip -qq -o xcodegen.zip
-            rm -f xcodegen.zip
-          fi
-          if [ ! -x ldid ]; then
-            curl -fsSL -o ldid https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macosx_arm64
-            chmod +x ldid
-          fi
-          if [ ! -x swiftlint ]; then
-            curl -fsSL -o swiftlint.zip https://github.com/realm/SwiftLint/releases/download/0.62.2/portable_swiftlint.zip
-            unzip -qq -o swiftlint.zip
-            rm -f swiftlint.zip
-          fi
-          if [ ! -x periphery ]; then
-            curl -fsSL -o periphery.zip https://github.com/peripheryapp/periphery/releases/download/3.8.0/periphery.zip
-            unzip -qq -o periphery.zip
-            rm -f periphery.zip
-          fi
-          cd ..
-          echo "$PWD/tools" >> $GITHUB_PATH
+          set -e
+          command -v xcodegen  >/dev/null 2>&1 || brew install xcodegen
+          command -v ldid      >/dev/null 2>&1 || brew install ldid
+          command -v swiftlint >/dev/null 2>&1 || brew install swiftlint
+          command -v periphery >/dev/null 2>&1 || brew install periphery
 
       - name: Cleanup
         run: |
@@ -104,11 +84,8 @@ jobs:
 
           AV=natsuk1/Views/AirliftView.swift
           if [ -f "$AV" ]; then
-            if grep -q 'PIN \\(pin)' "$AV"; then
-              sed -i '' 's/if airlift\.pairPIN != nil {/if let pin = airlift.pairPIN {/' "$AV"
-            else
-              sed -i '' 's/if let pin = airlift\.pairPIN {/if airlift.pairPIN != nil {/' "$AV"
-            fi
+            sed -i '' 's/if let pin = airlift\.pairPIN {/if airlift.pairPIN != nil {/' "$AV"
+            sed -i '' 's/Text("PIN \\(pin)")/Text("PIN \\(airlift.pairPIN ?? "")")/' "$AV"
           fi
 
           sed -i '' '/^natsuk1-app\.tar\.gz$/d; /^natsuk1\.ipa$/d; /^reference\/$/d' .gitignore 2>/dev/null || true
@@ -178,7 +155,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "chore: tools, lint, docs, tests [skip ci]"
+            git commit -m "chore: brew tools, fix pin, drop necp [skip ci]"
             git push
           fi
 
