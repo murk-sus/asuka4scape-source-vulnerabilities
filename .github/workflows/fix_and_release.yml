@@ -132,8 +132,8 @@ jobs:
                   SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h
                   OTHER_SWIFT_FLAGS: "$(inherited) -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks"
                   OTHER_CFLAGS: -fno-autolink -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
-                  OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz -lc++ -ObjC
-                  HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/Exploit/Core $(SRCROOT)/natsuk1/Exploit/Airlift $(SRCROOT)/natsuk1/Support"
+                  OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a -lc++ -ObjC
+                  HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/Exploit/Core $(SRCROOT)/natsuk1/Exploit/Airlift $(SRCROOT)/natsuk1/Support $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/Headers"
                   TARGETED_DEVICE_FAMILY: "1"
                   GENERATE_INFOPLIST_FILE: NO
                   ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -152,6 +152,7 @@ jobs:
           #include <stdint.h>
           #include "nk_api.h"
           #include "GrappaHelper.h"
+          #include "airlift.h"
           #include "idevice_shim.h"
 
           #endif
@@ -1825,6 +1826,31 @@ jobs:
           }
           CLVIEW_EOF
 
+      - name: Fetch carrier assets
+        run: |
+          set -euo pipefail
+          ROOT=natsuk1/Resources/CarrierAssets
+          mkdir -p "$ROOT/CarrierLab.bundle/signatures" "$ROOT/Docomo_jp.bundle/signatures"
+          BASE="https://raw.githubusercontent.com/VCTGomes/ios-carrier-bundle/cecd5594349df0bf51723a247028bad5f40a7965/carrier-bundles/27.0-24A437.V53_V54_V57OS"
+          for f in \
+            "CarrierLab.bundle/Info.plist" \
+            "CarrierLab.bundle/carrier.plist" \
+            "CarrierLab.bundle/overrides_V53_V54_V57.der.pri" \
+            "CarrierLab.bundle/overrides_V53_V54_V57.plist" \
+            "CarrierLab.bundle/signatures/common.plist" \
+            "CarrierLab.bundle/signatures/overrides_V53_V54_V57.plist" \
+            "Docomo_jp.bundle/Info.plist" \
+            "Docomo_jp.bundle/carrier.plist" \
+            "Docomo_jp.bundle/overrides_V53_V54_V57.der.pri" \
+            "Docomo_jp.bundle/overrides_V53_V54_V57.plist" \
+            "Docomo_jp.bundle/profile.mobileconfig" \
+            "Docomo_jp.bundle/signatures/common.plist" \
+            "Docomo_jp.bundle/signatures/overrides_V53_V54_V57.plist" \
+            ; do
+            curl -fsSL "$BASE/$f" -o "$ROOT/$f"
+            test -s "$ROOT/$f"
+          done
+
       - name: Verify sources
         run: |
           set -euo pipefail
@@ -1845,6 +1871,7 @@ jobs:
           grep -q 'SRCROOT)/natsuk1/Support' project.yml
           grep -q 'natsuk1/CarrierLab' project.yml
           grep -q 'lc++' project.yml
+          grep -q 'libairlift_ffi.a' project.yml
           grep -q 'idevice_shim.h' natsuk1/Support/bridging.h
           grep -q 'NATSUK1_IDEVICE_SHIM_H' natsuk1/Support/idevice_shim.h
           grep -q 'lockdownd_pair' natsuk1/Support/idevice_shim.h
@@ -1883,6 +1910,7 @@ jobs:
           ! grep -q 'lockdownd_pair_record_free' natsuk1/Helpers/PairingGenerator.swift
           ! grep -q 'Task.detached' natsuk1/CarrierLab/CarrierLabView.swift
           ! grep -q '_silgen_name' natsuk1/Helpers/LockdownPair.swift
+          ! grep -q 'natsuk1/External' project.yml
 
       - name: Validate project.yml
         run: |
