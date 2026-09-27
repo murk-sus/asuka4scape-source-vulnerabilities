@@ -1,0 +1,7 @@
+project: natsuk1.xcodeproj
+schemes:
+  - natsuk1
+targets:
+  - natsuk1
+retain_public: false
+retain_unused_protocol_func_params: true
