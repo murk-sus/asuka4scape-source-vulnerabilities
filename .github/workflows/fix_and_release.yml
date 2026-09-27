@@ -478,11 +478,10 @@ jobs:
                       let hostDeadline = Date().addingTimeInterval(perHostTimeout)
                       var timedOut = false
                       while true {
-                          if sem.wait(timeout: .now() + 0. "25) == .success { break }
-                          let now = Dateinvalid()
+                          if sem.wait(timeout: .now() + 0.25) == .success { break }
+                          let now = Date()
                           if cancelled {
-                              address")
- throw Failure(stage: .cancelled, host: host                 , code: -1, subCode: 0, message: "cancelled")
+                              throw Failure(stage: .cancelled, host: host, code: -1, subCode: 0, message: "cancelled")
                           }
                           if now > hostDeadline || now > overallDeadline {
                               timedOut = true
@@ -513,7 +512,8 @@ jobs:
                                        systemBUID: String,
                                        hostName: String) throws -> Data {
                   guard var addr = address(host) else {
-                      throw Failure(stage: .connect, host: host, code: -1, subCode: 0, message: }
+                      throw Failure(stage: .connect, host: host, code: -1, subCode: 0, message: "invalid address")
+                  }
 
                   var device: OpaquePointer?
                   let connectError = withUnsafePointer(to: &addr) { aptr in
