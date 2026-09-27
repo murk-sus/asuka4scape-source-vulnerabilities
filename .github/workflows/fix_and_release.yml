@@ -30,39 +30,14 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v41-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v41-
+          key: nk-v44-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v44-
 
       - name: Install tools
         run: |
           set -e
           command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
-          command -v ldid     >/dev/null 2>&1 || brew install ldid
-
-      - name: Fetch carrier assets
-        run: |
-          set -euo pipefail
-          ROOT=natsuk1/Resources/CarrierAssets
-          rm -rf "$ROOT"
-          mkdir -p "$ROOT/CarrierLab.bundle/signatures" "$ROOT/Docomo_jp.bundle/signatures"
-          BASE="https://raw.githubusercontent.com/VCTGomes/ios-carrier-bundle/cecd5594349df0bf51723a247028bad5f40a7965/carrier-bundles/27.0-24A437.V53_V54_V57OS"
-          for f in \
-            "CarrierLab.bundle/Info.plist" \
-            "CarrierLab.bundle/carrier.plist" \
-            "CarrierLab.bundle/overrides_V53_V54_V57.der.pri" \
-            "CarrierLab.bundle/overrides_V53_V54_V57.plist" \
-            "CarrierLab.bundle/signatures/common.plist" \
-            "CarrierLab.bundle/signatures/overrides_V53_V54_V57.plist" \
-            "Docomo_jp.bundle/Info.plist" \
-            "Docomo_jp.bundle/carrier.plist" \
-            "Docomo_jp.bundle/overrides_V53_V54_V57.der.pri" \
-            "Docomo_jp.bundle/overrides_V53_V54_V57.plist" \
-            "Docomo_jp.bundle/profile.mobileconfig" \
-            "Docomo_jp.bundle/signatures/common.plist" \
-            "Docomo_jp.bundle/signatures/overrides_V53_V54_V57.plist" ; do
-            curl -fsSL "$BASE/$f" -o "$ROOT/$f"
-            test -s "$ROOT/$f"
-          done
+          command -v ldid >/dev/null 2>&1 || brew install ldid
 
       - name: Write project.yml
         run: |
@@ -77,9 +52,11 @@ jobs:
             groupSortPosition: top
             projectFormat: xcode15_0
             generateEmptyDirectories: false
+
           configs:
             Debug: debug
             Release: release
+
           settings:
             base:
               SWIFT_VERSION: "5.0"
@@ -89,6 +66,7 @@ jobs:
               CLANG_MODULES_AUTOLINK: NO
               CLANG_ENABLE_OBJC_ARC: YES
               ENABLE_BITCODE: NO
+              CODE_SIGN_IDENTITY: ""
               CODE_SIGNING_REQUIRED: NO
               CODE_SIGNING_ALLOWED: NO
               ENABLE_USER_SCRIPT_SANDBOXING: NO
@@ -125,6 +103,7 @@ jobs:
                 STRIPFLAGS: "-S -x"
                 COPY_PHASE_STRIP: YES
                 LLVM_LTO: NO
+
           targets:
             natsuk1:
               type: application
@@ -160,7 +139,7 @@ jobs:
                   SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h
                   OTHER_SWIFT_FLAGS: "$(inherited) -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks"
                   OTHER_CFLAGS: -fno-autolink -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
-                  OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a -ObjC
+                  OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a -lc++ -ObjC
                   HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/Exploit/Core $(SRCROOT)/natsuk1/Exploit/Airlift $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/Headers"
                   TARGETED_DEVICE_FAMILY: "1"
                   GENERATE_INFOPLIST_FILE: NO
@@ -168,12 +147,11 @@ jobs:
                   ASSETCATALOG_COMPILER_OPTIMIZATION: space
                   ENABLE_ONLY_ACTIVE_RESOURCES: YES
           PROJECT_EOF
-
       - name: Write PairingGenerator
         run: |
           set -euo pipefail
           mkdir -p natsuk1/Helpers
-          cat > natsuk1/Helpers/PairingGenerator.swift <<'SWIFT_EOF'
+          cat > natsuk1/Helpers/PairingGenerator.swift <<'PAIRING_EOF'
           import Foundation
 
           final class PairingGenerator {
@@ -181,83 +159,311 @@ jobs:
               private init() {}
 
               enum GeneratorError: LocalizedError {
-                  case lockdownFailed(String)
-                  case mergeFailed(String)
+                  case missingFile(String)
+                  case notAPlist(String)
                   case writeFailed(String)
 
                   var errorDescription: String? {
                       switch self {
-                      case .lockdownFailed(let s): return "Lockdown handshake failed: \(s)"
-                      case .mergeFailed(let s): return "Merge failed: \(s)"
+                      case .missingFile(let s): return "Pairing file missing: \(s)"
+                      case .notAPlist(let s): return "Pairing file is not a plist: \(s)"
                       case .writeFailed(let s): return "Write failed: \(s)"
                       }
                   }
               }
 
-              func generateMergedPairing(rppPath: String, outputPath: String) throws {
-                  guard let rppData = try? Data(contentsOf: URL(fileURLWithPath: rppPath)) else {
-                      throw GeneratorError.lockdownFailed("cannot read RPP file")
+              @discardableResult
+              func generateMergedPairing(rppPath: String, outputPath: String) throws -> String {
+                  let fm = FileManager.default
+                  guard fm.fileExists(atPath: rppPath) else {
+                      throw GeneratorError.missingFile(rppPath)
                   }
-                  guard let rpp = try? PropertyListSerialization.propertyList(
-                      from: rppData, options: [], format: nil) as? [String: Any] else {
-                      throw GeneratorError.lockdownFailed("RPP is not a plist")
+                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: rppPath)), !data.isEmpty else {
+                      throw GeneratorError.missingFile("empty or unreadable: \(rppPath)")
                   }
-
-                  var lockdownClient: OpaquePointer? = nil
-                  let connectRC = lockdownd_connect_rsd(nil, &lockdownClient)
-                  guard connectRC == 0, let client = lockdownClient else {
-                      throw GeneratorError.lockdownFailed("lockdownd_connect_rsd rc=\(connectRC)")
+                  guard let plist = try? PropertyListSerialization.propertyList(
+                      from: data, options: [], format: nil) as? [String: Any] else {
+                      throw GeneratorError.notAPlist(rppPath)
                   }
-                  defer { lockdownd_client_free(client) }
-
-                  var lockdownRecord: OpaquePointer? = nil
-                  let pairRC = lockdownd_pair(client, nil, &lockdownRecord)
-                  guard pairRC == 0, let record = lockdownRecord else {
-                      throw GeneratorError.lockdownFailed("lockdownd_pair rc=\(pairRC)")
-                  }
-                  defer { lockdownd_pair_record_free(record) }
-
-                  var bytes: UnsafeMutablePointer<UInt8>? = nil
-                  var length: Int = 0
-                  let serRC = idevice_pairing_file_serialize(record, &bytes, &length)
-                  guard serRC == 0, let b = bytes else {
-                      throw GeneratorError.lockdownFailed("serialize rc=\(serRC)")
-                  }
-                  defer { free(bytes) }
-
-                  let lockdownData = Data(bytes: b, count: length)
-                  guard let lockdown = try? PropertyListSerialization.propertyList(
-                      from: lockdownData, options: [], format: nil) as? [String: Any] else {
-                      throw GeneratorError.lockdownFailed("lockdown record not a plist")
+                  guard !plist.isEmpty else {
+                      throw GeneratorError.notAPlist("empty plist: \(rppPath)")
                   }
 
-                  var merged = rpp
-                  for (k, v) in lockdown { merged[k] = v }
-                  if let udid = lockdown["UDID"] as? String { merged["UDID"] = udid }
-
-                  guard let out = try? PropertyListSerialization.data(
-                      fromPropertyList: merged, format: .xml, options: 0) else {
-                      throw GeneratorError.mergeFailed("serialize")
+                  let canonical = PairingController.syncCanonicalPairingFile(from: rppPath)
+                  if outputPath != canonical {
+                      do {
+                          try data.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
+                      } catch {
+                          throw GeneratorError.writeFailed(error.localizedDescription)
+                      }
                   }
-                  do {
-                      try out.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
-                  } catch {
-                      throw GeneratorError.writeFailed(error.localizedDescription)
-                  }
+                  return canonical
               }
           }
-          SWIFT_EOF
+          PAIRING_EOF
+      - name: Write CarrierLabBridge
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/CarrierLab
+          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'BRIDGE_EOF'
+          import Foundation
 
+          final class CarrierLabBridge: @unchecked Sendable {
+              static let shared = CarrierLabBridge()
+
+              enum ProbeState {
+                  case ok
+                  case noVPN
+                  case noPairing
+                  case pairingInvalid
+                  case ffiFailed(String)
+              }
+
+              struct ProbeResult {
+                  let state: ProbeState
+                  let detail: String
+                  var ok: Bool { if case .ok = state { return true }; return false }
+                  var message: String {
+                      switch state {
+                      case .ok: return "ready"
+                      case .noVPN: return "No loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
+                      case .noPairing: return "No pairing file. Open Tools / Airlift and run Start Pairing."
+                      case .pairingInvalid: return detail
+                      case .ffiFailed(let s): return s
+                      }
+                  }
+              }
+
+              private let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
+              private let bundleLinks = "/var/mobile/Library/Carrier Bundles"
+
+              func carrierRootPath() -> String { carrierRoot }
+              func bundleLinksPath() -> String { bundleLinks }
+
+              func findPairingFile() -> String? {
+                  let fm = FileManager.default
+                  let canonical = PairingController.pairingFilePath()
+                  if fm.fileExists(atPath: canonical) {
+                      let size = (try? fm.attributesOfItem(atPath: canonical)[.size] as? Int) ?? 0
+                      if size > 0 { return canonical }
+                  }
+                  let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                  let candidates = [
+                      docs.appendingPathComponent("natsuk1_pairing.plist").path,
+                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing").path,
+                  ]
+                  for c in candidates {
+                      if fm.fileExists(atPath: c) {
+                          let size = (try? fm.attributesOfItem(atPath: c)[.size] as? Int) ?? 0
+                          if size > 0 { return c }
+                      }
+                  }
+                  return nil
+              }
+
+              private func validatePairingFile(_ path: String) -> (Bool, String) {
+                  let fm = FileManager.default
+                  guard fm.fileExists(atPath: path) else { return (false, "missing") }
+                  let size = (try? fm.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+                  if size < 50 { return (false, "Pairing file too small (\(size) bytes).") }
+                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+                      return (false, "Pairing file unreadable.")
+                  }
+                  guard let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+                        let dict = obj as? [String: Any] else {
+                      return (false, "Pairing file not a plist (\(size) bytes).")
+                  }
+                  if dict.isEmpty { return (false, "Pairing plist empty.") }
+                  return (true, "Pairing ok (\(size) bytes, \(dict.count) keys)")
+              }
+
+              func probe() -> ProbeResult {
+                  if !NetworkStatus.loopbackVPNUp() { return ProbeResult(state: .noVPN, detail: "no loopback VPN") }
+                  guard let pairing = findPairingFile() else {
+                      return ProbeResult(state: .noPairing, detail: "missing")
+                  }
+                  let (ok, msg) = validatePairingFile(pairing)
+                  if !ok { return ProbeResult(state: .pairingInvalid, detail: msg) }
+                  return ProbeResult(state: .ok, detail: msg)
+              }
+
+              func injectFolder(sourceFolder: String, targetFolder: String, folderName: String) -> ProbeResult {
+                  let pre = probe()
+                  guard pre.ok else { return pre }
+                  guard let pairingPath = findPairingFile() else {
+                      return ProbeResult(state: .noPairing, detail: "no pairing path")
+                  }
+                  var outError: UnsafeMutablePointer<CChar>? = nil
+                  var rc: Int32 = -1
+                  pairingPath.withCString { pc in
+                      sourceFolder.withCString { sc in
+                          targetFolder.withCString { tc in
+                              folderName.withCString { nc in
+                                  rc = al_exploit_inject_folder(pc, sc, tc, nc, nil, nil, &outError)
+                              }
+                          }
+                      }
+                  }
+                  let errMsg = outError.flatMap { String(cString: $0) } ?? ""
+                  if let p = outError { al_string_free(p) }
+                  if rc != 0 {
+                      return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "inject rc=\(rc)" : errMsg), detail: errMsg)
+                  }
+                  return ProbeResult(state: .ok, detail: "injected")
+              }
+
+              func writeFile(source: String, target: String) -> ProbeResult {
+                  let pre = probe()
+                  guard pre.ok else { return pre }
+                  guard let pairingPath = findPairingFile() else {
+                      return ProbeResult(state: .noPairing, detail: "no pairing path")
+                  }
+                  var outJson: UnsafeMutablePointer<CChar>? = nil
+                  var outErr: UnsafeMutablePointer<CChar>? = nil
+                  var rc: Int32 = -1
+                  pairingPath.withCString { pc in
+                      source.withCString { sc in
+                          target.withCString { tc in
+                              rc = al_exploit_run(pc, tc, nil, nil, &outJson, &outErr)
+                          }
+                      }
+                  }
+                  let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
+                  if let p = outJson { al_string_free(p) }
+                  if let p = outErr { al_string_free(p) }
+                  if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
+                  return ProbeResult(state: .ok, detail: "ok")
+              }
+          }
+          BRIDGE_EOF
+      - name: Write CarrierLabInstaller
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/CarrierLab
+          cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'INSTALLER_EOF'
+          import Foundation
+
+          final class CarrierLabInstaller: @unchecked Sendable {
+              static let shared = CarrierLabInstaller()
+
+              private let state = CarrierLabState.shared
+              private let bridge = CarrierLabBridge.shared
+
+              struct CheckResult {
+                  let probe: CarrierLabBridge.ProbeResult
+                  let carrierRootExists: Bool
+                  let bundleLinksExists: Bool
+                  let resourcesBundled: Bool
+                  let backupPresent: Bool
+                  let status: CarrierLabState.Status
+              }
+
+              func carrierBundleURL() -> URL {
+                  Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/CarrierLab.bundle")
+              }
+
+              func docomoBundleURL() -> URL {
+                  Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/Docomo_jp.bundle")
+              }
+
+              func check() -> CheckResult {
+                  let fm = FileManager.default
+                  let probe = bridge.probe()
+                  return CheckResult(
+                      probe: probe,
+                      carrierRootExists: fm.fileExists(atPath: bridge.carrierRootPath()),
+                      bundleLinksExists: fm.fileExists(atPath: bridge.bundleLinksPath()),
+                      resourcesBundled: fm.fileExists(atPath: carrierBundleURL().path),
+                      backupPresent: state.hasBackup(),
+                      status: state.session?.status ?? .clean
+                  )
+              }
+
+              func install() -> CarrierLabBridge.ProbeResult {
+                  let carrierBundle = carrierBundleURL()
+                  let docomoBundle = docomoBundleURL()
+                  guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
+                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle missing"), detail: "missing")
+                  }
+                  guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
+                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"), detail: "missing")
+                  }
+                  let pre = bridge.probe()
+                  guard pre.ok else { return pre }
+
+                  let s = CarrierLabState.Session(
+                      status: .placing,
+                      startedAt: Date(),
+                      carrierBundlePath: carrierBundle.path,
+                      originalBackupPath: state.backupURL().path,
+                      ipccTriggerPath: docomoBundle.path,
+                      lastError: nil,
+                      aliases: nil)
+                  state.save(s)
+
+                  let r1 = bridge.injectFolder(
+                      sourceFolder: carrierBundle.path,
+                      targetFolder: bridge.bundleLinksPath(),
+                      folderName: "CarrierLab.bundle")
+                  if !r1.ok {
+                      var bad = s
+                      bad.status = .failed
+                      bad.lastError = r1.message
+                      state.save(bad)
+                      return r1
+                  }
+
+                  let r2 = bridge.injectFolder(
+                      sourceFolder: docomoBundle.path,
+                      targetFolder: bridge.carrierRootPath(),
+                      folderName: "Docomo_jp.bundle")
+                  if !r2.ok {
+                      var bad = s
+                      bad.status = .failed
+                      bad.lastError = r2.message
+                      state.save(bad)
+                      return r2
+                  }
+
+                  var done = s
+                  done.status = .placed
+                  state.save(done)
+                  return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed")
+              }
+
+              func reload() -> CarrierLabBridge.ProbeResult {
+                  guard let s = state.session, s.status == .placed || s.status == .finished else {
+                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."), detail: "no session")
+                  }
+                  _ = s
+                  return bridge.injectFolder(
+                      sourceFolder: docomoBundleURL().path,
+                      targetFolder: bridge.carrierRootPath(),
+                      folderName: "Docomo_jp.bundle")
+              }
+
+              func finish() {
+                  guard let s = state.session else { return }
+                  var done = s
+                  done.status = .finished
+                  state.save(done)
+              }
+
+              func reset() {
+                  state.clear()
+              }
+          }
+          INSTALLER_EOF
       - name: Commit
         run: |
           set -euo pipefail
-          git config user.name  "github-actions[bot]"
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: PairingGenerator without Sendable annotation [skip ci]"
+            git commit -m "fix: pass-through pairing, inject_folder, no lockdown gate [skip ci]"
             git push
           fi
 
@@ -268,6 +474,14 @@ jobs:
           test -f natsuk1/Resources/CarrierAssets/CarrierLab.bundle/carrier.plist
           test -f natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/carrier.plist
           grep -q 'CarrierAssets' project.yml
+          grep -q 'lc++' project.yml
+          grep -q 'natsuk1/Support/bridging.h' project.yml
+          grep -q 'al_exploit_inject_folder' natsuk1/CarrierLab/CarrierLabBridge.swift
+          grep -q 'injectFolder' natsuk1/CarrierLab/CarrierLabInstaller.swift
+          ! grep -q '_silgen_name' natsuk1/CarrierLab/CarrierLabBridge.swift
+          ! grep -q '_silgen_name' natsuk1/CarrierLab/CarrierLabInstaller.swift
+          ! grep -q 'lockdownd' natsuk1/Helpers/PairingGenerator.swift
+          grep -q 'syncCanonicalPairingFile' natsuk1/Helpers/PairingGenerator.swift
           rm -rf natsuk1.xcodeproj
           xcodegen generate
 
@@ -317,7 +531,7 @@ jobs:
           gh release view development >/dev/null 2>&1 && gh release delete development --yes --cleanup-tag || true
           R="${{ github.repository }}"
           IPA="https://github.com/$R/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v22.0 ($((SIZE/1024)) KB)
+          NOTES="natsuk1 v44.0 ($((SIZE/1024)) KB)
 
           **Install**
 
