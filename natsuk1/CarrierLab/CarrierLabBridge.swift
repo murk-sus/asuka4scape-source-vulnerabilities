@@ -27,7 +27,7 @@ final class CarrierLabBridge: @unchecked Sendable {
     }
 
     private let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
-    private let bundleLinks = "/var/mobile/Library/Carrier Bundles/BundleLinks"
+    private let bundleLinks = "/var/mobile/Library/Carrier Bundles"
 
     func carrierRootPath() -> String { carrierRoot }
     func bundleLinksPath() -> String { bundleLinks }
@@ -42,7 +42,7 @@ final class CarrierLabBridge: @unchecked Sendable {
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let candidates = [
             docs.appendingPathComponent("natsuk1_pairing.plist").path,
-            docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing").path
+            docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing").path,
         ]
         for c in candidates {
             if fm.fileExists(atPath: c) {
@@ -84,15 +84,6 @@ final class CarrierLabBridge: @unchecked Sendable {
         guard pre.ok else { return pre }
         guard let pairingPath = findPairingFile() else {
             return ProbeResult(state: .noPairing, detail: "no pairing path")
-        }
-        let fm = FileManager.default
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: sourceFolder, isDirectory: &isDir), isDir.boolValue else {
-            return ProbeResult(state: .ffiFailed("source is not a directory: \(sourceFolder)"), detail: "source missing")
-        }
-        let contents = (try? fm.contentsOfDirectory(atPath: sourceFolder)) ?? []
-        guard !contents.isEmpty else {
-            return ProbeResult(state: .ffiFailed("no files in directory: \(sourceFolder)"), detail: "empty source")
         }
         var outError: UnsafeMutablePointer<CChar>? = nil
         var rc: Int32 = -1

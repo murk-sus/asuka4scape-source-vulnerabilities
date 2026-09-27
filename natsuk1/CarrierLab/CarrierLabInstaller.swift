@@ -39,16 +39,11 @@ final class CarrierLabInstaller: @unchecked Sendable {
     func install() -> CarrierLabBridge.ProbeResult {
         let carrierBundle = carrierBundleURL()
         let docomoBundle = docomoBundleURL()
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: carrierBundle.path) else {
+        guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
             return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle missing"), detail: "missing")
         }
-        guard fm.fileExists(atPath: docomoBundle.path) else {
+        guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
             return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"), detail: "missing")
-        }
-        let carrierContents = (try? fm.contentsOfDirectory(atPath: carrierBundle.path)) ?? []
-        guard !carrierContents.isEmpty else {
-            return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle is empty"), detail: "empty bundle")
         }
         let pre = bridge.probe()
         guard pre.ok else { return pre }
@@ -60,12 +55,12 @@ final class CarrierLabInstaller: @unchecked Sendable {
             originalBackupPath: state.backupURL().path,
             ipccTriggerPath: docomoBundle.path,
             lastError: nil,
-            aliases: ["25001", "25001_GID1-AA"])
+            aliases: nil)
         state.save(s)
 
         let r1 = bridge.injectFolder(
             sourceFolder: carrierBundle.path,
-            targetFolder: bridge.carrierRootPath(),
+            targetFolder: bridge.bundleLinksPath(),
             folderName: "CarrierLab.bundle")
         if !r1.ok {
             var bad = s
@@ -87,37 +82,9 @@ final class CarrierLabInstaller: @unchecked Sendable {
             return r2
         }
 
-        let r3 = bridge.injectFolder(
-            sourceFolder: carrierBundle.path,
-            targetFolder: bridge.bundleLinksPath(),
-            folderName: "25001")
-        if !r3.ok {
-            var bad = s
-            bad.status = .failed
-            bad.lastError = r3.message
-            state.save(bad)
-            return r3
-        }
-
-        let r4 = bridge.injectFolder(
-            sourceFolder: carrierBundle.path,
-            targetFolder: bridge.bundleLinksPath(),
-            folderName: "25001_GID1-AA")
-        if !r4.ok {
-            var bad = s
-            bad.status = .failed
-            bad.lastError = r4.message
-            state.save(bad)
-            return r4
-        }
-
         var done = s
         done.status = .placed
         state.save(done)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            AppState.shared.respring()
-        }
         return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed")
     }
 
@@ -126,16 +93,10 @@ final class CarrierLabInstaller: @unchecked Sendable {
             return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."), detail: "no session")
         }
         _ = s
-        let r = bridge.injectFolder(
+        return bridge.injectFolder(
             sourceFolder: docomoBundleURL().path,
             targetFolder: bridge.carrierRootPath(),
             folderName: "Docomo_jp.bundle")
-        if r.ok {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                AppState.shared.respring()
-            }
-        }
-        return r
     }
 
     func finish() {
