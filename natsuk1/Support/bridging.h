@@ -2,8 +2,8 @@
 #define NATSUK1_BRIDGING_H
 
 #include <stdint.h>
-#include "Exploit/nk_api.h"
-#import "Exploit/GrappaHelper.h"
+#include "nk_api.h"
+#include "GrappaHelper.h"
 #include "airlift.h"
 
 #endif
