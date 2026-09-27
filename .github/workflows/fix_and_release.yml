@@ -54,357 +54,367 @@ jobs:
 
           mkdir -p natsuk1/CarrierLab
 
-          cat > natsuk1/CarrierLab/CarrierLabState.swift <<'SWIFT_STATE'
-import Foundation
+          cat > /tmp/cl_state.swift <<'SWIFT_EOF'
+          import Foundation
+          import Combine
 
-final class CarrierLabState: ObservableObject, @unchecked Sendable {
-    static let shared = CarrierLabState()
+          final class CarrierLabState: ObservableObject, @unchecked Sendable {
+              static let shared = CarrierLabState()
 
-    enum Status: String, Codable { case clean, placing, placed, finished, failed }
+              enum Status: String, Codable { case clean, placing, placed, finished, failed }
 
-    struct Session: Codable {
-        var status: Status
-        var startedAt: Date
-        var carrierBundlePath: String?
-        var originalBackupPath: String?
-        var ipccTriggerPath: String?
-        var lastError: String?
-    }
+              struct Session: Codable {
+                  var status: Status
+                  var startedAt: Date
+                  var carrierBundlePath: String?
+                  var originalBackupPath: String?
+                  var ipccTriggerPath: String?
+                  var lastError: String?
+              }
 
-    @Published private(set) var session: Session?
+              @Published private(set) var session: Session?
 
-    private let root: URL
-    private let stateURL: URL
-    private let backupDir: URL
+              private let root: URL
+              private let stateURL: URL
+              private let backupDir: URL
 
-    private init() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        root = docs.appendingPathComponent("carrierlab", isDirectory: true)
-        stateURL = root.appendingPathComponent("state.json")
-        backupDir = root.appendingPathComponent("backup", isDirectory: true)
-        try? FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
-        load()
-    }
+              private init() {
+                  let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                  root = docs.appendingPathComponent("carrierlab", isDirectory: true)
+                  stateURL = root.appendingPathComponent("state.json")
+                  backupDir = root.appendingPathComponent("backup", isDirectory: true)
+                  try? FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
+                  load()
+              }
 
-    func load() {
-        guard let data = try? Data(contentsOf: stateURL),
-              let s = try? JSONDecoder().decode(Session.self, from: data) else {
-            session = nil
-            return
-        }
-        session = s
-    }
+              func load() {
+                  guard let data = try? Data(contentsOf: stateURL),
+                        let s = try? JSONDecoder().decode(Session.self, from: data) else {
+                      session = nil
+                      return
+                  }
+                  session = s
+              }
 
-    func save(_ s: Session) {
-        session = s
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        enc.dateEncodingStrategy = .iso8601
-        if let d = try? enc.encode(s) { try? d.write(to: stateURL, options: .atomic) }
-    }
+              func save(_ s: Session) {
+                  session = s
+                  let enc = JSONEncoder()
+                  enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+                  enc.dateEncodingStrategy = .iso8601
+                  if let d = try? enc.encode(s) { try? d.write(to: stateURL, options: .atomic) }
+              }
 
-    func clear() {
-        session = nil
-        try? FileManager.default.removeItem(at: stateURL)
-    }
+              func clear() {
+                  session = nil
+                  try? FileManager.default.removeItem(at: stateURL)
+              }
 
-    func hasBackup() -> Bool {
-        guard let s = session, let p = s.originalBackupPath else { return false }
-        return FileManager.default.fileExists(atPath: p)
-    }
+              func hasBackup() -> Bool {
+                  guard let s = session, let p = s.originalBackupPath else { return false }
+                  return FileManager.default.fileExists(atPath: p)
+              }
 
-    func backupURL() -> URL { backupDir }
-    func rootURL() -> URL { root }
-}
-SWIFT_STATE
+              func backupURL() -> URL { backupDir }
+              func rootURL() -> URL { root }
+          }
+          SWIFT_EOF
+          cut -c 11- /tmp/cl_state.swift > natsuk1/CarrierLab/CarrierLabState.swift
 
-          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'SWIFT_BRIDGE'
-import Foundation
+          cat > /tmp/cl_bridge.swift <<'SWIFT_EOF'
+          import Foundation
 
-final class CarrierLabBridge: @unchecked Sendable {
-    static let shared = CarrierLabBridge()
+          final class CarrierLabBridge: @unchecked Sendable {
+              static let shared = CarrierLabBridge()
 
-    enum CarrierError: LocalizedError {
-        case noPairing
-        case noTarget
-        case notImplemented(String)
-        case remote(String)
+              enum CarrierError: LocalizedError {
+                  case noPairing
+                  case notImplemented(String)
+                  case remote(String)
 
-        var errorDescription: String? {
-            switch self {
-            case .noPairing: return "No pairing file. Pair via Airlift first."
-            case .noTarget: return "Target path missing."
-            case .notImplemented(let s): return "Not implemented: \(s)"
-            case .remote(let s): return s
-            }
-        }
-    }
+                  var errorDescription: String? {
+                      switch self {
+                      case .noPairing: return "No pairing file. Pair via Airlift first."
+                      case .notImplemented(let s): return "Not implemented: " + s
+                      case .remote(let s): return s
+                      }
+                  }
+              }
 
-    private let carrierRoot = "/var/mobile/Library/Carrier Bundles"
-    private let bundleLinks = "/var/mobile/Library/Carrier Bundles/BundleLinks"
+              private let carrierRoot = "/var/mobile/Library/Carrier Bundles"
+              private let bundleLinks = "/var/mobile/Library/Carrier Bundles/BundleLinks"
 
-    func carrierRootPath() -> String { carrierRoot }
-    func bundleLinksPath() -> String { bundleLinks }
+              func carrierRootPath() -> String { carrierRoot }
+              func bundleLinksPath() -> String { bundleLinks }
 
-    func writeFile(source: String, target: String) throws {
-        let pairing = PairingController.pairingFilePath()
-        guard FileManager.default.fileExists(atPath: pairing) else { throw CarrierError.noPairing }
-        var outJson: UnsafeMutablePointer<CChar>? = nil
-        var outErr: UnsafeMutablePointer<CChar>? = nil
-        let rc: Int32 = pairing.withCString { pc in
-            source.withCString { sc in
-                target.withCString { tc in
-                    al_exploit_run(pc, tc, nil, nil, &outJson, &outErr)
-                }
-            }
-        }
-        if let p = outJson { al_string_free(p) }
-        if rc != 0 {
-            let msg = outErr.flatMap { String(cString: $0) } ?? "rc=\(rc)"
-            if let p = outErr { al_string_free(p) }
-            throw CarrierError.remote(msg)
-        }
-        if let p = outErr { al_string_free(p) }
-    }
+              func writeFile(source: String, target: String) throws {
+                  let pairing = PairingController.pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairing) else { throw CarrierError.noPairing }
+                  var outJson: UnsafeMutablePointer<CChar>? = nil
+                  var outErr: UnsafeMutablePointer<CChar>? = nil
+                  let rc: Int32 = pairing.withCString { pc in
+                      source.withCString { sc in
+                          target.withCString { tc in
+                              al_exploit_run(pc, tc, nil, nil, &outJson, &outErr)
+                          }
+                      }
+                  }
+                  if let p = outJson { al_string_free(p) }
+                  let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
+                  if let p = outErr { al_string_free(p) }
+                  if rc != 0 { throw CarrierError.remote(errMsg.isEmpty ? "rc=\(rc)" : errMsg) }
+              }
 
-    func readFile(path: String) throws -> Data {
-        throw CarrierError.notImplemented("al_read_file")
-    }
+              func readFile(path: String) throws -> Data {
+                  throw CarrierError.notImplemented("al_read_file")
+              }
 
-    func removePath(_ path: String) throws {
-        throw CarrierError.notImplemented("al_remove_path")
-    }
+              func removePath(_ path: String) throws {
+                  throw CarrierError.notImplemented("al_remove_path")
+              }
 
-    func symlink(link: String, target: String) throws {
-        throw CarrierError.notImplemented("al_make_symlink")
-    }
-}
-SWIFT_BRIDGE
+              func symlink(link: String, target: String) throws {
+                  throw CarrierError.notImplemented("al_make_symlink")
+              }
+          }
+          SWIFT_EOF
+          cut -c 11- /tmp/cl_bridge.swift > natsuk1/CarrierLab/CarrierLabBridge.swift
 
-          cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'SWIFT_INSTALLER'
-import Foundation
+          cat > /tmp/cl_installer.swift <<'SWIFT_EOF'
+          import Foundation
 
-final class CarrierLabInstaller: @unchecked Sendable {
-    static let shared = CarrierLabInstaller()
+          final class CarrierLabInstaller: @unchecked Sendable {
+              static let shared = CarrierLabInstaller()
 
-    private let state = CarrierLabState.shared
-    private let bridge = CarrierLabBridge.shared
+              private let state = CarrierLabState.shared
+              private let bridge = CarrierLabBridge.shared
 
-    struct CheckResult {
-        let carrierRootExists: Bool
-        let bundleLinksExists: Bool
-        let currentLinks: [String]
-        let backupPresent: Bool
-        let status: CarrierLabState.Status
-    }
+              struct CheckResult {
+                  let carrierRootExists: Bool
+                  let bundleLinksExists: Bool
+                  let currentLinks: [String]
+                  let backupPresent: Bool
+                  let status: CarrierLabState.Status
+              }
 
-    func check() throws -> CheckResult {
-        let fm = FileManager.default
-        let root = bridge.carrierRootPath()
-        let links = bridge.bundleLinksPath()
-        var entries: [String] = []
-        if let e = try? fm.contentsOfDirectory(atPath: links) { entries = e }
-        return CheckResult(
-            carrierRootExists: fm.fileExists(atPath: root),
-            bundleLinksExists: fm.fileExists(atPath: links),
-            currentLinks: entries,
-            backupPresent: state.hasBackup(),
-            status: state.session?.status ?? .clean
-        )
-    }
+              func check() throws -> CheckResult {
+                  let fm = FileManager.default
+                  let root = bridge.carrierRootPath()
+                  let links = bridge.bundleLinksPath()
+                  var entries: [String] = []
+                  if let e = try? fm.contentsOfDirectory(atPath: links) { entries = e }
+                  return CheckResult(
+                      carrierRootExists: fm.fileExists(atPath: root),
+                      bundleLinksExists: fm.fileExists(atPath: links),
+                      currentLinks: entries,
+                      backupPresent: state.hasBackup(),
+                      status: state.session?.status ?? .clean
+                  )
+              }
 
-    func install(sourceBundlePath: String, ipccPath: String) throws {
-        guard state.hasBackup() || state.session == nil else {
-            throw NSError(domain: "carrierlab", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Session already placed. Run finish or reload."])
-        }
-        let s = CarrierLabState.Session(
-            status: .placing,
-            startedAt: Date(),
-            carrierBundlePath: sourceBundlePath,
-            originalBackupPath: state.backupURL().path,
-            ipccTriggerPath: ipccPath,
-            lastError: nil)
-        state.save(s)
+              func install(sourceBundlePath: String, ipccPath: String) throws {
+                  if state.session != nil && !state.hasBackup() {
+                      throw NSError(domain: "carrierlab", code: 1,
+                                    userInfo: [NSLocalizedDescriptionKey: "Session already placed. Run finish or reload."])
+                  }
+                  let s = CarrierLabState.Session(
+                      status: .placing,
+                      startedAt: Date(),
+                      carrierBundlePath: sourceBundlePath,
+                      originalBackupPath: state.backupURL().path,
+                      ipccTriggerPath: ipccPath,
+                      lastError: nil)
+                  state.save(s)
 
-        do {
-            try bridge.writeFile(source: sourceBundlePath, target: bridge.bundleLinksPath())
-            try bridge.writeFile(source: ipccPath, target: bridge.carrierRootPath())
-            var done = s
-            done.status = .placed
-            state.save(done)
-        } catch {
-            var bad = s
-            bad.status = .failed
-            bad.lastError = error.localizedDescription
-            state.save(bad)
-            throw error
-        }
-    }
+                  do {
+                      try bridge.writeFile(source: sourceBundlePath, target: bridge.bundleLinksPath())
+                      try bridge.writeFile(source: ipccPath, target: bridge.carrierRootPath())
+                      var done = s
+                      done.status = .placed
+                      state.save(done)
+                  } catch {
+                      var bad = s
+                      bad.status = .failed
+                      bad.lastError = error.localizedDescription
+                      state.save(bad)
+                      throw error
+                  }
+              }
 
-    func reload(ipccPath: String) throws {
-        guard let s = state.session, s.status == .placed || s.status == .finished else {
-            throw NSError(domain: "carrierlab", code: 2,
-                          userInfo: [NSLocalizedDescriptionKey: "Nothing to reload. Install first."])
-        }
-        try bridge.writeFile(source: ipccPath, target: bridge.carrierRootPath())
-    }
+              func reload(ipccPath: String) throws {
+                  guard let s = state.session, s.status == .placed || s.status == .finished else {
+                      throw NSError(domain: "carrierlab", code: 2,
+                                    userInfo: [NSLocalizedDescriptionKey: "Nothing to reload. Install first."])
+                  }
+                  try bridge.writeFile(source: ipccPath, target: bridge.carrierRootPath())
+              }
 
-    func finish() throws {
-        guard let s = state.session else { return }
-        var done = s
-        done.status = .finished
-        state.save(done)
-    }
-}
-SWIFT_INSTALLER
+              func finish() throws {
+                  guard let s = state.session else { return }
+                  var done = s
+                  done.status = .finished
+                  state.save(done)
+              }
+          }
+          SWIFT_EOF
+          cut -c 11- /tmp/cl_installer.swift > natsuk1/CarrierLab/CarrierLabInstaller.swift
 
-          cat > natsuk1/CarrierLab/CarrierLabView.swift <<'SWIFT_VIEW'
-import SwiftUI
+          cat > /tmp/cl_view.swift <<'SWIFT_EOF'
+          import SwiftUI
 
-struct CarrierLabView: View {
-    @EnvironmentObject var state: AppState
-    @StateObject private var clState = CarrierLabState.shared
-    @State private var log: String = ""
-    @State private var busy: Bool = false
-    @State private var showInstall = false
-    @State private var confirmText = ""
-    @State private var carrierSource: String = ""
+          struct CarrierLabView: View {
+              @StateObject private var clState = CarrierLabState.shared
+              @State private var logText: String = ""
+              @State private var busy: Bool = false
+              @State private var showInstall = false
+              @State private var confirmText = ""
+              @State private var carrierSource: String = ""
 
-    var body: some View {
-        List {
-            Section {
-                HStack {
-                    Text("Status")
-                    Spacer()
-                    Text(statusText)
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(statusColor)
-                }
-                if let s = clState.session {
-                    HStack { Text("Started"); Spacer(); Text(s.startedAt.formatted()).font(.caption).foregroundStyle(.secondary) }
-                    if let e = s.lastError {
-                        Text(e).font(.caption).foregroundStyle(.red)
-                    }
-                }
-            } header: { Label("CarrierLab", systemImage: "antenna.radiowaves.left.and.right") }
+              var body: some View {
+                  List {
+                      Section {
+                          HStack {
+                              Text("Status")
+                              Spacer()
+                              Text(statusText)
+                                  .font(.system(.body, design: .monospaced))
+                                  .foregroundStyle(statusColor)
+                          }
+                          if let s = clState.session {
+                              HStack {
+                                  Text("Started")
+                                  Spacer()
+                                  Text(s.startedAt.formatted()).font(.caption).foregroundStyle(.secondary)
+                              }
+                              if let e = s.lastError {
+                                  Text(e).font(.caption).foregroundStyle(.red)
+                              }
+                          }
+                      } header: { Label("CarrierLab", systemImage: "antenna.radiowaves.left.and.right") }
 
-            Section {
-                TextField("Source .bundle path", text: $carrierSource)
-                    .font(.system(.footnote, design: .monospaced))
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-            } header: { Label("Source", systemImage: "folder") }
+                      Section {
+                          TextField("Source .bundle path", text: $carrierSource)
+                              .font(.system(.footnote, design: .monospaced))
+                              .autocorrectionDisabled()
+                              .textInputAutocapitalization(.never)
+                      } header: { Label("Source", systemImage: "folder") }
 
-            Section {
-                Button { runCheck() } label: { Text("Check") }.disabled(busy)
-                Button { showInstall = true } label: { Text("Install") }.disabled(busy)
-                Button { runReload() } label: { Text("Reload") }.disabled(busy)
-                Button { runFinish() } label: { Text("Finish") }.disabled(busy)
-            } header: { Label("Actions", systemImage: "wrench") }
+                      Section {
+                          Button { runCheck() } label: { Text("Check") }.disabled(busy)
+                          Button { showInstall = true } label: { Text("Install") }.disabled(busy)
+                          Button { runReload() } label: { Text("Reload") }.disabled(busy)
+                          Button { runFinish() } label: { Text("Finish") }.disabled(busy)
+                      } header: { Label("Actions", systemImage: "wrench") }
 
-            Section {
-                ScrollView { Text(log.isEmpty ? "—" : log).font(.system(size: 10, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading) }
-                    .frame(minHeight: 200, maxHeight: 400)
-            } header: { Label("Log", systemImage: "terminal") }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle("CarrierLab")
-        .navigationBarTitleDisplayMode(.inline)
-        .alert("Confirm install", isPresented: $showInstall) {
-            TextField("Type INSTALL", text: $confirmText)
-            Button("Cancel", role: .cancel) { confirmText = "" }
-            Button("Install", role: .destructive) {
-                if confirmText == "INSTALL" { runInstall() }
-                confirmText = ""
-            }
-        } message: {
-            Text("Modifies operator files. No guaranteed rollback.")
-        }
-    }
+                      Section {
+                          ScrollView {
+                              Text(logText.isEmpty ? "no output" : logText)
+                                  .font(.system(size: 10, design: .monospaced))
+                                  .frame(maxWidth: .infinity, alignment: .leading)
+                          }
+                          .frame(minHeight: 200, maxHeight: 400)
+                      } header: { Label("Log", systemImage: "terminal") }
+                  }
+                  .listStyle(.insetGrouped)
+                  .navigationTitle("CarrierLab")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .alert("Confirm install", isPresented: $showInstall) {
+                      TextField("Type INSTALL", text: $confirmText)
+                      Button("Cancel", role: .cancel) { confirmText = "" }
+                      Button("Install", role: .destructive) {
+                          if confirmText == "INSTALL" { runInstall() }
+                          confirmText = ""
+                      }
+                  } message: {
+                      Text("Modifies operator files. No guaranteed rollback.")
+                  }
+              }
 
-    private var statusText: String {
-        clState.session?.status.rawValue ?? "clean"
-    }
-    private var statusColor: Color {
-        switch clState.session?.status {
-        case .placed, .finished: return .green
-        case .placing: return .orange
-        case .failed: return .red
-        default: return .secondary
-        }
-    }
+              private var statusText: String {
+                  clState.session?.status.rawValue ?? "clean"
+              }
 
-    private func append(_ s: String) { log += s + "\n" }
+              private var statusColor: Color {
+                  switch clState.session?.status {
+                  case .placed, .finished: return .green
+                  case .placing: return .orange
+                  case .failed: return .red
+                  default: return .secondary
+                  }
+              }
 
-    private func runCheck() {
-        busy = true
-        do {
-            let r = try CarrierLabInstaller.shared.check()
-            append("[check] carrierRoot=\(r.carrierRootExists) bundleLinks=\(r.bundleLinksExists) backup=\(r.backupPresent) status=\(r.status.rawValue)")
-            append("[check] links=\(r.currentLinks.joined(separator: ", "))")
-        } catch {
-            append("[check] error: \(error.localizedDescription)")
-        }
-        busy = false
-    }
+              private func append(_ s: String) { logText += s + "\n" }
 
-    private func runInstall() {
-        busy = true
-        let src = carrierSource.isEmpty ? Bundle.main.bundlePath + "/CarrierLab.bundle" : carrierSource
-        let ipcc = Bundle.main.bundlePath + "/ipcc"
-        do {
-            try CarrierLabInstaller.shared.install(sourceBundlePath: src, ipccPath: ipcc)
-            append("[install] ok")
-        } catch {
-            append("[install] error: \(error.localizedDescription)")
-        }
-        busy = false
-    }
+              private func runCheck() {
+                  busy = true
+                  do {
+                      let r = try CarrierLabInstaller.shared.check()
+                      append("[check] carrierRoot=\(r.carrierRootExists) bundleLinks=\(r.bundleLinksExists) backup=\(r.backupPresent) status=\(r.status.rawValue)")
+                      append("[check] links=\(r.currentLinks.joined(separator: ", "))")
+                  } catch {
+                      append("[check] error: \(error.localizedDescription)")
+                  }
+                  busy = false
+              }
 
-    private func runReload() {
-        busy = true
-        do {
-            try CarrierLabInstaller.shared.reload(ipccPath: Bundle.main.bundlePath + "/ipcc")
-            append("[reload] ok")
-        } catch {
-            append("[reload] error: \(error.localizedDescription)")
-        }
-        busy = false
-    }
+              private func runInstall() {
+                  busy = true
+                  let src = carrierSource.isEmpty ? Bundle.main.bundlePath + "/CarrierLab.bundle" : carrierSource
+                  let ipcc = Bundle.main.bundlePath + "/ipcc"
+                  do {
+                      try CarrierLabInstaller.shared.install(sourceBundlePath: src, ipccPath: ipcc)
+                      append("[install] ok")
+                  } catch {
+                      append("[install] error: \(error.localizedDescription)")
+                  }
+                  busy = false
+              }
 
-    private func runFinish() {
-        busy = true
-        do {
-            try CarrierLabInstaller.shared.finish()
-            append("[finish] ok")
-        } catch {
-            append("[finish] error: \(error.localizedDescription)")
-        }
-        busy = false
-    }
-}
-SWIFT_VIEW
+              private func runReload() {
+                  busy = true
+                  do {
+                      try CarrierLabInstaller.shared.reload(ipccPath: Bundle.main.bundlePath + "/ipcc")
+                      append("[reload] ok")
+                  } catch {
+                      append("[reload] error: \(error.localizedDescription)")
+                  }
+                  busy = false
+              }
 
-          grep -q 'CarrierLabView' natsuk1/Views/ToolsView.swift || sed -i '' 's|NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }|NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }\n                    NavigationLink { CarrierLabView() } label: { Text("CarrierLab") }|' natsuk1/Views/ToolsView.swift
+              private func runFinish() {
+                  busy = true
+                  do {
+                      try CarrierLabInstaller.shared.finish()
+                      append("[finish] ok")
+                  } catch {
+                      append("[finish] error: \(error.localizedDescription)")
+                  }
+                  busy = false
+              }
+          }
+          SWIFT_EOF
+          cut -c 11- /tmp/cl_view.swift > natsuk1/CarrierLab/CarrierLabView.swift
+
+          grep -q 'CarrierLabView' natsuk1/Views/ToolsView.swift || \
+            sed -i '' 's|NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }|NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }\n                    NavigationLink { CarrierLabView() } label: { Text("CarrierLab") }|' \
+            natsuk1/Views/ToolsView.swift
 
           if [ -f docs/ai-hints.md ] && ! grep -q '## CARRIERLAB' docs/ai-hints.md; then
             printf '\n## CARRIERLAB\n\n' >> docs/ai-hints.md
             printf 'CarrierLab UI wraps AirLift file writes to /var/mobile/Library/Carrier Bundles.\n\n' >> docs/ai-hints.md
             printf -- '- check: read-only, safe.\n' >> docs/ai-hints.md
-            printf -- '- install: requires backup present or clean session.\n' >> docs/ai-hints.md
+            printf -- '- install: requires clean session, no rollback.\n' >> docs/ai-hints.md
             printf -- '- reload: only after install, re-triggers IPCC read.\n' >> docs/ai-hints.md
-            printf -- '- finish: marks session done, no rollback.\n' >> docs/ai-hints.md
-            printf -- '- readFile, removePath, symlink are TODO until AirliftFFI adds al_read_file, al_remove_path, al_make_symlink.\n' >> docs/ai-hints.md
+            printf -- '- finish: marks session done.\n' >> docs/ai-hints.md
+            printf -- '- TODO: al_read_file, al_remove_path, al_make_symlink in AirliftFFI.\n' >> docs/ai-hints.md
           fi
 
-          grep -q 'Documents/carrierlab' .gitignore 2>/dev/null || printf '\nDocuments/carrierlab/\ncarrierlab/source.zip\ncarrierlab/unpacked/\n' >> .gitignore
+          grep -q 'Documents/carrierlab' .gitignore 2>/dev/null || printf '\nDocuments/carrierlab/\n' >> .gitignore
 
           git add -A
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "feat: CarrierLab UI, state, installer [skip ci]"
+            git commit -m "feat: CarrierLab [skip ci]"
             git push
           fi
 
