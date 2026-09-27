@@ -19,7 +19,7 @@ struct CarrierLabView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { runCheck() }
         .onReceive(ticker) { _ in
-            if !clState.busy { runCheck() }
+            if !clState.busy { runCheck(silent: true) }
         }
     }
 
@@ -118,15 +118,18 @@ struct CarrierLabView: View {
         } header: { Label("Actions", systemImage: "wrench") }
     }
 
+    @ViewBuilder
     private var logSection: some View {
-        Section {
-            ScrollView {
-                Text(clState.logText.isEmpty ? "no output" : clState.logText)
-                    .font(.system(size: 10, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(minHeight: 200, maxHeight: 400)
-        } header: { Label("Log", systemImage: "terminal") }
+        if !clState.logText.isEmpty {
+            Section {
+                ScrollView {
+                    Text(clState.logText)
+                        .font(.system(size: 10, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(minHeight: 120, maxHeight: 300)
+            } header: { Label("Log", systemImage: "terminal") }
+        }
     }
 
     private var statusText: String {
@@ -142,18 +145,20 @@ struct CarrierLabView: View {
         }
     }
 
-    private func runCheck() {
+    private func runCheck(silent: Bool = false) {
         if clState.busy { return }
         clState.setBusy(true)
         DispatchQueue.global(qos: .userInitiated).async {
             let r = CarrierLabInstaller.shared.check()
-            let lines = [
-                "[check] airlift=\(r.probe.ok) msg=\(r.probe.message)",
-                "[check] carrierRoot=\(r.carrierRootExists) bundleLinks=\(r.bundleLinksExists) resourcesBundled=\(r.resourcesBundled) backup=\(r.backupPresent) status=\(r.status.rawValue)"
-            ]
             CarrierLabState.shared.setAirlift(ok: r.probe.ok, message: r.probe.message)
             CarrierLabState.shared.setResources(r.resourcesBundled)
-            for l in lines { CarrierLabState.shared.appendLog(l) }
+            if !silent {
+                let lines = [
+                    "[check] airlift=\(r.probe.ok) msg=\(r.probe.message)",
+                    "[check] carrierRoot=\(r.carrierRootExists) bundleLinks=\(r.bundleLinksExists) resourcesBundled=\(r.resourcesBundled) backup=\(r.backupPresent) status=\(r.status.rawValue)"
+                ]
+                for l in lines { CarrierLabState.shared.appendLog(l) }
+            }
             CarrierLabState.shared.setBusy(false)
         }
     }

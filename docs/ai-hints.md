@@ -322,3 +322,15 @@ CarrierLab UI wraps AirLift file writes to /var/mobile/Library/Carrier Bundles.
 - Never validate by specific keys. Some AirLift versions use different key names.
 - Validation: file exists, size > 200, parses as plist, is a dictionary, has at least 1 key.
 - findPairingFile() checks direct path, PairingController path, any plist in Documents, then nested Data/Application/*/Documents.
+
+## PAIRING FILE FORMAT
+
+AirLift pairing plist has exactly these keys:
+
+- public_key (data, 32 bytes)
+- private_key (data, 32 bytes)
+- identifier (string, UUID)
+- alt_irk (data, 16 bytes)
+
+Validation: at least 3 of 4 keys present. Never check for UDID/HostCertificate/etc.
+Location: Documents/natsuk1_pairing.plist OR nested Data/Application/<UUID>/Documents/.

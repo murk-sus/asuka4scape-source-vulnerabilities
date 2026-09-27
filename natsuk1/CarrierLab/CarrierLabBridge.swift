@@ -28,6 +28,7 @@ final class CarrierLabBridge: @unchecked Sendable {
 
     private let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
     private let bundleLinks = "/var/mobile/Library/Carrier Bundles"
+    private let expectedKeys = ["public_key", "private_key", "identifier", "alt_irk"]
 
     func carrierRootPath() -> String { carrierRoot }
     func bundleLinksPath() -> String { bundleLinks }
@@ -75,21 +76,20 @@ final class CarrierLabBridge: @unchecked Sendable {
         guard fm.fileExists(atPath: path) else { return (false, "missing") }
         let attrs = try? fm.attributesOfItem(atPath: path)
         let size = (attrs?[.size] as? Int) ?? 0
-        if size < 200 { return (false, "pairing file too small (\(size) bytes). Re-pair in Tools -> Airlift.") }
+        if size < 100 { return (false, "pairing file too small (\(size) bytes). Re-pair in Tools -> Airlift.") }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
             return (false, "pairing file unreadable")
         }
-        guard let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) else {
+        guard let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let dict = obj as? [String: Any] else {
             return (false, "pairing file not a plist (\(size) bytes). Re-pair in Tools -> Airlift.")
         }
-        guard let dict = obj as? [String: Any] else {
-            return (false, "pairing plist is not a dictionary. Re-pair in Tools -> Airlift.")
+        var present: [String] = []
+        for k in expectedKeys where dict[k] != nil { present.append(k) }
+        if present.count < 3 {
+            return (false, "pairing file incomplete: \(present.count) of 4 keys (\(present.joined(separator: ","))). Re-pair in Tools -> Airlift.")
         }
-        let keys = Array(dict.keys).sorted()
-        if keys.isEmpty {
-            return (false, "pairing plist has no keys (\(size) bytes). Re-pair in Tools -> Airlift.")
-        }
-        return (true, "pairing ok (\(size) bytes, \(keys.count) keys: \(keys.prefix(4).joined(separator: ",")))")
+        return (true, "pairing ok (\(size) bytes)")
     }
 
     func probe() -> ProbeResult {
