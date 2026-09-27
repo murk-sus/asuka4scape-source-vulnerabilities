@@ -115,9 +115,7 @@ struct CarrierLabView: View {
     }
 
     @MainActor
-    private func append(_ s: String) {
-        logText += s + "\n"
-    }
+    private func append(_ s: String) { logText += s + "\n" }
 
     @MainActor
     private func runCheck() {
