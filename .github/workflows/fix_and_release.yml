@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v26-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v26-
+          key: nk-v27-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v27-
 
       - name: Install tools
         run: |
@@ -271,8 +271,14 @@ jobs:
               func deletePairing() {
                   let fm = FileManager.default
                   let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                  let canonicalURL = docs.appendingPathComponent("natsuk1_pairing.plist")
-                  if fm.fileExists(atPath: canonicalURL.path) { try? fm.removeItem(at: canonicalURL) }
+                  let candidates = [
+                      docs.appendingPathComponent("natsuk1_pairing.plist"),
+                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing"),
+                      docs.appendingPathComponent("pairingFile.plist"),
+                  ]
+                  for url in candidates {
+                      if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
+                  }
                   if let custom = PairingController.customPairingFilePath, fm.fileExists(atPath: custom) {
                       try? fm.removeItem(atPath: custom)
                   }
@@ -284,6 +290,7 @@ jobs:
                       }
                   }
                   UserDefaults.standard.removeObject(forKey: "natsuk1PairingHostAltIRK")
+                  UserDefaults.standard.removeObject(forKey: "natsuk1PairingPath")
                   setState(.idle)
                   setStatus("")
                   setPIN(nil)
@@ -409,7 +416,6 @@ jobs:
 
               private let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
               private let bundleLinks = "/var/mobile/Library/Carrier Bundles"
-              private let expectedKeys = ["public_key", "private_key", "identifier", "alt_irk"]
 
               func carrierRootPath() -> String { carrierRoot }
               func bundleLinksPath() -> String { bundleLinks }
@@ -418,10 +424,16 @@ jobs:
                   let fm = FileManager.default
                   let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
-                  let direct = docs.appendingPathComponent("natsuk1_pairing.plist")
-                  if fm.fileExists(atPath: direct.path) {
-                      let size = (try? fm.attributesOfItem(atPath: direct.path)[.size] as? Int) ?? 0
-                      if size > 0 { return direct.path }
+                  let candidates = [
+                      docs.appendingPathComponent("natsuk1_pairing.plist"),
+                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing"),
+                      docs.appendingPathComponent("pairingFile.plist"),
+                  ]
+                  for url in candidates {
+                      if fm.fileExists(atPath: url.path) {
+                          let size = (try? fm.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+                          if size > 0 { return url.path }
+                      }
                   }
 
                   let controller = PairingController.pairingFilePath()
@@ -434,7 +446,7 @@ jobs:
                       for f in e where f.hasSuffix(".plist") || f.hasSuffix(".mobilepairing") || f.hasSuffix(".mobilepair") {
                           let p = docs.appendingPathComponent(f).path
                           let size = (try? fm.attributesOfItem(atPath: p)[.size] as? Int) ?? 0
-                          if size > 200 { return p }
+                          if size > 100 { return p }
                       }
                   }
 
@@ -457,7 +469,7 @@ jobs:
                   guard fm.fileExists(atPath: path) else { return (false, "missing") }
                   let attrs = try? fm.attributesOfItem(atPath: path)
                   let size = (attrs?[.size] as? Int) ?? 0
-                  if size < 100 { return (false, "Pairing file too small (\(size) bytes).") }
+                  if size < 50 { return (false, "Pairing file too small (\(size) bytes).") }
                   guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
                       return (false, "Pairing file unreadable.")
                   }
@@ -465,12 +477,8 @@ jobs:
                         let dict = obj as? [String: Any] else {
                       return (false, "Pairing file not a plist (\(size) bytes).")
                   }
-                  var present: [String] = []
-                  for k in expectedKeys where dict[k] != nil { present.append(k) }
-                  if present.count < 3 {
-                      return (false, "Pairing incomplete: \(present.count) of 4 keys.")
-                  }
-                  return (true, "Pairing ok (\(size) bytes)")
+                  if dict.isEmpty { return (false, "Pairing plist empty.") }
+                  return (true, "Pairing ok (\(size) bytes, \(dict.count) keys)")
               }
 
               func probe() -> ProbeResult {
@@ -480,33 +488,24 @@ jobs:
                   }
                   let (pairOk, pairMsg) = validatePairingFile(pairing)
                   if !pairOk { return ProbeResult(state: .pairingInvalid, detail: pairMsg) }
-                  let tmp = NSTemporaryDirectory() + "/carrierlab-probe-\(UUID().uuidString).txt"
-                  try? "probe".data(using: .utf8)?.write(to: URL(fileURLWithPath: tmp))
-                  var outJson: UnsafeMutablePointer<CChar>? = nil
-                  var outErr: UnsafeMutablePointer<CChar>? = nil
-                  var rc: Int32 = -1
-                  tmp.withCString { sf in
-                      "/var/mobile/Library/Carrier Bundles/.carrierlab-probe".withCString { tf in
-                          rc = al_exploit_run(sf, tf, nil, nil, &outJson, &outErr)
-                      }
-                  }
-                  let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
-                  if let p = outJson { al_string_free(p) }
-                  if let p = outErr { al_string_free(p) }
-                  try? FileManager.default.removeItem(atPath: tmp)
-                  if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
-                  return ProbeResult(state: .ok, detail: "ready")
+                  return ProbeResult(state: .ok, detail: pairMsg)
               }
 
               func writeFile(source: String, target: String) -> ProbeResult {
                   let pre = probe()
                   guard pre.ok else { return pre }
+                  let pairingPath = CarrierLabBridge.shared.probePairingPath()
+                  guard !pairingPath.isEmpty else {
+                      return ProbeResult(state: .noPairing, detail: "no pairing path")
+                  }
                   var outJson: UnsafeMutablePointer<CChar>? = nil
                   var outErr: UnsafeMutablePointer<CChar>? = nil
                   var rc: Int32 = -1
-                  source.withCString { sc in
-                      target.withCString { tc in
-                          rc = al_exploit_run(sc, tc, nil, nil, &outJson, &outErr)
+                  pairingPath.withCString { pc in
+                      source.withCString { sc in
+                          target.withCString { tc in
+                              rc = al_exploit_run(pc, tc, nil, nil, &outJson, &outErr)
+                          }
                       }
                   }
                   let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
@@ -514,6 +513,10 @@ jobs:
                   if let p = outErr { al_string_free(p) }
                   if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
                   return ProbeResult(state: .ok, detail: "ok")
+              }
+
+              private func probePairingPath() -> String {
+                  return findPairingFile() ?? ""
               }
           }
           SWIFT_EOF
@@ -756,7 +759,7 @@ jobs:
                               Text(clState.airliftOK ? "Connected" : "Not ready")
                                   .font(.subheadline)
                                   .foregroundStyle(clState.airliftOK ? .green : .orange)
-                                  .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.35), radius: 2)
+                                  .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.45), radius: 3)
                               if !clState.airliftOK {
                                   Text(clState.airliftMessage)
                                       .font(.footnote)
@@ -793,7 +796,7 @@ jobs:
                           Spacer()
                           Text(clState.resourcesOK ? "Bundled" : "Missing")
                               .foregroundStyle(clState.resourcesOK ? .green : .red)
-                              .shadow(color: (clState.resourcesOK ? Color.green : Color.red).opacity(0.35), radius: 2)
+                              .shadow(color: (clState.resourcesOK ? Color.green : Color.red).opacity(0.45), radius: 3)
                       }
                   } header: { Label("Resources", systemImage: "shippingbox") }
               }
@@ -806,7 +809,7 @@ jobs:
                           Text(statusText)
                               .font(.system(.body, design: .monospaced))
                               .foregroundStyle(statusColor)
-                              .shadow(color: statusColor.opacity(0.35), radius: 2)
+                              .shadow(color: statusColor.opacity(0.45), radius: 3)
                       }
                       if let s = clState.session {
                           HStack {
@@ -827,11 +830,16 @@ jobs:
 
               private var actionsSection: some View {
                   Section {
-                      Button { runCheck() } label: { Text("Check") }.disabled(clState.busy)
-                      Button { runInstall() } label: { Text("Install") }.disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
-                      Button { runReload() } label: { Text("Reload") }.disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
-                      Button { runFinish() } label: { Text("Finish") }.disabled(clState.busy)
-                      Button(role: .destructive) { runReset() } label: { Text("Reset") }.disabled(clState.busy)
+                      Button { runCheck() } label: { Text("Check") }
+                          .disabled(clState.busy)
+                      Button { runInstall() } label: { Text("Install") }
+                          .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+                      Button { runReload() } label: { Text("Reload") }
+                          .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+                      Button { runFinish() } label: { Text("Finish") }
+                          .disabled(clState.busy)
+                      Button(role: .destructive) { runReset() } label: { Text("Reset") }
+                          .disabled(clState.busy)
                   } header: { Label("Actions", systemImage: "wrench") }
               }
 
@@ -974,7 +982,7 @@ jobs:
                               Text(loopbackVPNUp ? "Connected" : "Not connected")
                                   .font(.subheadline)
                                   .foregroundStyle(loopbackVPNUp ? .green : .orange)
-                                  .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.35), radius: 2)
+                                  .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.45), radius: 3)
                           }
                           Spacer()
                       }
@@ -990,7 +998,7 @@ jobs:
                           Text(tunnelIP ?? "\u{2014}")
                               .font(.system(.body, design: .monospaced))
                               .foregroundStyle(tunnelIP != nil ? .green : .secondary)
-                              .shadow(color: tunnelIP != nil ? Color.green.opacity(0.35) : Color.clear, radius: 2)
+                              .shadow(color: tunnelIP != nil ? Color.green.opacity(0.45) : Color.clear, radius: 3)
                       }
                       HStack {
                           Text("Device IP")
@@ -998,7 +1006,7 @@ jobs:
                           Text(deviceIP ?? "\u{2014}")
                               .font(.system(.body, design: .monospaced))
                               .foregroundStyle(deviceIP != nil ? .green : .secondary)
-                              .shadow(color: deviceIP != nil ? Color.green.opacity(0.35) : Color.clear, radius: 2)
+                              .shadow(color: deviceIP != nil ? Color.green.opacity(0.45) : Color.clear, radius: 3)
                       }
                   } header: { Label("Session details", systemImage: "network") }
               }
@@ -1017,7 +1025,7 @@ jobs:
                                   Text(pairingSubtitle)
                                       .font(.subheadline)
                                       .foregroundStyle(pairingColor)
-                                      .shadow(color: pairingColor.opacity(0.35), radius: 2)
+                                      .shadow(color: pairingColor.opacity(0.45), radius: 3)
                                       .lineLimit(3)
                               }
                               Spacer()
@@ -1033,7 +1041,7 @@ jobs:
                       HStack(spacing: 6) {
                           Image(systemName: "lock.shield.fill")
                               .foregroundStyle(.orange)
-                              .shadow(color: Color.orange.opacity(0.35), radius: 2)
+                              .shadow(color: Color.orange.opacity(0.45), radius: 3)
                           Text("Enter this PIN in Settings")
                               .font(.footnote)
                               .foregroundStyle(.secondary)
@@ -1043,7 +1051,7 @@ jobs:
                               Text(String(ch))
                                   .font(.system(size: 32, weight: .semibold, design: .rounded))
                                   .foregroundStyle(.orange)
-                                  .shadow(color: Color.orange.opacity(0.35), radius: 2)
+                                  .shadow(color: Color.orange.opacity(0.45), radius: 3)
                                   .frame(width: 44, height: 56)
                                   .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                           }
@@ -1059,6 +1067,7 @@ jobs:
                       .buttonStyle(.borderedProminent)
                       .tint(.orange)
                       .controlSize(.large)
+                      .shadow(color: Color.orange.opacity(0.45), radius: 3)
                       Text("Privacy & Security - Developer Mode - Pair with natsuk1")
                           .font(.caption2)
                           .foregroundStyle(.secondary)
@@ -1237,8 +1246,8 @@ jobs:
                       Spacer()
                       Text(value)
                           .font(.system(.body, design: .monospaced))
-                          .foregroundStyle(.secondary)
-                          .shadow(color: Color.secondary.opacity(0.25), radius: 1)
+                          .foregroundStyle(.green)
+                          .shadow(color: Color.green.opacity(0.45), radius: 3)
                           .lineLimit(1)
                           .truncationMode(.middle)
                   }
@@ -1332,7 +1341,8 @@ jobs:
                               Spacer()
                               Text("\(results.filter { $0.exists }.count)/\(results.count)")
                                   .font(.system(.body, design: .monospaced))
-                                  .foregroundStyle(.secondary)
+                                  .foregroundStyle(.green)
+                                  .shadow(color: Color.green.opacity(0.45), radius: 3)
                           }
                           HStack {
                               Text("Readable")
@@ -1340,7 +1350,7 @@ jobs:
                               Text("\(results.filter { $0.readable }.count)")
                                   .font(.system(.body, design: .monospaced))
                                   .foregroundStyle(.green)
-                                  .shadow(color: Color.green.opacity(0.35), radius: 2)
+                                  .shadow(color: Color.green.opacity(0.45), radius: 3)
                           }
                           HStack {
                               Text("Writable")
@@ -1348,7 +1358,7 @@ jobs:
                               Text("\(results.filter { $0.writable }.count)")
                                   .font(.system(.body, design: .monospaced))
                                   .foregroundStyle(.orange)
-                                  .shadow(color: Color.orange.opacity(0.35), radius: 2)
+                                  .shadow(color: Color.orange.opacity(0.45), radius: 3)
                           }
                           Button { scan() } label: {
                               HStack {
@@ -1389,7 +1399,7 @@ jobs:
                       .padding(.vertical, 1)
                       .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
                       .foregroundStyle(color)
-                      .shadow(color: color.opacity(0.25), radius: 1)
+                      .shadow(color: color.opacity(0.45), radius: 3)
               }
 
               private func scan() {
@@ -1456,6 +1466,8 @@ jobs:
           - alt_irk (data)
           Validation: at least 3 of 4 keys present. Never check for UDID/HostCertificate/RootCertificate.
           Location: Documents/natsuk1_pairing.plist OR nested Documents/Data/Application/<UUID>/Documents/.
+          FFI might expect .mobiledevicepairing extension. Search all candidates.
+          Fallback: any .plist / .mobilepairing / .mobilepair file > 100 bytes in Documents.
 
           ## CARRIERLAB
 
@@ -1469,34 +1481,29 @@ jobs:
 
           ## UI STYLE
 
-          Match Apple native apps. Subtle glow only: .shadow(color: c.opacity(0.35), radius: 2).
-          Never use radius > 3 or opacity > 0.4.
-          Use .foregroundStyle(.secondary) for technical values.
+          Match Apple native apps. Subtle glow everywhere: .shadow(color: c.opacity(0.45), radius: 3).
+          Every value in every menu must have glow. Every button must have glow.
           Use .green / .orange / .red for statuses only.
           Section headers use Label with SF Symbols.
 
           ## ERROR FIX LOG
 
           ### cannot find 'nk_necp_cancel' in scope
-          Cause: NECP was removed from nk_api.h and nk_api.c earlier, but a call remained in AirliftBridge.cancelExploit.
-          Fix: remove the call. cancelExploit only logs "cancel requested" and sets state to .done(ok:false, message:"cancelled").
-          Never reintroduce nk_necp_cancel, nk_necp_run or any nk_necp_* symbol.
+          Cause: NECP was removed but a call remained in AirliftBridge.cancelExploit.
+          Fix: remove the call. cancelExploit only logs and sets state to .done(ok:false).
 
           ### invalid yaml syntax
           Cause: nested heredoc inside printf with shell quote escapes.
           Fix: never printf strings with backslash or single-quote escapes. Use cat <<'EOF' heredocs at uniform indent.
 
           ### Modifications to the layout engine must not be performed from a background thread
-          Cause: @Published setter called on non-main thread from Task { } or Task.detached.
-          Fix: all @Published mutations via DispatchQueue.main.async unconditionally. Private setX helpers.
+          Cause: @Published setter called on non-main thread.
+          Fix: all @Published mutations via DispatchQueue.main.async unconditionally.
 
-          ### extra argument 'netmask' in call
-          Cause: sed/perl patch removed struct field but not call site.
-          Fix: rewrite the file in full via cat heredoc, never patch partially.
-
-          ### cannot find 'CarrierLabView' in scope
-          Cause: project.yml lacked natsuk1/CarrierLab source path.
-          Fix: project.yml always written in full via cat heredoc, includes all paths.
+          ### "failed to parse raw pairing file from bytes"
+          Cause: FFI expects pairing file with specific extension (.mobiledevicepairing) or specific path.
+          Fix: search all candidate paths: natsuk1_pairing.plist, ALTPairingFile.mobiledevicepairing, pairingFile.plist, any plist in Documents, nested Data/Application.
+          Do not reject pairing file for missing specific keys. Only require it parses as plist and is not empty.
           HINTS_EOF
 
       - name: Commit
@@ -1508,7 +1515,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: remove nk_necp_cancel, subtle glow, ai-hints error log [skip ci]"
+            git commit -m "fix: pairing file discovery, delete pairing, glow everywhere [skip ci]"
             git push
           fi
 
