@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v24-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v24-
+          key: nk-v25-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v25-
 
       - name: Install tools
         run: |
@@ -169,10 +169,10 @@ jobs:
                   ENABLE_ONLY_ACTIVE_RESOURCES: YES
           PROJECT_EOF
 
-      - name: Rewrite AirliftBridge main-thread safe
+      - name: Write AirliftBridge
         run: |
           set -euo pipefail
-          cat > natsuk1/Helpers/AirliftBridge.swift <<'SWIFT_AIRLIFTBRIDGE'
+          cat > natsuk1/Helpers/AirliftBridge.swift <<'SWIFT_EOF'
           import Foundation
           import Combine
 
@@ -219,15 +219,9 @@ jobs:
                   return size > 0
               }
 
-              private func setState(_ s: State) {
-                  DispatchQueue.main.async { self.state = s }
-              }
-              private func setStatus(_ s: String) {
-                  DispatchQueue.main.async { self.pairingStatus = s }
-              }
-              private func setPIN(_ p: String?) {
-                  DispatchQueue.main.async { self.pairPIN = p }
-              }
+              private func setState(_ s: State) { DispatchQueue.main.async { self.state = s } }
+              private func setStatus(_ s: String) { DispatchQueue.main.async { self.pairingStatus = s } }
+              private func setPIN(_ p: String?) { DispatchQueue.main.async { self.pairPIN = p } }
 
               func runPairing() {
                   guard !hasPairing() else {
@@ -308,7 +302,7 @@ jobs:
                   }
                   let t = target
                   let bridge = self
-                  DispatchQueue.main.async { bridge.appendLog("[exploit] path=\(pairingPath) target=\(t)") }
+                  bridge.appendLog("[exploit] path=\(pairingPath) target=\(t)")
                   Task.detached {
                       var outJson: UnsafeMutablePointer<CChar>? = nil
                       var outError: UnsafeMutablePointer<CChar>? = nil
@@ -378,15 +372,14 @@ jobs:
                   }
               }
           }
-          SWIFT_AIRLIFTBRIDGE
+          SWIFT_EOF
 
-      - name: Write CarrierLab sources
+      - name: Write CarrierLabBridge
         run: |
           set -euo pipefail
           mkdir -p natsuk1/CarrierLab
           rm -f natsuk1/CarrierLab/CarrierLabCore.swift
-
-          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'SWIFT_BRIDGE'
+          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'SWIFT_EOF'
           import Foundation
 
           final class CarrierLabBridge: @unchecked Sendable {
@@ -407,8 +400,8 @@ jobs:
                   var message: String {
                       switch state {
                       case .ok: return "ready"
-                      case .noVPN: return "no loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
-                      case .noPairing: return "no pairing file. Open Tools -> Airlift, run Start Pairing."
+                      case .noVPN: return "No loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
+                      case .noPairing: return "No pairing file. Open Tools / Airlift and run Start Pairing."
                       case .pairingInvalid: return detail
                       case .ffiFailed(let s): return s
                       }
@@ -465,20 +458,20 @@ jobs:
                   guard fm.fileExists(atPath: path) else { return (false, "missing") }
                   let attrs = try? fm.attributesOfItem(atPath: path)
                   let size = (attrs?[.size] as? Int) ?? 0
-                  if size < 100 { return (false, "pairing file too small (\(size) bytes). Re-pair in Tools -> Airlift.") }
+                  if size < 100 { return (false, "Pairing file too small (\(size) bytes).") }
                   guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
-                      return (false, "pairing file unreadable")
+                      return (false, "Pairing file unreadable.")
                   }
                   guard let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
                         let dict = obj as? [String: Any] else {
-                      return (false, "pairing file not a plist (\(size) bytes). Re-pair in Tools -> Airlift.")
+                      return (false, "Pairing file not a plist (\(size) bytes).")
                   }
                   var present: [String] = []
                   for k in expectedKeys where dict[k] != nil { present.append(k) }
                   if present.count < 3 {
-                      return (false, "pairing file incomplete: \(present.count) of 4 keys (\(present.joined(separator: ","))). Re-pair in Tools -> Airlift.")
+                      return (false, "Pairing incomplete: \(present.count) of 4 keys.")
                   }
-                  return (true, "pairing ok (\(size) bytes)")
+                  return (true, "Pairing ok (\(size) bytes)")
               }
 
               func probe() -> ProbeResult {
@@ -524,9 +517,12 @@ jobs:
                   return ProbeResult(state: .ok, detail: "ok")
               }
           }
-          SWIFT_BRIDGE
+          SWIFT_EOF
 
-          cat > natsuk1/CarrierLab/CarrierLabState.swift <<'SWIFT_STATE'
+      - name: Write CarrierLabState
+        run: |
+          set -euo pipefail
+          cat > natsuk1/CarrierLab/CarrierLabState.swift <<'SWIFT_EOF'
           import Foundation
           import Combine
 
@@ -547,7 +543,7 @@ jobs:
 
               @Published private(set) var session: Session?
               @Published private(set) var airliftOK: Bool = false
-              @Published private(set) var airliftMessage: String = "checking..."
+              @Published private(set) var airliftMessage: String = "Checking..."
               @Published private(set) var resourcesOK: Bool = false
               @Published private(set) var busy: Bool = false
               @Published private(set) var logText: String = ""
@@ -627,9 +623,12 @@ jobs:
               func backupURL() -> URL { backupDir }
               func rootURL() -> URL { root }
           }
-          SWIFT_STATE
+          SWIFT_EOF
 
-          cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'SWIFT_INSTALLER'
+      - name: Write CarrierLabInstaller
+        run: |
+          set -euo pipefail
+          cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'SWIFT_EOF'
           import Foundation
 
           final class CarrierLabInstaller: @unchecked Sendable {
@@ -728,9 +727,12 @@ jobs:
                   state.clear()
               }
           }
-          SWIFT_INSTALLER
+          SWIFT_EOF
 
-          cat > natsuk1/CarrierLab/CarrierLabView.swift <<'SWIFT_VIEW'
+      - name: Write CarrierLabView
+        run: |
+          set -euo pipefail
+          cat > natsuk1/CarrierLab/CarrierLabView.swift <<'SWIFT_EOF'
           import SwiftUI
 
           struct CarrierLabView: View {
@@ -758,25 +760,25 @@ jobs:
 
               private var airliftSection: some View {
                   Section {
-                      HStack(alignment: .top, spacing: 12) {
-                          Image(systemName: clState.airliftOK ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
-                              .font(.system(size: 22, weight: .semibold))
+                      HStack(spacing: 12) {
+                          Image(systemName: clState.airliftOK ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                              .font(.system(size: 22))
                               .foregroundStyle(clState.airliftOK ? .green : .orange)
-                              .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.7), radius: 5)
-                          VStack(alignment: .leading, spacing: 4) {
-                              Text("Airlift").font(.headline)
+                          VStack(alignment: .leading, spacing: 3) {
+                              Text("Airlift")
                               Text(clState.airliftOK ? "Connected" : "Not ready")
                                   .font(.subheadline)
                                   .foregroundStyle(clState.airliftOK ? .green : .orange)
-                                  .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.7), radius: 4)
-                              Text(clState.airliftMessage)
-                                  .font(.system(size: 11, design: .monospaced))
-                                  .foregroundStyle(.secondary)
-                                  .lineLimit(5)
+                              if !clState.airliftOK {
+                                  Text(clState.airliftMessage)
+                                      .font(.footnote)
+                                      .foregroundStyle(.secondary)
+                                      .lineLimit(4)
+                              }
                           }
                           Spacer()
                       }
-                      .padding(.vertical, 6)
+                      .padding(.vertical, 4)
                   } header: { Label("Airlift", systemImage: "antenna.radiowaves.left.and.right") }
               }
 
@@ -788,7 +790,7 @@ jobs:
                               Label("Pairing is done in Airlift only", systemImage: "info.circle")
                                   .font(.footnote)
                                   .foregroundStyle(.secondary)
-                              Text("CarrierLab never creates a pairing file. Open Tools -> Airlift, run Start Pairing, then return here.")
+                              Text("CarrierLab never creates a pairing file. Open Tools / Airlift, run Start Pairing, then return here.")
                                   .font(.caption)
                                   .foregroundStyle(.secondary)
                           }
@@ -799,15 +801,10 @@ jobs:
               private var resourcesSection: some View {
                   Section {
                       HStack {
-                          Image(systemName: clState.resourcesOK ? "checkmark.seal.fill" : "xmark.seal.fill")
-                              .foregroundStyle(clState.resourcesOK ? .green : .red)
-                              .shadow(color: (clState.resourcesOK ? Color.green : Color.red).opacity(0.7), radius: 5)
-                          Text("CarrierAssets in bundle")
+                          Text("CarrierAssets")
                           Spacer()
-                          Text(clState.resourcesOK ? "ok" : "missing")
-                              .font(.system(size: 12, design: .monospaced))
+                          Text(clState.resourcesOK ? "Bundled" : "Missing")
                               .foregroundStyle(clState.resourcesOK ? .green : .red)
-                              .shadow(color: (clState.resourcesOK ? Color.green : Color.red).opacity(0.7), radius: 5)
                       }
                   } header: { Label("Resources", systemImage: "shippingbox") }
               }
@@ -818,23 +815,21 @@ jobs:
                           Text("Status")
                           Spacer()
                           Text(statusText)
-                              .font(.system(size: 12, design: .monospaced))
+                              .font(.system(.body, design: .monospaced))
                               .foregroundStyle(statusColor)
-                              .shadow(color: statusColor.opacity(0.7), radius: 5)
                       }
                       if let s = clState.session {
                           HStack {
                               Text("Started")
                               Spacer()
                               Text(s.startedAt.formatted())
-                                  .font(.system(size: 11, design: .monospaced))
+                                  .font(.system(.body, design: .monospaced))
                                   .foregroundStyle(.secondary)
                           }
                           if let e = s.lastError {
                               Text(e)
-                                  .font(.system(size: 11, design: .monospaced))
+                                  .font(.footnote)
                                   .foregroundStyle(.red)
-                                  .shadow(color: Color.red.opacity(0.7), radius: 5)
                           }
                       }
                   } header: { Label("CarrierLab", systemImage: "shippingbox") }
@@ -938,12 +933,12 @@ jobs:
                   }
               }
           }
-          SWIFT_VIEW
+          SWIFT_EOF
 
-      - name: Rewrite AirliftView glow
+      - name: Write AirliftView
         run: |
           set -euo pipefail
-          cat > natsuk1/Views/AirliftView.swift <<'SWIFT_AIRLIFTVIEW'
+          cat > natsuk1/Views/AirliftView.swift <<'SWIFT_EOF'
           import SwiftUI
           import UIKit
           import Combine
@@ -955,7 +950,6 @@ jobs:
               @State private var deviceIP: String? = NetworkStatus.deviceIP()
               @State private var copied = false
               @State private var pairedTick = 0
-              @State private var pinPulse = false
 
               private let ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
@@ -981,33 +975,20 @@ jobs:
 
               private var statusSection: some View {
                   Section {
-                      HStack(spacing: 16) {
-                          ZStack {
-                              Circle()
-                                  .fill(loopbackVPNUp ? Color.green.opacity(0.15) : Color.orange.opacity(0.15))
-                                  .frame(width: 72, height: 72)
-                              Image(systemName: loopbackVPNUp ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
-                                  .font(.system(size: 32, weight: .semibold))
-                                  .foregroundStyle(loopbackVPNUp ? .green : .orange)
-                                  .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.7), radius: 6)
-                          }
-                          VStack(alignment: .leading, spacing: 4) {
-                              Text("LocalDevVPN").font(.headline)
+                      HStack(spacing: 12) {
+                          Image(systemName: loopbackVPNUp ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                              .font(.system(size: 22))
+                              .foregroundStyle(loopbackVPNUp ? .green : .orange)
+                          VStack(alignment: .leading, spacing: 3) {
+                              Text("LocalDevVPN")
                               Text(loopbackVPNUp ? "Connected" : "Not connected")
                                   .font(.subheadline)
                                   .foregroundStyle(loopbackVPNUp ? .green : .orange)
-                                  .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.7), radius: 4)
-                              if let t = tunnelIP {
-                                  Text("Tunnel \(t)")
-                                      .font(.system(size: 12, design: .monospaced))
-                                      .foregroundStyle(.green)
-                                      .shadow(color: Color.green.opacity(0.7), radius: 4)
-                              }
                           }
                           Spacer()
                       }
-                      .padding(.vertical, 8)
-                  } header: { Label("Current status", systemImage: "shield.lefthalf.filled") }
+                      .padding(.vertical, 4)
+                  } header: { Label("VPN", systemImage: "shield.lefthalf.filled") }
               }
 
               private var sessionSection: some View {
@@ -1016,17 +997,15 @@ jobs:
                           Text("Tunnel IP")
                           Spacer()
                           Text(tunnelIP ?? "\u{2014}")
-                              .font(.system(size: 12, design: .monospaced))
+                              .font(.system(.body, design: .monospaced))
                               .foregroundStyle(tunnelIP != nil ? .green : .secondary)
-                              .shadow(color: tunnelIP != nil ? Color.green.opacity(0.7) : Color.clear, radius: 4)
                       }
                       HStack {
                           Text("Device IP")
                           Spacer()
                           Text(deviceIP ?? "\u{2014}")
-                              .font(.system(size: 12, design: .monospaced))
+                              .font(.system(.body, design: .monospaced))
                               .foregroundStyle(deviceIP != nil ? .green : .secondary)
-                              .shadow(color: deviceIP != nil ? Color.green.opacity(0.7) : Color.clear, radius: 4)
                       }
                   } header: { Label("Session details", systemImage: "network") }
               }
@@ -1036,104 +1015,73 @@ jobs:
                       if let pin = airlift.pairPIN {
                           pinCard(pin: pin)
                       } else {
-                          HStack(spacing: 16) {
-                              ZStack {
-                                  Circle()
-                                      .fill(pairingColor.opacity(0.15))
-                                      .frame(width: 72, height: 72)
-                                  Image(systemName: pairingIcon)
-                                      .font(.system(size: 32, weight: .semibold))
-                                      .foregroundStyle(pairingColor)
-                                      .shadow(color: pairingColor.opacity(0.7), radius: 6)
-                              }
-                              VStack(alignment: .leading, spacing: 4) {
-                                  Text(pairingTitle).font(.headline)
+                          HStack(spacing: 12) {
+                              Image(systemName: pairingIcon)
+                                  .font(.system(size: 22))
+                                  .foregroundStyle(pairingColor)
+                              VStack(alignment: .leading, spacing: 3) {
+                                  Text(pairingTitle)
                                   Text(pairingSubtitle)
                                       .font(.subheadline)
                                       .foregroundStyle(pairingColor)
-                                      .shadow(color: pairingColor.opacity(0.5), radius: 3)
                                       .lineLimit(3)
                               }
                               Spacer()
                           }
-                          .padding(.vertical, 8)
+                          .padding(.vertical, 4)
                       }
                   } header: { Label("Pairing", systemImage: "link.circle") }
               }
 
               @ViewBuilder
               private func pinCard(pin: String) -> some View {
-                  VStack(spacing: 14) {
-                      HStack(spacing: 8) {
+                  VStack(alignment: .leading, spacing: 14) {
+                      HStack(spacing: 6) {
                           Image(systemName: "lock.shield.fill")
                               .foregroundStyle(.orange)
-                              .shadow(color: Color.orange.opacity(0.75), radius: 5)
                           Text("Enter this PIN in Settings")
                               .font(.footnote)
                               .foregroundStyle(.secondary)
-                          Spacer()
                       }
-                      HStack(spacing: 12) {
+                      HStack(spacing: 10) {
                           ForEach(Array(pin.enumerated()), id: \.offset) { _, ch in
                               Text(String(ch))
-                                  .font(.system(size: 34, weight: .black, design: .rounded))
+                                  .font(.system(size: 32, weight: .semibold, design: .rounded))
                                   .foregroundStyle(.orange)
-                                  .shadow(color: Color.orange.opacity(pinPulse ? 0.85 : 0.45), radius: pinPulse ? 10 : 5)
-                                  .frame(width: 46, height: 60)
+                                  .frame(width: 44, height: 56)
                                   .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                           }
                           Spacer()
-                      }
-                      .onAppear {
-                          withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
-                              pinPulse.toggle()
-                          }
                       }
                       Button {
                           if let url = URL(string: UIApplication.openSettingsURLString) {
                               UIApplication.shared.open(url)
                           }
                       } label: {
-                          HStack {
-                              Image(systemName: "gear")
-                              Text("Open Settings")
-                          }
-                          .frame(maxWidth: .infinity)
+                          Text("Open Settings").frame(maxWidth: .infinity)
                       }
                       .buttonStyle(.borderedProminent)
                       .tint(.orange)
                       .controlSize(.large)
-                      Text("Privacy & Security -> Developer Mode -> Pair with natsuk1")
+                      Text("Privacy & Security - Developer Mode - Pair with natsuk1")
                           .font(.caption2)
                           .foregroundStyle(.secondary)
-                          .multilineTextAlignment(.center)
                   }
-                  .padding(.vertical, 8)
+                  .padding(.vertical, 6)
               }
 
               private var pairingButtonsSection: some View {
                   Section {
                       Button { airlift.runPairing() } label: {
-                          HStack {
-                              Image(systemName: isPaired ? "checkmark.circle.fill" : "link.circle")
-                              Text(isPaired ? "Already Paired" : "Start Pairing")
-                              Spacer()
-                              if isPairing { ProgressView() }
-                          }
+                          Text(isPaired ? "Already Paired" : "Start Pairing")
                       }
                       .disabled(isPairing || isPaired)
                       Button(role: .destructive) { airlift.cancelPairing() } label: {
-                          HStack {
-                              Image(systemName: "xmark.circle")
-                              Text("Cancel Pairing")
-                          }
+                          Text("Cancel Pairing")
                       }
                       .disabled(!isPairing)
                       Button(role: .destructive) { airlift.deletePairing(); pairedTick &+= 1 } label: {
-                          HStack {
-                              Image(systemName: "trash")
-                              Text("Delete Pairing")
-                          }
+                          Text("Delete Pairing")
                       }
                       .disabled(!isPaired)
                   }
@@ -1146,7 +1094,7 @@ jobs:
                           Spacer()
                           TextField("/var/mobile/Library/SpringBoard", text: Binding(
                               get: { airlift.target }, set: { airlift.target = $0 }))
-                              .font(.system(size: 12, design: .monospaced))
+                              .font(.system(.footnote, design: .monospaced))
                               .multilineTextAlignment(.trailing)
                               .autocorrectionDisabled()
                               .textInputAutocapitalization(.never)
@@ -1158,7 +1106,6 @@ jobs:
                   Section {
                       Button { airlift.runExploit() } label: {
                           HStack {
-                              Image(systemName: "bolt.fill")
                               Text("Run Exploit")
                               Spacer()
                               if airlift.state == .running { ProgressView() }
@@ -1166,10 +1113,7 @@ jobs:
                       }
                       .disabled(airlift.state == .running || !loopbackVPNUp || !isPaired)
                       Button(role: .destructive) { airlift.cancelExploit() } label: {
-                          HStack {
-                              Image(systemName: "stop.circle")
-                              Text("Cancel Exploit")
-                          }
+                          Text("Cancel Exploit")
                       }
                       .disabled(airlift.state != .running)
                   } header: { Label("Exploit", systemImage: "cpu") }
@@ -1198,16 +1142,10 @@ jobs:
                               copied = true
                               DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
                           } label: {
-                              HStack {
-                                  Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                                  Text(copied ? "Copied!" : "Copy All")
-                              }
+                              Text(copied ? "Copied" : "Copy All")
                           }
                           Button(role: .destructive) { airlift.clearLog() } label: {
-                              HStack {
-                                  Image(systemName: "trash")
-                                  Text("Clear")
-                              }
+                              Text("Clear")
                           }
                       } header: { Label("Log Actions", systemImage: "document.on.document") }
                   }
@@ -1240,9 +1178,9 @@ jobs:
               }
 
               private var pairingIcon: String {
-                  if isPaired { return "checkmark.seal.fill" }
+                  if isPaired { return "checkmark.circle.fill" }
                   if isPairing { return "link.circle.fill" }
-                  if case .done(false, _) = airlift.state { return "xmark.seal.fill" }
+                  if case .done(false, _) = airlift.state { return "xmark.circle.fill" }
                   return "link.circle"
               }
 
@@ -1262,12 +1200,12 @@ jobs:
                   return "Open Settings to pair"
               }
           }
-          SWIFT_AIRLIFTVIEW
+          SWIFT_EOF
 
-      - name: Write DeviceInfoView glow
+      - name: Write DeviceInfoView
         run: |
           set -euo pipefail
-          cat > natsuk1/Views/DeviceInfoView.swift <<'SWIFT_DEVICEINFO'
+          cat > natsuk1/Views/DeviceInfoView.swift <<'SWIFT_EOF'
           import SwiftUI
           import UIKit
 
@@ -1307,8 +1245,7 @@ jobs:
                       Spacer()
                       Text(value)
                           .font(.system(.body, design: .monospaced))
-                          .foregroundStyle(.green)
-                          .shadow(color: Color.green.opacity(0.6), radius: 4)
+                          .foregroundStyle(.secondary)
                           .lineLimit(1)
                           .truncationMode(.middle)
                   }
@@ -1358,12 +1295,12 @@ jobs:
                   return "\(Int(t) / 3600)h \((Int(t) % 3600) / 60)m"
               }
           }
-          SWIFT_DEVICEINFO
+          SWIFT_EOF
 
-      - name: Write PathAccessView glow
+      - name: Write PathAccessView
         run: |
           set -euo pipefail
-          cat > natsuk1/Views/PathAccessView.swift <<'SWIFT_PATHACCESS'
+          cat > natsuk1/Views/PathAccessView.swift <<'SWIFT_EOF'
           import SwiftUI
           import UIKit
           import Darwin
@@ -1401,9 +1338,27 @@ jobs:
               var body: some View {
                   List {
                       Section {
-                          HStack { Text("Paths"); Spacer(); Text("\(results.filter { $0.exists }.count)/\(results.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.green).shadow(color: Color.green.opacity(0.6), radius: 4) }
-                          HStack { Text("Readable"); Spacer(); Text("\(results.filter { $0.readable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.green).shadow(color: Color.green.opacity(0.6), radius: 4) }
-                          HStack { Text("Writable"); Spacer(); Text("\(results.filter { $0.writable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.orange).shadow(color: Color.orange.opacity(0.6), radius: 4) }
+                          HStack {
+                              Text("Paths")
+                              Spacer()
+                              Text("\(results.filter { $0.exists }.count)/\(results.count)")
+                                  .font(.system(.body, design: .monospaced))
+                                  .foregroundStyle(.secondary)
+                          }
+                          HStack {
+                              Text("Readable")
+                              Spacer()
+                              Text("\(results.filter { $0.readable }.count)")
+                                  .font(.system(.body, design: .monospaced))
+                                  .foregroundStyle(.secondary)
+                          }
+                          HStack {
+                              Text("Writable")
+                              Spacer()
+                              Text("\(results.filter { $0.writable }.count)")
+                                  .font(.system(.body, design: .monospaced))
+                                  .foregroundStyle(.secondary)
+                          }
                           Button { scan() } label: {
                               HStack {
                                   Text(busy ? "Scanning..." : "Run Scan")
@@ -1415,8 +1370,10 @@ jobs:
                       Section {
                           ForEach(results) { r in
                               VStack(alignment: .leading, spacing: 4) {
-                                  Text(r.path).font(.system(size: 11, design: .monospaced))
-                                      .foregroundStyle(r.exists ? .primary : .secondary).lineLimit(2)
+                                  Text(r.path)
+                                      .font(.system(.footnote, design: .monospaced))
+                                      .foregroundStyle(r.exists ? .primary : .secondary)
+                                      .lineLimit(2)
                                   HStack(spacing: 6) {
                                       badge(r.exists ? "exists" : "missing", color: r.exists ? .green : .red)
                                       if r.isDirectory { badge("dir", color: .blue) }
@@ -1435,11 +1392,12 @@ jobs:
               }
 
               private func badge(_ text: String, color: Color) -> some View {
-                  Text(text).font(.system(size: 9, design: .monospaced))
-                      .padding(.horizontal, 4).padding(.vertical, 1)
-                      .background(color.opacity(0.18), in: RoundedRectangle(cornerRadius: 3))
+                  Text(text)
+                      .font(.system(size: 9, design: .monospaced))
+                      .padding(.horizontal, 4)
+                      .padding(.vertical, 1)
+                      .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
                       .foregroundStyle(color)
-                      .shadow(color: color.opacity(0.6), radius: 3)
               }
 
               private func scan() {
@@ -1466,70 +1424,82 @@ jobs:
                   }
               }
           }
-          SWIFT_PATHACCESS
+          SWIFT_EOF
 
-      - name: Update ai-hints
+      - name: Append ai-hints
+        run: |
+          set -euo pipefail
+          cat >> docs/ai-hints.md <<'HINTS_EOF'
+
+          ## INTERNET USAGE
+
+          Use web search on EVERY user message, unconditionally, without being asked.
+          This is a hard rule. Not "when needed". Always. Every message.
+          If web search is unavailable, state that at the top of the reply.
+
+          ## YAML SYNTAX RULES
+
+          - Never use tabs. Only spaces.
+          - Inside a run block, every content line must share the same leading indent, more than the key itself.
+          - Never put content at column 0 inside a run block.
+          - Heredoc markers must be at the same indent level as the rest of the block.
+          - Prefer whole-file writes via cat heredoc. Never sed or perl patch project.yml.
+          - Validate with python3 -c "import yaml; yaml.safe_load(open(path))".
+          - One file per run step. Many small steps beat one huge step.
+          - No nested heredocs. No shell quote escapes inside printf. No printf with embedded single quotes.
+
+          ## MAIN THREAD RULE
+
+          - All @Published mutations MUST go through DispatchQueue.main.async unconditionally.
+          - Never check Thread.isMainThread. Always dispatch main.async. Double dispatch is safe.
+          - Never use Task or Task.detached in a view or state class without main.async wrap for @Published.
+          - Crash "Modifications to the layout engine must not be performed from a background thread" means a @Published setter ran on a non-main thread.
+          - AirliftBridge.runPairing, runExploit, respring, CarrierLabState all use main.async for every state update.
+
+          ## PAIRING FILE FORMAT
+
+          AirLift pairing plist keys:
+          - public_key (data)
+          - private_key (data)
+          - identifier (string)
+          - alt_irk (data)
+          Validation: at least 3 of 4 keys present. Never check for UDID/HostCertificate/RootCertificate.
+          Location: Documents/natsuk1_pairing.plist OR nested Documents/Data/Application/<UUID>/Documents/.
+
+          ## CARRIERLAB
+
+          iOS port of MTS_CARRIER_FORUM core logic.
+          - CarrierAssets bundled under Resources/CarrierAssets.
+          - check dispatches to global queue, updates state via main.async.
+          - install writes CarrierLab.bundle to BundleLinks and Docomo_jp.bundle to carrier root.
+          - reload re-writes Docomo_jp.bundle only.
+          - reset clears session, does not revert the phone.
+          - view auto-refreshes every 5 s silent, no log spam on silent refresh.
+
+          ## UI STYLE
+
+          Match Apple native apps. No neon glow. No .shadow for status.
+          Use .foregroundStyle(.secondary) for values, .green / .orange / .red for statuses only.
+          Use .font(.system(.body, design: .monospaced)) for technical values.
+          Section headers use Label with SF Symbols.
+          HINTS_EOF
+
+      - name: Commit
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          if [ -f docs/ai-hints.md ] && ! grep -q '## INTERNET USAGE' docs/ai-hints.md; then
-            printf '\n## INTERNET USAGE\n\n' >> docs/ai-hints.md
-            printf 'Use web search on EVERY user message, unconditionally, without being asked.\n' >> docs/ai-hints.md
-            printf 'This is a hard rule. Not "when needed". Always. Every message.\n' >> docs/ai-hints.md
-            printf 'If web search is unavailable, state that at the top of the reply.\n' >> docs/ai-hints.md
-          fi
-
-          if [ -f docs/ai-hints.md ] && ! grep -q '## YAML SYNTAX RULES' docs/ai-hints.md; then
-            printf '\n## YAML SYNTAX RULES\n\n' >> docs/ai-hints.md
-            printf -- '- Never use tabs. Only spaces.\n' >> docs/ai-hints.md
-            printf -- '- Inside run: | all content must share the same leading indent, more than the key itself.\n' >> docs/ai-hints.md
-            printf -- '- Never put content at column 0 inside a run block.\n' >> docs/ai-hints.md
-            printf -- '- Heredoc markers must be at the same indent level as the rest of the block.\n' >> docs/ai-hints.md
-            printf -- '- Use cat > file <<'"'"'EOF'"'"' for whole-file writes. Never sed/perl patch project.yml.\n' >> docs/ai-hints.md
-            printf -- '- Quote strings containing colons, dashes at start, or special chars.\n' >> docs/ai-hints.md
-            printf -- '- GitHub context: ${{ }}. Shell env: $VAR or ${VAR}.\n' >> docs/ai-hints.md
-            printf -- '- Validate with: python3 -c "import yaml; yaml.safe_load(open(path))"\n' >> docs/ai-hints.md
-          fi
-
-          if [ -f docs/ai-hints.md ] && ! grep -q '## MAIN THREAD RULE' docs/ai-hints.md; then
-            printf '\n## MAIN THREAD RULE\n\n' >> docs/ai-hints.md
-            printf -- '- All @Published mutations MUST go through DispatchQueue.main.async unconditionally.\n' >> docs/ai-hints.md
-            printf -- '- Never check Thread.isMainThread. Always dispatch main.async. Double dispatch is safe.\n' >> docs/ai-hints.md
-            printf -- '- Task { } without MainActor runs on arbitrary thread. Never mutate @Published inside it without main.async wrap.\n' >> docs/ai-hints.md
-            printf -- '- AirliftBridge.runPairing, runExploit, respring all use main.async for state updates.\n' >> docs/ai-hints.md
-            printf -- '- Crash signature "Modifications to the layout engine must not be performed from a background thread" means @Published setter on non-main thread.\n' >> docs/ai-hints.md
-          fi
-
-          if [ -f docs/ai-hints.md ] && ! grep -q '## PAIRING FILE FORMAT' docs/ai-hints.md; then
-            printf '\n## PAIRING FILE FORMAT\n\n' >> docs/ai-hints.md
-            printf 'AirLift pairing plist keys: public_key, private_key, identifier, alt_irk.\n' >> docs/ai-hints.md
-            printf 'Validation: >=3 of 4 keys. Never check for UDID/HostCertificate/RootCertificate.\n' >> docs/ai-hints.md
-            printf 'Location: Documents/natsuk1_pairing.plist OR nested Data/Application/<UUID>/Documents/.\n' >> docs/ai-hints.md
-          fi
-
-          if [ -f docs/ai-hints.md ] && ! grep -q '## CARRIERLAB' docs/ai-hints.md; then
-            printf '\n## CARRIERLAB\n\n' >> docs/ai-hints.md
-            printf 'iOS port of MTS_CARRIER_FORUM core logic.\n\n' >> docs/ai-hints.md
-            printf -- '- CarrierAssets bundled under Resources/CarrierAssets.\n' >> docs/ai-hints.md
-            printf -- '- check dispatches to global queue, updates state via main.async.\n' >> docs/ai-hints.md
-            printf -- '- install writes CarrierLab.bundle and Docomo_jp.bundle via al_exploit_run.\n' >> docs/ai-hints.md
-            printf -- '- reload re-writes Docomo_jp.bundle only.\n' >> docs/ai-hints.md
-            printf -- '- reset clears session, does not revert the phone.\n' >> docs/ai-hints.md
-            printf -- '- view auto-refreshes every 5 s silent, no log spam on silent refresh.\n' >> docs/ai-hints.md
-          fi
-
           git add -A
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: AirliftBridge main-thread, glow everywhere, ai-hints rules [skip ci]"
+            git commit -m "fix: main-thread AirliftBridge, Apple-style UI [skip ci]"
             git push
           fi
 
       - name: Generate project
         run: |
+          set -euo pipefail
           test -d natsuk1/Resources/CarrierAssets/CarrierLab.bundle
           test -f natsuk1/Resources/CarrierAssets/CarrierLab.bundle/carrier.plist
           test -f natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/carrier.plist
@@ -1571,9 +1541,7 @@ jobs:
           BIN="$APP/natsuk1"
           ldid -Snatsuk1/Resources/natsuk1.entitlements "$BIN"
           xcrun strip -S -x "$BIN" || true
-          find "$APP" \( -name '*.dSYM' -o -name '*.swiftmodule' \
-                       -o -name '*.swiftdoc' -o -name '*.swiftsourceinfo' \) \
-                -exec rm -rf {} + 2>/dev/null || true
+          find "$APP" \( -name '*.dSYM' -o -name '*.swiftmodule' -o -name '*.swiftdoc' -o -name '*.swiftsourceinfo' \) -exec rm -rf {} + 2>/dev/null || true
           xattr -cr "$APP" || true
           rm -rf Payload natsuk1.ipa
           mkdir -p Payload
@@ -1582,8 +1550,7 @@ jobs:
           rm -rf Payload
           SIZE=$(stat -f%z natsuk1.ipa)
           echo "IPA bytes $SIZE"
-          gh release view development >/dev/null 2>&1 \
-            && gh release delete development --yes --cleanup-tag || true
+          gh release view development >/dev/null 2>&1 && gh release delete development --yes --cleanup-tag || true
           R="${{ github.repository }}"
           IPA="https://github.com/$R/releases/download/development/natsuk1.ipa"
           NOTES="natsuk1 v22.0 ($((SIZE/1024)) KB)
