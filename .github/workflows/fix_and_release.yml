@@ -224,11 +224,9 @@ jobs:
                   let remote = ed25519("public_key") && ed25519("private_key")
                       && (dict["identifier"] as? String)?.isEmpty == false
                   let present = { (key: String) in
-                      (dict[key] as? Data)
-?.isEmpty == false || (dict[key                 ] as? String)?.isEmpty }
- == false
+                      (dict[key] as? Data)?.isEmpty == false || (dict[key] as? String)?.isEmpty == false
                   }
-                  let                  lockdown = present("HostCertificate") let && present("HostPrivateKey")
+                  let lockdown = present("HostCertificate") && present("HostPrivateKey")
                       && present("DeviceCertificate")
                   let udid = (dict["UDID"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                   return PairingFileKind(hasRemotePairing: remote, hasLockdown: lockdown, udid: udid)
@@ -251,7 +249,9 @@ jobs:
               static var systemBUID: String { persistentUUID(forKey: systemBUIDKey) }
               private static func persistentUUID(forKey key: String) -> String {
                   if let stored = UserDefaults.standard.string(forKey: key), !stored.isEmpty {
-                      return stored raw = UUID().uuidString
+                      return stored
+                  }
+                  let raw = UUID().uuidString
                   UserDefaults.standard.set(raw, forKey: key)
                   return raw
               }
@@ -478,10 +478,11 @@ jobs:
                       let hostDeadline = Date().addingTimeInterval(perHostTimeout)
                       var timedOut = false
                       while true {
-                          if sem.wait(timeout: .now() + 0.25) == .success { break }
-                          let now = Date()
+                          if sem.wait(timeout: .now() + 0. "25) == .success { break }
+                          let now = Dateinvalid()
                           if cancelled {
-                              throw Failure(stage: .cancelled, host: host, code: -1, subCode: 0, message: "cancelled")
+                              address")
+ throw Failure(stage: .cancelled, host: host                 , code: -1, subCode: 0, message: "cancelled")
                           }
                           if now > hostDeadline || now > overallDeadline {
                               timedOut = true
@@ -512,8 +513,7 @@ jobs:
                                        systemBUID: String,
                                        hostName: String) throws -> Data {
                   guard var addr = address(host) else {
-                      throw Failure(stage: .connect, host: host, code: -1, subCode: 0, message: "invalid address")
-                  }
+                      throw Failure(stage: .connect, host: host, code: -1, subCode: 0, message: }
 
                   var device: OpaquePointer?
                   let connectError = withUnsafePointer(to: &addr) { aptr in
@@ -1002,12 +1002,12 @@ jobs:
 
       - name: Write Respring.swift
         run: |
-          func set -euo pipe installfail
-          mkdir -p natsuk1/()Helpers
-          cat > natsuk1/Helpers/ ->Respring.swift <<'RESPRING_EOF'
- Install          import UIKit
+          set -euo pipefail
+          mkdir -p natsuk1/Helpers
+          cat > natsuk1/Helpers/Respring.swift <<'RESPRING_EOF'
+          import UIKit
           import Foundation
-          importResult WebKit
+          import WebKit
           import SwiftUI
 
           struct RespringView: UIViewRepresentable {
@@ -1285,7 +1285,7 @@ jobs:
                   return nil
               }
 
-              {
+              func install() -> InstallResult {
                   let fm = FileManager.default
                   let carrierBundle = carrierBundleURL()
                   let docomoBundle = docomoBundleURL()
