@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v25-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v25-
+          key: nk-v26-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v26-
 
       - name: Install tools
         run: |
@@ -326,7 +326,6 @@ jobs:
               }
 
               func cancelExploit() {
-                  nk_necp_cancel()
                   appendLog("[exploit] cancel requested")
                   setState(.done(ok: false, message: "cancelled"))
               }
@@ -374,7 +373,7 @@ jobs:
           }
           SWIFT_EOF
 
-      - name: Write CarrierLabBridge
+      - name: Write CarrierLab sources
         run: |
           set -euo pipefail
           mkdir -p natsuk1/CarrierLab
@@ -518,10 +517,6 @@ jobs:
               }
           }
           SWIFT_EOF
-
-      - name: Write CarrierLabState
-        run: |
-          set -euo pipefail
           cat > natsuk1/CarrierLab/CarrierLabState.swift <<'SWIFT_EOF'
           import Foundation
           import Combine
@@ -624,10 +619,6 @@ jobs:
               func rootURL() -> URL { root }
           }
           SWIFT_EOF
-
-      - name: Write CarrierLabInstaller
-        run: |
-          set -euo pipefail
           cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'SWIFT_EOF'
           import Foundation
 
@@ -728,10 +719,6 @@ jobs:
               }
           }
           SWIFT_EOF
-
-      - name: Write CarrierLabView
-        run: |
-          set -euo pipefail
           cat > natsuk1/CarrierLab/CarrierLabView.swift <<'SWIFT_EOF'
           import SwiftUI
 
@@ -769,6 +756,7 @@ jobs:
                               Text(clState.airliftOK ? "Connected" : "Not ready")
                                   .font(.subheadline)
                                   .foregroundStyle(clState.airliftOK ? .green : .orange)
+                                  .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.35), radius: 2)
                               if !clState.airliftOK {
                                   Text(clState.airliftMessage)
                                       .font(.footnote)
@@ -805,6 +793,7 @@ jobs:
                           Spacer()
                           Text(clState.resourcesOK ? "Bundled" : "Missing")
                               .foregroundStyle(clState.resourcesOK ? .green : .red)
+                              .shadow(color: (clState.resourcesOK ? Color.green : Color.red).opacity(0.35), radius: 2)
                       }
                   } header: { Label("Resources", systemImage: "shippingbox") }
               }
@@ -817,6 +806,7 @@ jobs:
                           Text(statusText)
                               .font(.system(.body, design: .monospaced))
                               .foregroundStyle(statusColor)
+                              .shadow(color: statusColor.opacity(0.35), radius: 2)
                       }
                       if let s = clState.session {
                           HStack {
@@ -935,7 +925,7 @@ jobs:
           }
           SWIFT_EOF
 
-      - name: Write AirliftView
+      - name: Write Views
         run: |
           set -euo pipefail
           cat > natsuk1/Views/AirliftView.swift <<'SWIFT_EOF'
@@ -984,6 +974,7 @@ jobs:
                               Text(loopbackVPNUp ? "Connected" : "Not connected")
                                   .font(.subheadline)
                                   .foregroundStyle(loopbackVPNUp ? .green : .orange)
+                                  .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.35), radius: 2)
                           }
                           Spacer()
                       }
@@ -999,6 +990,7 @@ jobs:
                           Text(tunnelIP ?? "\u{2014}")
                               .font(.system(.body, design: .monospaced))
                               .foregroundStyle(tunnelIP != nil ? .green : .secondary)
+                              .shadow(color: tunnelIP != nil ? Color.green.opacity(0.35) : Color.clear, radius: 2)
                       }
                       HStack {
                           Text("Device IP")
@@ -1006,6 +998,7 @@ jobs:
                           Text(deviceIP ?? "\u{2014}")
                               .font(.system(.body, design: .monospaced))
                               .foregroundStyle(deviceIP != nil ? .green : .secondary)
+                              .shadow(color: deviceIP != nil ? Color.green.opacity(0.35) : Color.clear, radius: 2)
                       }
                   } header: { Label("Session details", systemImage: "network") }
               }
@@ -1024,6 +1017,7 @@ jobs:
                                   Text(pairingSubtitle)
                                       .font(.subheadline)
                                       .foregroundStyle(pairingColor)
+                                      .shadow(color: pairingColor.opacity(0.35), radius: 2)
                                       .lineLimit(3)
                               }
                               Spacer()
@@ -1039,6 +1033,7 @@ jobs:
                       HStack(spacing: 6) {
                           Image(systemName: "lock.shield.fill")
                               .foregroundStyle(.orange)
+                              .shadow(color: Color.orange.opacity(0.35), radius: 2)
                           Text("Enter this PIN in Settings")
                               .font(.footnote)
                               .foregroundStyle(.secondary)
@@ -1048,6 +1043,7 @@ jobs:
                               Text(String(ch))
                                   .font(.system(size: 32, weight: .semibold, design: .rounded))
                                   .foregroundStyle(.orange)
+                                  .shadow(color: Color.orange.opacity(0.35), radius: 2)
                                   .frame(width: 44, height: 56)
                                   .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                           }
@@ -1201,10 +1197,6 @@ jobs:
               }
           }
           SWIFT_EOF
-
-      - name: Write DeviceInfoView
-        run: |
-          set -euo pipefail
           cat > natsuk1/Views/DeviceInfoView.swift <<'SWIFT_EOF'
           import SwiftUI
           import UIKit
@@ -1246,6 +1238,7 @@ jobs:
                       Text(value)
                           .font(.system(.body, design: .monospaced))
                           .foregroundStyle(.secondary)
+                          .shadow(color: Color.secondary.opacity(0.25), radius: 1)
                           .lineLimit(1)
                           .truncationMode(.middle)
                   }
@@ -1296,10 +1289,6 @@ jobs:
               }
           }
           SWIFT_EOF
-
-      - name: Write PathAccessView
-        run: |
-          set -euo pipefail
           cat > natsuk1/Views/PathAccessView.swift <<'SWIFT_EOF'
           import SwiftUI
           import UIKit
@@ -1350,14 +1339,16 @@ jobs:
                               Spacer()
                               Text("\(results.filter { $0.readable }.count)")
                                   .font(.system(.body, design: .monospaced))
-                                  .foregroundStyle(.secondary)
+                                  .foregroundStyle(.green)
+                                  .shadow(color: Color.green.opacity(0.35), radius: 2)
                           }
                           HStack {
                               Text("Writable")
                               Spacer()
                               Text("\(results.filter { $0.writable }.count)")
                                   .font(.system(.body, design: .monospaced))
-                                  .foregroundStyle(.secondary)
+                                  .foregroundStyle(.orange)
+                                  .shadow(color: Color.orange.opacity(0.35), radius: 2)
                           }
                           Button { scan() } label: {
                               HStack {
@@ -1398,6 +1389,7 @@ jobs:
                       .padding(.vertical, 1)
                       .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
                       .foregroundStyle(color)
+                      .shadow(color: color.opacity(0.25), radius: 1)
               }
 
               private func scan() {
@@ -1444,9 +1436,9 @@ jobs:
           - Never put content at column 0 inside a run block.
           - Heredoc markers must be at the same indent level as the rest of the block.
           - Prefer whole-file writes via cat heredoc. Never sed or perl patch project.yml.
+          - Never use printf with embedded single quotes or backslash escapes in a run block.
+          - One file per heredoc. Multiple heredocs in one run step are allowed if indent is uniform.
           - Validate with python3 -c "import yaml; yaml.safe_load(open(path))".
-          - One file per run step. Many small steps beat one huge step.
-          - No nested heredocs. No shell quote escapes inside printf. No printf with embedded single quotes.
 
           ## MAIN THREAD RULE
 
@@ -1454,7 +1446,6 @@ jobs:
           - Never check Thread.isMainThread. Always dispatch main.async. Double dispatch is safe.
           - Never use Task or Task.detached in a view or state class without main.async wrap for @Published.
           - Crash "Modifications to the layout engine must not be performed from a background thread" means a @Published setter ran on a non-main thread.
-          - AirliftBridge.runPairing, runExploit, respring, CarrierLabState all use main.async for every state update.
 
           ## PAIRING FILE FORMAT
 
@@ -1478,10 +1469,34 @@ jobs:
 
           ## UI STYLE
 
-          Match Apple native apps. No neon glow. No .shadow for status.
-          Use .foregroundStyle(.secondary) for values, .green / .orange / .red for statuses only.
-          Use .font(.system(.body, design: .monospaced)) for technical values.
+          Match Apple native apps. Subtle glow only: .shadow(color: c.opacity(0.35), radius: 2).
+          Never use radius > 3 or opacity > 0.4.
+          Use .foregroundStyle(.secondary) for technical values.
+          Use .green / .orange / .red for statuses only.
           Section headers use Label with SF Symbols.
+
+          ## ERROR FIX LOG
+
+          ### cannot find 'nk_necp_cancel' in scope
+          Cause: NECP was removed from nk_api.h and nk_api.c earlier, but a call remained in AirliftBridge.cancelExploit.
+          Fix: remove the call. cancelExploit only logs "cancel requested" and sets state to .done(ok:false, message:"cancelled").
+          Never reintroduce nk_necp_cancel, nk_necp_run or any nk_necp_* symbol.
+
+          ### invalid yaml syntax
+          Cause: nested heredoc inside printf with shell quote escapes.
+          Fix: never printf strings with backslash or single-quote escapes. Use cat <<'EOF' heredocs at uniform indent.
+
+          ### Modifications to the layout engine must not be performed from a background thread
+          Cause: @Published setter called on non-main thread from Task { } or Task.detached.
+          Fix: all @Published mutations via DispatchQueue.main.async unconditionally. Private setX helpers.
+
+          ### extra argument 'netmask' in call
+          Cause: sed/perl patch removed struct field but not call site.
+          Fix: rewrite the file in full via cat heredoc, never patch partially.
+
+          ### cannot find 'CarrierLabView' in scope
+          Cause: project.yml lacked natsuk1/CarrierLab source path.
+          Fix: project.yml always written in full via cat heredoc, includes all paths.
           HINTS_EOF
 
       - name: Commit
@@ -1493,7 +1508,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: main-thread AirliftBridge, Apple-style UI [skip ci]"
+            git commit -m "fix: remove nk_necp_cancel, subtle glow, ai-hints error log [skip ci]"
             git push
           fi
 
@@ -1504,6 +1519,7 @@ jobs:
           test -f natsuk1/Resources/CarrierAssets/CarrierLab.bundle/carrier.plist
           test -f natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/carrier.plist
           grep -q 'CarrierAssets' project.yml
+          grep -q 'nk_necp_cancel' natsuk1/Helpers/AirliftBridge.swift && exit 1 || true
           rm -rf natsuk1.xcodeproj
           xcodegen generate
 
