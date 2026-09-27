@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v18-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v18-
+          key: nk-v20-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v20-
 
       - name: Install tools
         run: |
@@ -186,22 +186,25 @@ jobs:
                   case ok
                   case noVPN
                   case noPairing
-                  case pairingTooSmall(Int)
+                  case pairingInvalid
                   case ffiFailed(String)
               }
 
               struct ProbeResult {
                   let state: ProbeState
+                  let detail: String
+
                   var ok: Bool {
                       if case .ok = state { return true }
                       return false
                   }
+
                   var message: String {
                       switch state {
                       case .ok: return "ready"
                       case .noVPN: return "no loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
-                      case .noPairing: return "no pairing file. Open Airlift and start pairing."
-                      case .pairingTooSmall(let n): return "pairing file damaged (\(n) bytes). Re-pair in Airlift."
+                      case .noPairing: return "no pairing file. Open Tools → Airlift, run Start Pairing."
+                      case .pairingInvalid: return detail
                       case .ffiFailed(let s): return s
                       }
                   }
@@ -213,17 +216,44 @@ jobs:
               func carrierRootPath() -> String { carrierRoot }
               func bundleLinksPath() -> String { bundleLinks }
 
+              // Read-only. Never writes or regenerates the pairing file.
+              private func validatePairingFile(_ path: String) -> (Bool, String) {
+                  let fm = FileManager.default
+                  guard fm.fileExists(atPath: path) else {
+                      return (false, "missing")
+                  }
+                  let attrs = try? fm.attributesOfItem(atPath: path)
+                  let size = (attrs?[.size] as? Int) ?? 0
+                  if size < 200 {
+                      return (false, "pairing file damaged (\(size) bytes). Re-pair in Tools → Airlift.")
+                  }
+                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+                      return (false, "pairing file unreadable")
+                  }
+                  guard let plist = try? PropertyListSerialization.propertyList(
+                      from: data, options: [], format: nil) as? [String: Any] else {
+                      return (false, "pairing file corrupt: not a plist (\(size) bytes). Re-pair in Tools → Airlift.")
+                  }
+                  let keys = ["UDID", "DeviceCertificate", "HostCertificate", "RootCertificate", "HostID"]
+                  var hits = 0
+                  for k in keys where plist[k] != nil { hits += 1 }
+                  if hits < 2 {
+                      return (false, "pairing file invalid: only \(hits) of 5 keys present. Re-pair in Tools → Airlift.")
+                  }
+                  return (true, "pairing ok (\(size) bytes, \(hits) keys)")
+              }
+
               func probe() -> ProbeResult {
                   if !NetworkStatus.loopbackVPNUp() {
-                      return ProbeResult(state: .noVPN)
+                      return ProbeResult(state: .noVPN, detail: "no loopback VPN")
                   }
                   let pairing = PairingController.pairingFilePath()
-                  guard FileManager.default.fileExists(atPath: pairing) else {
-                      return ProbeResult(state: .noPairing)
-                  }
-                  let size = (try? FileManager.default.attributesOfItem(atPath: pairing)[.size] as? Int) ?? 0
-                  if size < 200 {
-                      return ProbeResult(state: .pairingTooSmall(size))
+                  let (pairOk, pairMsg) = validatePairingFile(pairing)
+                  if !pairOk {
+                      if pairMsg == "missing" {
+                          return ProbeResult(state: .noPairing, detail: pairMsg)
+                      }
+                      return ProbeResult(state: .pairingInvalid, detail: pairMsg)
                   }
                   let tmp = NSTemporaryDirectory() + "/carrierlab-probe-\(UUID().uuidString).txt"
                   try? "probe".data(using: .utf8)?.write(to: URL(fileURLWithPath: tmp))
@@ -240,9 +270,10 @@ jobs:
                   if let p = outErr { al_string_free(p) }
                   try? FileManager.default.removeItem(atPath: tmp)
                   if rc != 0 {
-                      return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg))
+                      return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg),
+                                         detail: errMsg)
                   }
-                  return ProbeResult(state: .ok)
+                  return ProbeResult(state: .ok, detail: "ready")
               }
 
               func writeFile(source: String, target: String) -> ProbeResult {
@@ -260,9 +291,10 @@ jobs:
                   if let p = outJson { al_string_free(p) }
                   if let p = outErr { al_string_free(p) }
                   if rc != 0 {
-                      return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg))
+                      return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg),
+                                         detail: errMsg)
                   }
-                  return ProbeResult(state: .ok)
+                  return ProbeResult(state: .ok, detail: "ok")
               }
           }
           SWIFT_BRIDGE
@@ -287,6 +319,11 @@ jobs:
               }
 
               @Published private(set) var session: Session?
+              @Published private(set) var airliftOK: Bool = false
+              @Published private(set) var airliftMessage: String = "checking..."
+              @Published private(set) var resourcesOK: Bool = false
+              @Published private(set) var busy: Bool = false
+              @Published private(set) var logText: String = ""
 
               private let root: URL
               private let stateURL: URL
@@ -311,7 +348,7 @@ jobs:
               }
 
               func save(_ s: Session) {
-                  DispatchQueue.main.async {
+                  let write = {
                       self.session = s
                       let enc = JSONEncoder()
                       enc.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -320,18 +357,60 @@ jobs:
                           try? d.write(to: self.stateURL, options: .atomic)
                       }
                   }
+                  if Thread.isMainThread { write() }
+                  else { DispatchQueue.main.async(execute: write) }
               }
 
               func clear() {
-                  DispatchQueue.main.async {
+                  let write = {
                       self.session = nil
                       try? FileManager.default.removeItem(at: self.stateURL)
                   }
+                  if Thread.isMainThread { write() }
+                  else { DispatchQueue.main.async(execute: write) }
               }
 
               func hasBackup() -> Bool {
                   guard let s = session, let p = s.originalBackupPath else { return false }
                   return FileManager.default.fileExists(atPath: p)
+              }
+
+              func setAirlift(ok: Bool, message: String) {
+                  let write = {
+                      self.airliftOK = ok
+                      self.airliftMessage = message
+                  }
+                  if Thread.isMainThread { write() }
+                  else { DispatchQueue.main.async(execute: write) }
+              }
+
+              func setResources(_ ok: Bool) {
+                  let write = { self.resourcesOK = ok }
+                  if Thread.isMainThread { write() }
+                  else { DispatchQueue.main.async(execute: write) }
+              }
+
+              func setBusy(_ v: Bool) {
+                  let write = { self.busy = v }
+                  if Thread.isMainThread { write() }
+                  else { DispatchQueue.main.async(execute: write) }
+              }
+
+              func appendLog(_ s: String) {
+                  let write = {
+                      self.logText += s + "\n"
+                      if self.logText.count > 20000 {
+                          self.logText = String(self.logText.suffix(15000))
+                      }
+                  }
+                  if Thread.isMainThread { write() }
+                  else { DispatchQueue.main.async(execute: write) }
+              }
+
+              func clearLog() {
+                  let write = { self.logText = "" }
+                  if Thread.isMainThread { write() }
+                  else { DispatchQueue.main.async(execute: write) }
               }
 
               func backupURL() -> URL { backupDir }
@@ -365,7 +444,7 @@ jobs:
                   Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/Docomo_jp.bundle")
               }
 
-              func check() throws -> CheckResult {
+              func check() -> CheckResult {
                   let fm = FileManager.default
                   let probe = bridge.probe()
                   return CheckResult(
@@ -378,18 +457,17 @@ jobs:
                   )
               }
 
-              func install() throws {
+              func install() -> CarrierLabBridge.ProbeResult {
                   let carrierBundle = carrierBundleURL()
                   let docomoBundle = docomoBundleURL()
                   guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
-                      throw NSError(domain: "carrierlab", code: 3,
-                                    userInfo: [NSLocalizedDescriptionKey: "CarrierLab.bundle missing from app bundle"])
+                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle missing"),
+                                                          detail: "missing")
                   }
                   guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
-                      throw NSError(domain: "carrierlab", code: 3,
-                                    userInfo: [NSLocalizedDescriptionKey: "Docomo_jp.bundle missing from app bundle"])
+                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"),
+                                                          detail: "missing")
                   }
-
                   let s = CarrierLabState.Session(
                       status: .placing,
                       startedAt: Date(),
@@ -402,53 +480,46 @@ jobs:
 
                   let r1 = bridge.writeFile(source: carrierBundle.path,
                                             target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
-                  guard r1.ok else {
+                  if !r1.ok {
                       var bad = s
                       bad.status = .failed
                       bad.lastError = r1.message
                       state.save(bad)
-                      throw NSError(domain: "carrierlab", code: 4,
-                                    userInfo: [NSLocalizedDescriptionKey: r1.message])
+                      return r1
                   }
-
                   let r2 = bridge.writeFile(source: docomoBundle.path,
                                             target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
-                  guard r2.ok else {
+                  if !r2.ok {
                       var bad = s
                       bad.status = .failed
                       bad.lastError = r2.message
                       state.save(bad)
-                      throw NSError(domain: "carrierlab", code: 4,
-                                    userInfo: [NSLocalizedDescriptionKey: r2.message])
+                      return r2
                   }
-
                   var done = s
                   done.status = .placed
                   state.save(done)
+                  return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed")
               }
 
-              func reload() throws {
+              func reload() -> CarrierLabBridge.ProbeResult {
                   guard let s = state.session, s.status == .placed || s.status == .finished else {
-                      throw NSError(domain: "carrierlab", code: 2,
-                                    userInfo: [NSLocalizedDescriptionKey: "Nothing to reload. Install first."])
-                  }
-                  let r = bridge.writeFile(source: docomoBundleURL().path,
-                                           target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
-                  guard r.ok else {
-                      throw NSError(domain: "carrierlab", code: 4,
-                                    userInfo: [NSLocalizedDescriptionKey: r.message])
+                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."),
+                                                          detail: "no session")
                   }
                   _ = s
+                  return bridge.writeFile(source: docomoBundleURL().path,
+                                          target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
               }
 
-              func finish() throws {
+              func finish() {
                   guard let s = state.session else { return }
                   var done = s
                   done.status = .finished
                   state.save(done)
               }
 
-              func reset() throws {
+              func reset() {
                   state.clear()
               }
           }
@@ -459,15 +530,13 @@ jobs:
 
           struct CarrierLabView: View {
               @ObservedObject private var clState = CarrierLabState.shared
-              @State private var logText: String = ""
-              @State private var busy: Bool = false
-              @State private var airliftOK: Bool = false
-              @State private var airliftMessage: String = "checking..."
-              @State private var resourcesOK: Bool = false
+
+              private let ticker = Timer.publish(every: 2.5, on: .main, in: .common).autoconnect()
 
               var body: some View {
                   List {
                       airliftSection
+                      pairingHintSection
                       resourcesSection
                       statusSection
                       actionsSection
@@ -477,34 +546,53 @@ jobs:
                   .navigationTitle("CarrierLab")
                   .navigationBarTitleDisplayMode(.inline)
                   .onAppear { runCheck() }
+                  .onReceive(ticker) { _ in
+                      if !clState.busy { runCheck() }
+                  }
               }
 
               private var airliftSection: some View {
                   Section {
                       HStack(alignment: .top) {
-                          Image(systemName: airliftOK ? "checkmark.seal.fill" : "xmark.seal.fill")
-                              .foregroundStyle(airliftOK ? .green : .red)
+                          Image(systemName: clState.airliftOK ? "checkmark.seal.fill" : "xmark.seal.fill")
+                              .foregroundStyle(clState.airliftOK ? .green : .red)
                           VStack(alignment: .leading, spacing: 4) {
                               Text("Airlift")
-                              Text(airliftMessage)
+                              Text(clState.airliftMessage)
                                   .font(.system(size: 11, design: .monospaced))
-                                  .foregroundStyle(airliftOK ? .green : .red)
-                                  .lineLimit(4)
+                                  .foregroundStyle(clState.airliftOK ? .green : .red)
+                                  .lineLimit(5)
                           }
                       }
                   } header: { Label("Airlift", systemImage: "antenna.radiowaves.left.and.right") }
               }
 
+              @ViewBuilder
+              private var pairingHintSection: some View {
+                  if !clState.airliftOK {
+                      Section {
+                          VStack(alignment: .leading, spacing: 6) {
+                              Label("Pairing is done in Airlift only", systemImage: "info.circle")
+                                  .font(.footnote)
+                                  .foregroundStyle(.secondary)
+                              Text("CarrierLab never creates a pairing file. Open Tools → Airlift, run Start Pairing, then return here.")
+                                  .font(.caption)
+                                  .foregroundStyle(.secondary)
+                          }
+                      }
+                  }
+              }
+
               private var resourcesSection: some View {
                   Section {
                       HStack {
-                          Image(systemName: resourcesOK ? "checkmark.seal.fill" : "xmark.seal.fill")
-                              .foregroundStyle(resourcesOK ? .green : .red)
+                          Image(systemName: clState.resourcesOK ? "checkmark.seal.fill" : "xmark.seal.fill")
+                              .foregroundStyle(clState.resourcesOK ? .green : .red)
                           Text("CarrierAssets in bundle")
                           Spacer()
-                          Text(resourcesOK ? "ok" : "missing")
+                          Text(clState.resourcesOK ? "ok" : "missing")
                               .font(.system(.footnote, design: .monospaced))
-                              .foregroundStyle(resourcesOK ? .green : .red)
+                              .foregroundStyle(clState.resourcesOK ? .green : .red)
                       }
                   } header: { Label("Resources", systemImage: "shippingbox") }
               }
@@ -533,18 +621,20 @@ jobs:
 
               private var actionsSection: some View {
                   Section {
-                      Button { runCheck() } label: { Text("Check") }.disabled(busy)
-                      Button { runInstall() } label: { Text("Install") }.disabled(busy || !airliftOK || !resourcesOK)
-                      Button { runReload() } label: { Text("Reload") }.disabled(busy || !airliftOK || !resourcesOK)
-                      Button { runFinish() } label: { Text("Finish") }.disabled(busy)
-                      Button(role: .destructive) { runReset() } label: { Text("Reset") }.disabled(busy)
+                      Button { runCheck() } label: { Text("Check") }.disabled(clState.busy)
+                      Button { runInstall() } label: { Text("Install") }
+                          .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+                      Button { runReload() } label: { Text("Reload") }
+                          .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+                      Button { runFinish() } label: { Text("Finish") }.disabled(clState.busy)
+                      Button(role: .destructive) { runReset() } label: { Text("Reset") }.disabled(clState.busy)
                   } header: { Label("Actions", systemImage: "wrench") }
               }
 
               private var logSection: some View {
                   Section {
                       ScrollView {
-                          Text(logText.isEmpty ? "no output" : logText)
+                          Text(clState.logText.isEmpty ? "no output" : clState.logText)
                               .font(.system(size: 10, design: .monospaced))
                               .frame(maxWidth: .infinity, alignment: .leading)
                       }
@@ -566,103 +656,61 @@ jobs:
               }
 
               private func runCheck() {
-                  if busy { return }
-                  busy = true
+                  if clState.busy { return }
+                  clState.setBusy(true)
                   DispatchQueue.global(qos: .userInitiated).async {
-                      var ok = false
-                      var msg = ""
-                      var resOK = false
-                      var lines: [String] = []
-                      do {
-                          let r = try CarrierLabInstaller.shared.check()
-                          ok = r.probe.ok
-                          msg = r.probe.message
-                          resOK = r.resourcesBundled
-                          lines.append("[check] airlift=\(r.probe.ok) msg=\(r.probe.message)")
-                          lines.append("[check] carrierRoot=\(r.carrierRootExists) bundleLinks=\(r.bundleLinksExists) resourcesBundled=\(r.resourcesBundled) backup=\(r.backupPresent) status=\(r.status.rawValue)")
-                      } catch {
-                          msg = error.localizedDescription
-                          lines.append("[check] error: \(error.localizedDescription)")
-                      }
-                      DispatchQueue.main.async {
-                          self.airliftOK = ok
-                          self.airliftMessage = msg
-                          self.resourcesOK = resOK
-                          for l in lines { self.logText += l + "\n" }
-                          self.busy = false
-                      }
+                      let r = CarrierLabInstaller.shared.check()
+                      let lines = [
+                          "[check] airlift=\(r.probe.ok) msg=\(r.probe.message)",
+                          "[check] carrierRoot=\(r.carrierRootExists) bundleLinks=\(r.bundleLinksExists) resourcesBundled=\(r.resourcesBundled) backup=\(r.backupPresent) status=\(r.status.rawValue)"
+                      ]
+                      CarrierLabState.shared.setAirlift(ok: r.probe.ok, message: r.probe.message)
+                      CarrierLabState.shared.setResources(r.resourcesBundled)
+                      for l in lines { CarrierLabState.shared.appendLog(l) }
+                      CarrierLabState.shared.setBusy(false)
                   }
               }
 
               private func runInstall() {
-                  if busy { return }
-                  busy = true
+                  if clState.busy { return }
+                  clState.setBusy(true)
                   DispatchQueue.global(qos: .userInitiated).async {
-                      var lines: [String] = []
-                      do {
-                          try CarrierLabInstaller.shared.install()
-                          lines.append("[install] ok")
-                      } catch {
-                          lines.append("[install] error: \(error.localizedDescription)")
-                      }
-                      DispatchQueue.main.async {
-                          for l in lines { self.logText += l + "\n" }
-                          self.busy = false
-                      }
+                      let r = CarrierLabInstaller.shared.install()
+                      let line = r.ok ? "[install] ok" : "[install] failed: \(r.message)"
+                      CarrierLabState.shared.appendLog(line)
+                      CarrierLabState.shared.setBusy(false)
                   }
               }
 
               private func runReload() {
-                  if busy { return }
-                  busy = true
+                  if clState.busy { return }
+                  clState.setBusy(true)
                   DispatchQueue.global(qos: .userInitiated).async {
-                      var lines: [String] = []
-                      do {
-                          try CarrierLabInstaller.shared.reload()
-                          lines.append("[reload] ok")
-                      } catch {
-                          lines.append("[reload] error: \(error.localizedDescription)")
-                      }
-                      DispatchQueue.main.async {
-                          for l in lines { self.logText += l + "\n" }
-                          self.busy = false
-                      }
+                      let r = CarrierLabInstaller.shared.reload()
+                      let line = r.ok ? "[reload] ok" : "[reload] failed: \(r.message)"
+                      CarrierLabState.shared.appendLog(line)
+                      CarrierLabState.shared.setBusy(false)
                   }
               }
 
               private func runFinish() {
-                  if busy { return }
-                  busy = true
+                  if clState.busy { return }
+                  clState.setBusy(true)
                   DispatchQueue.global(qos: .userInitiated).async {
-                      var lines: [String] = []
-                      do {
-                          try CarrierLabInstaller.shared.finish()
-                          lines.append("[finish] ok")
-                      } catch {
-                          lines.append("[finish] error: \(error.localizedDescription)")
-                      }
-                      DispatchQueue.main.async {
-                          for l in lines { self.logText += l + "\n" }
-                          self.busy = false
-                      }
+                      CarrierLabInstaller.shared.finish()
+                      CarrierLabState.shared.appendLog("[finish] ok")
+                      CarrierLabState.shared.setBusy(false)
                   }
               }
 
               private func runReset() {
-                  if busy { return }
-                  busy = true
+                  if clState.busy { return }
+                  clState.setBusy(true)
                   DispatchQueue.global(qos: .userInitiated).async {
-                      var lines: [String] = []
-                      do {
-                          try CarrierLabInstaller.shared.reset()
-                          lines.append("[reset] ok")
-                      } catch {
-                          lines.append("[reset] error: \(error.localizedDescription)")
-                      }
-                      DispatchQueue.main.async {
-                          for l in lines { self.logText += l + "\n" }
-                          self.busy = false
-                      }
+                      CarrierLabInstaller.shared.reset()
+                      CarrierLabState.shared.clearLog()
+                      CarrierLabState.shared.appendLog("[reset] ok")
+                      CarrierLabState.shared.setBusy(false)
                   }
               }
           }
@@ -676,31 +724,37 @@ jobs:
 
           if [ -f docs/ai-hints.md ] && ! grep -q '## USER RULES 2026-09' docs/ai-hints.md; then
             printf '\n## USER RULES 2026-09\n\n' >> docs/ai-hints.md
-            printf -- '- All code, strings and comments in English only.\n' >> docs/ai-hints.md
-            printf -- '- Match existing style: @unchecked Sendable, DispatchQueue.main.async, no @MainActor, no Task { @MainActor }.\n' >> docs/ai-hints.md
-            printf -- '- Never mutate @Published from background. Always DispatchQueue.main.async in setters.\n' >> docs/ai-hints.md
+            printf -- '- All code, strings, comments in English only.\n' >> docs/ai-hints.md
+            printf -- '- Match existing style: @unchecked Sendable, DispatchQueue.main.async, no @MainActor.\n' >> docs/ai-hints.md
+            printf -- '- Never use Task or Task.detached in views or state classes.\n' >> docs/ai-hints.md
+            printf -- '- Never mutate @Published from background. Guard with Thread.isMainThread in setters.\n' >> docs/ai-hints.md
+            printf -- '- Pairing is done exclusively in Tools -> Airlift. CarrierLab reads the pairing file, never writes it.\n' >> docs/ai-hints.md
+            printf -- '- Do not call PairingController.runPairing or deletePairing from any view except AirliftView.\n' >> docs/ai-hints.md
             printf -- '- Do not touch AirliftBridge.swift or PairingController.swift without explicit request.\n' >> docs/ai-hints.md
-            printf -- '- No "type INSTALL" style confirmations. Buttons act immediately.\n' >> docs/ai-hints.md
-            printf -- '- CarrierLab probe must distinguish: no VPN / no pairing / too-small pairing / FFI error.\n' >> docs/ai-hints.md
+            printf -- '- No "type INSTALL" confirmations. Buttons act immediately.\n' >> docs/ai-hints.md
+            printf -- '- CarrierLab probe distinguishes: no VPN / no pairing / invalid pairing / FFI error.\n' >> docs/ai-hints.md
+            printf -- '- Status refresh in view uses Timer.publish on main, no manual navigation.\n' >> docs/ai-hints.md
             printf -- '- Read this file before every workflow change. Remove dead steps on every run.\n' >> docs/ai-hints.md
-            printf -- '- project.yml is written in full via cat heredoc, never sed/perl patched.\n' >> docs/ai-hints.md
+            printf -- '- project.yml always written in full via cat heredoc, never patched with sed/perl.\n' >> docs/ai-hints.md
           fi
 
           if [ -f docs/ai-hints.md ] && ! grep -q '## CARRIERLAB' docs/ai-hints.md; then
             printf '\n## CARRIERLAB\n\n' >> docs/ai-hints.md
             printf 'iOS port of MTS_CARRIER_FORUM core logic.\n\n' >> docs/ai-hints.md
             printf -- '- CarrierAssets bundled under Resources/CarrierAssets.\n' >> docs/ai-hints.md
-            printf -- '- Check probes Airlift first.\n' >> docs/ai-hints.md
-            printf -- '- Install writes CarrierLab.bundle and Docomo_jp.bundle via al_exploit_run.\n' >> docs/ai-hints.md
-            printf -- '- Reload re-writes Docomo_jp.bundle to trigger rescan.\n' >> docs/ai-hints.md
-            printf -- '- Reset clears session state.\n' >> docs/ai-hints.md
+            printf -- '- check is non-blocking, dispatches to global queue, updates state via main.async.\n' >> docs/ai-hints.md
+            printf -- '- install writes CarrierLab.bundle to BundleLinks and Docomo_jp.bundle to carrier root.\n' >> docs/ai-hints.md
+            printf -- '- reload re-writes Docomo_jp.bundle only.\n' >> docs/ai-hints.md
+            printf -- '- reset clears session, does not revert the phone.\n' >> docs/ai-hints.md
+            printf -- '- view auto-refreshes every 2.5 s via Timer.publish, no need to leave menu.\n' >> docs/ai-hints.md
+            printf -- '- pairing hint section appears when airliftOK is false, directs to Tools -> Airlift.\n' >> docs/ai-hints.md
           fi
 
           git add -A
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "feat: CarrierLab english + user style, main-thread publish [skip ci]"
+            git commit -m "feat: pairing only in Airlift tab, CarrierLab shows hint [skip ci]"
             git push
           fi
 
