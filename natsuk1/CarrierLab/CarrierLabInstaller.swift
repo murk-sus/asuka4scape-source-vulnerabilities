@@ -55,12 +55,12 @@ final class CarrierLabInstaller: @unchecked Sendable {
             originalBackupPath: state.backupURL().path,
             ipccTriggerPath: docomoBundle.path,
             lastError: nil,
-            aliases: nil)
+            aliases: ["25001", "25001_GID1-AA"])
         state.save(s)
 
         let r1 = bridge.injectFolder(
             sourceFolder: carrierBundle.path,
-            targetFolder: bridge.bundleLinksPath(),
+            targetFolder: bridge.carrierRootPath(),
             folderName: "CarrierLab.bundle")
         if !r1.ok {
             var bad = s
@@ -82,10 +82,19 @@ final class CarrierLabInstaller: @unchecked Sendable {
             return r2
         }
 
+        let r3 = bridge.installSymlinks(
+            names: ["25001", "25001_GID1-AA"],
+            destination: bridge.bundleLinksPath())
+
         var done = s
-        done.status = .placed
+        done.status = r3.ok ? .placed : .failed
+        if !r3.ok { done.lastError = r3.message }
         state.save(done)
-        return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            AirliftBridge.shared.respring()
+        }
+        return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed, links=\(r3.ok)")
     }
 
     func reload() -> CarrierLabBridge.ProbeResult {
@@ -93,10 +102,16 @@ final class CarrierLabInstaller: @unchecked Sendable {
             return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."), detail: "no session")
         }
         _ = s
-        return bridge.injectFolder(
+        let r = bridge.injectFolder(
             sourceFolder: docomoBundleURL().path,
             targetFolder: bridge.carrierRootPath(),
             folderName: "Docomo_jp.bundle")
+        if r.ok {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                AirliftBridge.shared.respring()
+            }
+        }
+        return r
     }
 
     func finish() {

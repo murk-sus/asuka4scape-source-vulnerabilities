@@ -63,7 +63,6 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
                 self.setState(.ready(pairingPath: path))
                 self.setStatus("Paired")
                 self.setPIN(nil)
-                try? self.generateMerged(rppPath: path)
             } catch is CancellationError {
                 self.setState(.idle)
                 self.setStatus("Cancelled")
@@ -85,15 +84,6 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
                 iterations += 1
             }
         }
-    }
-
-    private func generateMerged(rppPath: String) throws {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let out = docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing")
-        try PairingGenerator.shared.generateMergedPairing(
-            rppPath: rppPath,
-            outputPath: out.path
-        )
     }
 
     func cancelPairing() {
