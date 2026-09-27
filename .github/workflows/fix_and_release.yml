@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v11-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v11-
+          key: nk-v12-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v12-
 
       - name: Install tools
         run: |
@@ -51,6 +51,9 @@ jobs:
           sed -i '' 's/AppState\.shared\.status = \.ok/AppState.shared.status = (rc == 0) ? .ok : .failed/' natsuk1/App/natsuk1.swift
           perl -0777 -i -pe 's/\n    func necp_run\(\) \{.*?\n    \}\n/\n/gs' natsuk1/App/natsuk1.swift
           sed -i '' 's/state\.necp_run()/state.run()/' natsuk1/Views/OverviewView.swift
+
+          grep -q 'natsuk1/CarrierLab' project.yml || \
+            perl -i -pe 's|^(      - path: natsuk1/App)$|$1\n      - path: natsuk1/CarrierLab|' project.yml
 
           mkdir -p natsuk1/CarrierLab
 
@@ -446,7 +449,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "feat: CarrierLab, fix ToolsView [skip ci]"
+            git commit -m "feat: CarrierLab sources in project.yml [skip ci]"
             git push
           fi
 
