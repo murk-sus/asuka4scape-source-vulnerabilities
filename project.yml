@@ -7,11 +7,9 @@ options:
   groupSortPosition: top
   projectFormat: xcode15_0
   generateEmptyDirectories: false
-
 configs:
   Debug: debug
   Release: release
-
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -58,7 +56,6 @@ settings:
       STRIPFLAGS: "-S -x"
       COPY_PHASE_STRIP: YES
       LLVM_LTO: NO
-
 targets:
   natsuk1:
     type: application

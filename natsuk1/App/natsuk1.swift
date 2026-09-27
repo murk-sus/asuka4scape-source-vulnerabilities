@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import Foundation
+
 final class LockedBuffer: @unchecked Sendable {
     static let shared = LockedBuffer()
     private let lock = NSLock()
@@ -14,6 +15,7 @@ final class LockedBuffer: @unchecked Sendable {
     func drain() -> String { lock.lock(); let v = value; value = ""; lock.unlock(); return v }
     func clear() { lock.lock(); value = ""; lock.unlock() }
 }
+
 private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
     guard let line = line else { return }
     var bytes: [UInt8] = []
@@ -23,15 +25,19 @@ private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line i
     LockedBuffer.shared.append(_line)
     AppState.shared.parseLogLine(_line)
 }
+
 private func osVersionString() -> String {
     let v = ProcessInfo.processInfo.operatingSystemVersion
     return "\(v.majorVersion).\(v.minorVersion)"
 }
+
 private func appVersionString() -> String {
     Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
 }
+
 @main
 struct natsuk1App: App { var body: some Scene { WindowGroup { RootView() } } }
+
 struct RootView: View {
     @StateObject private var state = AppState.shared
     @StateObject private var offsets = OffsetsStore.shared
@@ -59,12 +65,15 @@ struct RootView: View {
             }
             .onChange(of: keep_alive_audio) { _, v in if v { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() } }
             .onChange(of: keep_alive_location) { _, v in if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() } }
+            .onChange(of: scenePhase) { _, phase in if phase == .background { } }
     }
 }
+
 final class AppState: ObservableObject, @unchecked Sendable {
     static let shared = AppState()
     @Published var slide: String = "-"
     @Published var base: String = "-"
+    @Published var showCrashLog: Bool = false
     func parseLogLine(_ line: String) {
         if let v = Self.extractHex(line, keys: ["slide=0x", "SLIDE = 0x", "slide = 0x"]) {
             if self.slide != v { DispatchQueue.main.async { self.slide = v } }
@@ -97,7 +106,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
     @Published var log: String = ""
     @Published var status: Status = .idle
     @Published var running: Bool = false
-    @Published var show_respring: Bool = false
     @Published var lang: String { didSet { UserDefaults.standard.set(lang, forKey: "lang") } }
     private var flusher: Timer?
     private init() {

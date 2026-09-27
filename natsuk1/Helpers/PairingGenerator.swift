@@ -34,7 +34,6 @@ final class PairingGenerator {
         guard !plist.isEmpty else {
             throw GeneratorError.notAPlist("empty plist: \(rppPath)")
         }
-
         let canonical = PairingController.syncCanonicalPairingFile(from: rppPath)
         if outputPath != canonical {
             do {

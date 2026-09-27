@@ -39,11 +39,16 @@ final class CarrierLabInstaller: @unchecked Sendable {
     func install() -> CarrierLabBridge.ProbeResult {
         let carrierBundle = carrierBundleURL()
         let docomoBundle = docomoBundleURL()
-        guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: carrierBundle.path) else {
             return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle missing"), detail: "missing")
         }
-        guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
+        guard fm.fileExists(atPath: docomoBundle.path) else {
             return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"), detail: "missing")
+        }
+        let carrierContents = (try? fm.contentsOfDirectory(atPath: carrierBundle.path)) ?? []
+        guard !carrierContents.isEmpty else {
+            return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle is empty"), detail: "empty bundle")
         }
         let pre = bridge.probe()
         guard pre.ok else { return pre }
@@ -82,19 +87,38 @@ final class CarrierLabInstaller: @unchecked Sendable {
             return r2
         }
 
-        let r3 = bridge.installSymlinks(
-            names: ["25001", "25001_GID1-AA"],
-            destination: bridge.bundleLinksPath())
+        let r3 = bridge.injectFolder(
+            sourceFolder: carrierBundle.path,
+            targetFolder: bridge.bundleLinksPath(),
+            folderName: "25001")
+        if !r3.ok {
+            var bad = s
+            bad.status = .failed
+            bad.lastError = r3.message
+            state.save(bad)
+            return r3
+        }
+
+        let r4 = bridge.injectFolder(
+            sourceFolder: carrierBundle.path,
+            targetFolder: bridge.bundleLinksPath(),
+            folderName: "25001_GID1-AA")
+        if !r4.ok {
+            var bad = s
+            bad.status = .failed
+            bad.lastError = r4.message
+            state.save(bad)
+            return r4
+        }
 
         var done = s
-        done.status = r3.ok ? .placed : .failed
-        if !r3.ok { done.lastError = r3.message }
+        done.status = .placed
         state.save(done)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            AirliftBridge.shared.respring()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            AppState.shared.respring()
         }
-        return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed, links=\(r3.ok)")
+        return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed")
     }
 
     func reload() -> CarrierLabBridge.ProbeResult {
@@ -107,8 +131,8 @@ final class CarrierLabInstaller: @unchecked Sendable {
             targetFolder: bridge.carrierRootPath(),
             folderName: "Docomo_jp.bundle")
         if r.ok {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                AirliftBridge.shared.respring()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                AppState.shared.respring()
             }
         }
         return r

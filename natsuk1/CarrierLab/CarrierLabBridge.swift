@@ -42,7 +42,7 @@ final class CarrierLabBridge: @unchecked Sendable {
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let candidates = [
             docs.appendingPathComponent("natsuk1_pairing.plist").path,
-            docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing").path,
+            docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing").path
         ]
         for c in candidates {
             if fm.fileExists(atPath: c) {
@@ -85,6 +85,15 @@ final class CarrierLabBridge: @unchecked Sendable {
         guard let pairingPath = findPairingFile() else {
             return ProbeResult(state: .noPairing, detail: "no pairing path")
         }
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: sourceFolder, isDirectory: &isDir), isDir.boolValue else {
+            return ProbeResult(state: .ffiFailed("source is not a directory: \(sourceFolder)"), detail: "source missing")
+        }
+        let contents = (try? fm.contentsOfDirectory(atPath: sourceFolder)) ?? []
+        guard !contents.isEmpty else {
+            return ProbeResult(state: .ffiFailed("no files in directory: \(sourceFolder)"), detail: "empty source")
+        }
         var outError: UnsafeMutablePointer<CChar>? = nil
         var rc: Int32 = -1
         pairingPath.withCString { pc in
@@ -102,50 +111,6 @@ final class CarrierLabBridge: @unchecked Sendable {
             return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "inject rc=\(rc)" : errMsg), detail: errMsg)
         }
         return ProbeResult(state: .ok, detail: "injected")
-    }
-
-    func installSymlinks(names: [String], destination: String) -> ProbeResult {
-        let pre = probe()
-        guard pre.ok else { return pre }
-        guard let pairingPath = findPairingFile() else {
-            return ProbeResult(state: .noPairing, detail: "no pairing path")
-        }
-        let fm = FileManager.default
-        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let staging = docs.appendingPathComponent("BundleLinksStaging", isDirectory: true)
-        try? fm.createDirectory(at: staging, withIntermediateDirectories: true)
-        let targetPath = carrierRoot + "/CarrierLab.bundle"
-        var lastErr = ""
-        for name in names {
-            let linkPath = staging.appendingPathComponent(name).path
-            try? fm.removeItem(atPath: linkPath)
-            do {
-                try fm.createSymbolicLink(atPath: linkPath, withDestinationPath: targetPath)
-            } catch {
-                lastErr = "symlink \(name): \(error.localizedDescription)"
-                continue
-            }
-            var outError: UnsafeMutablePointer<CChar>? = nil
-            var rc: Int32 = -1
-            pairingPath.withCString { pc in
-                linkPath.withCString { sc in
-                    destination.withCString { tc in
-                        name.withCString { nc in
-                            rc = al_exploit_inject_folder(pc, sc, tc, nc, nil, nil, &outError)
-                        }
-                    }
-                }
-            }
-            let errMsg = outError.flatMap { String(cString: $0) } ?? ""
-            if let p = outError { al_string_free(p) }
-            if rc != 0 {
-                lastErr = errMsg.isEmpty ? "inject link \(name) rc=\(rc)" : errMsg
-            }
-        }
-        if !lastErr.isEmpty {
-            return ProbeResult(state: .ffiFailed(lastErr), detail: lastErr)
-        }
-        return ProbeResult(state: .ok, detail: "links installed")
     }
 
     func writeFile(source: String, target: String) -> ProbeResult {
