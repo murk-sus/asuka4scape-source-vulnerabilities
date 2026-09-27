@@ -284,3 +284,13 @@ Build iPhone14,5 / iOS 27.0 / 24A437.
 - Use skip ci in every commit message from CI.
 - Cache key must change when project.yml changes.
 - rm -rf natsuk1.xcodeproj before xcodegen generate.
+
+## CARRIERLAB
+
+CarrierLab UI wraps AirLift file writes to /var/mobile/Library/Carrier Bundles.
+
+- check: read-only, safe.
+- install: requires clean session, no rollback.
+- reload: only after install, re-triggers IPCC read.
+- finish: marks session done.
+- TODO: al_read_file, al_remove_path, al_make_symlink in AirliftFFI.

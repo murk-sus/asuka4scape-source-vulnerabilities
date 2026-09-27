@@ -10,6 +10,7 @@ struct ToolsView: View {
             List {
                 Section {
                     NavigationLink { AirliftView().environmentObject(airlift) } label: { Text("Airlift") }
+                    NavigationLink { CarrierLabView() } label: { Text("CarrierLab") }
                     NavigationLink { OffsetsView().environmentObject(offsets) } label: { Text("Offsets") }
                 } header: {
                     Label("Exploit", systemImage: "memorychip")
