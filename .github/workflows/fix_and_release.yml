@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v37-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v37-
+          key: nk-v38-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v38-
 
       - name: Install tools
         run: |
@@ -80,6 +80,10 @@ jobs:
           configs:
             Debug: debug
             Release: release
+          packages:
+            idevice:
+              url: https://github.com/jkcoxson/idevice
+              from: "0.1.54"
           settings:
             base:
               SWIFT_VERSION: "5.0"
@@ -150,6 +154,7 @@ jobs:
                 - sdk: WebKit.framework
                 - sdk: AVFoundation.framework
                 - sdk: CoreLocation.framework
+                - package: idevice
               settings:
                 base:
                   PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit
@@ -169,11 +174,348 @@ jobs:
                   ENABLE_ONLY_ACTIVE_RESOURCES: YES
           PROJECT_EOF
 
+      - name: Write PairingGenerator
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Helpers
+          cat > natsuk1/Helpers/PairingGenerator.swift <<'SWIFT_EOF'
+          import Foundation
+          import IDevice
+
+          final class PairingGenerator: @unchecked Sendable {
+              static let shared = PairingGenerator()
+
+              enum GeneratorError: LocalizedError {
+                  case rppFailed(String)
+                  case tunnelFailed(String)
+                  case lockdownFailed(String)
+                  case writeFailed(String)
+
+                  var errorDescription: String? {
+                      switch self {
+                      case .rppFailed(let s): return "RPPairing failed: \(s)"
+                      case .tunnelFailed(let s): return "Tunnel creation failed: \(s)"
+                      case .lockdownFailed(let s): return "Lockdown handshake failed: \(s)"
+                      case .writeFailed(let s): return "Pairing write failed: \(s)"
+                      }
+                  }
+              }
+
+              struct MergedPairing {
+                  let rpp: [String: Any]
+                  let lockdown: [String: Any]
+                  var combined: [String: Any] {
+                      var out = rpp
+                      for (k, v) in lockdown { out[k] = v }
+                      return out
+                  }
+              }
+
+              func generateMergedPairing(
+                  deviceIP: String = "10.7.0.1",
+                  port: UInt16 = 49152,
+                  rppPath: String,
+                  outputPath: String
+              ) throws {
+                  let rpp = try loadRPCRecord(from: rppPath)
+                  let tunnel = try createRSDTunnel(deviceIP: deviceIP, port: port, rpp: rpp)
+                  let lockdown = try performLockdownPair(tunnel: tunnel)
+                  let merged = MergedPairing(rpp: rpp, lockdown: lockdown)
+                  try writeMerged(merged.combined, to: outputPath)
+              }
+
+              private func loadRPCRecord(from path: String) throws -> [String: Any] {
+                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+                      throw GeneratorError.rppFailed("cannot read \(path)")
+                  }
+                  guard let plist = try? PropertyListSerialization.propertyList(
+                      from: data, options: [], format: nil) as? [String: Any] else {
+                      throw GeneratorError.rppFailed("not a plist")
+                  }
+                  return plist
+              }
+
+              private func createRSDTunnel(
+                  deviceIP: String,
+                  port: UInt16,
+                  rpp: [String: Any]
+              ) throws -> OpaquePointer {
+                  guard let rppData = try? PropertyListSerialization.data(
+                      fromPropertyList: rpp, format: .binary, options: 0) else {
+                      throw GeneratorError.tunnelFailed("cannot serialize RPP")
+                  }
+                  var tunnelHandle: OpaquePointer? = nil
+                  let rc = rppData.withUnsafeBytes { buf -> Int32 in
+                      guard let base = buf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return -1 }
+                      return tunnel_create_rppairing(deviceIP, port, base, buf.count, &tunnelHandle)
+                  }
+                  guard rc == 0, let handle = tunnelHandle else {
+                      throw GeneratorError.tunnelFailed("rc=\(rc)")
+                  }
+                  return handle
+              }
+
+              private func performLockdownPair(tunnel: OpaquePointer) throws -> [String: Any] {
+                  var lockdownRecord: OpaquePointer? = nil
+                  let rc = lockdownd_pair_via_rsd(tunnel, &lockdownRecord)
+                  guard rc == 0, let record = lockdownRecord else {
+                      throw GeneratorError.lockdownFailed("rc=\(rc)")
+                  }
+                  var bytes: UnsafeMutablePointer<UInt8>? = nil
+                  var length: Int = 0
+                  let serRC = lockdown_record_serialize(record, &bytes, &length)
+                  guard serRC == 0, let b = bytes else {
+                      throw GeneratorError.lockdownFailed("serialize rc=\(serRC)")
+                  }
+                  defer { lockdown_record_free(record) }
+                  let data = Data(bytes: b, count: length)
+                  free(bytes)
+                  guard let plist = try? PropertyListSerialization.propertyList(
+                      from: data, options: [], format: nil) as? [String: Any] else {
+                      throw GeneratorError.lockdownFailed("not a plist")
+                  }
+                  return plist
+              }
+
+              private func writeMerged(_ merged: [String: Any], to path: String) throws {
+                  guard let data = try? PropertyListSerialization.data(
+                      fromPropertyList: merged, format: .xml, options: 0) else {
+                      throw GeneratorError.writeFailed("serialize")
+                  }
+                  do {
+                      try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+                  } catch {
+                      throw GeneratorError.writeFailed(error.localizedDescription)
+                  }
+              }
+          }
+          SWIFT_EOF
+
+      - name: Write AirliftBridge
+        run: |
+          set -euo pipefail
+          cat > natsuk1/Helpers/AirliftBridge.swift <<'SWIFT_EOF'
+          import Foundation
+          import Combine
+
+          final class AirliftBridge: ObservableObject, @unchecked Sendable {
+              static let shared = AirliftBridge()
+              enum State: Equatable { case idle, pairing, ready(pairingPath: String), running, done(ok: Bool, message: String) }
+
+              @Published private(set) var state: State = .idle
+              @Published private(set) var pairPIN: String? = nil
+              @Published private(set) var pairingStatus: String = ""
+              @Published private(set) var exploitLog: [String] = []
+              @Published var target: String = "/var/mobile/Library/SpringBoard"
+              private var loggedLines: [String] = []
+
+              private init() {
+                  al_log_init({ _, msg in
+                      guard let msg = msg else { return }
+                      let line = String(cString: msg)
+                      DispatchQueue.main.async { AirliftBridge.shared.appendLog(line) }
+                  }, nil)
+              }
+
+              private func appendLog(_ s: String) {
+                  DispatchQueue.main.async {
+                      self.loggedLines.append(s)
+                      if self.loggedLines.count > 800 { self.loggedLines.removeFirst(self.loggedLines.count - 600) }
+                      self.exploitLog = self.loggedLines
+                  }
+              }
+
+              func clearLog() {
+                  DispatchQueue.main.async {
+                      self.loggedLines.removeAll()
+                      self.exploitLog = []
+                  }
+              }
+
+              func pairingFilePath() -> String { PairingController.pairingFilePath() }
+
+              func hasPairing() -> Bool {
+                  let p = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: p) else { return false }
+                  let size = (try? FileManager.default.attributesOfItem(atPath: p)[.size] as? Int) ?? 0
+                  return size > 0
+              }
+
+              private func setState(_ s: State) { DispatchQueue.main.async { self.state = s } }
+              private func setStatus(_ s: String) { DispatchQueue.main.async { self.pairingStatus = s } }
+              private func setPIN(_ p: String?) { DispatchQueue.main.async { self.pairPIN = p } }
+
+              func runPairing() {
+                  guard !hasPairing() else {
+                      setState(.ready(pairingPath: pairingFilePath()))
+                      return
+                  }
+                  setState(.pairing)
+                  setStatus("Starting host...")
+                  setPIN(nil)
+                  let ctrl = PairingController.shared
+                  Task {
+                      do {
+                          let path = try await ctrl.startAndWait()
+                          self.setState(.ready(pairingPath: path))
+                          self.setStatus("Paired")
+                          self.setPIN(nil)
+                          try? self.generateMerged(rppPath: path)
+                      } catch is CancellationError {
+                          self.setState(.idle)
+                          self.setStatus("Cancelled")
+                      } catch {
+                          self.setState(.idle)
+                          self.setStatus("Failed: \(error.localizedDescription)")
+                      }
+                  }
+                  Task {
+                      var iterations = 0
+                      while iterations < 900 {
+                          let status = ctrl.pairingStatus
+                          let pin = ctrl.pairingPIN
+                          let running = ctrl.running
+                          self.setStatus(status)
+                          self.setPIN(pin)
+                          if !running { break }
+                          try? await Task.sleep(nanoseconds: 200_000_000)
+                          iterations += 1
+                      }
+                  }
+              }
+
+              private func generateMerged(rppPath: String) throws {
+                  let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                  let out = docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing")
+                  try PairingGenerator.shared.generateMergedPairing(
+                      rppPath: rppPath,
+                      outputPath: out.path
+                  )
+              }
+
+              func cancelPairing() {
+                  PairingController.shared.softCancel()
+                  setState(.idle)
+                  setStatus("")
+                  setPIN(nil)
+              }
+
+              func deletePairing() {
+                  let fm = FileManager.default
+                  let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                  let candidates = [
+                      docs.appendingPathComponent("natsuk1_pairing.plist"),
+                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing"),
+                      docs.appendingPathComponent("pairingFile.plist"),
+                  ]
+                  for url in candidates {
+                      if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
+                  }
+                  if let custom = PairingController.customPairingFilePath, fm.fileExists(atPath: custom) {
+                      try? fm.removeItem(atPath: custom)
+                  }
+                  PairingController.customPairingFilePath = nil
+                  if let files = try? fm.contentsOfDirectory(atPath: docs.path) {
+                      for f in files {
+                          guard f.hasSuffix(".plist") || f.hasSuffix(".mobilepairing") || f.hasSuffix(".mobilepair") else { continue }
+                          try? fm.removeItem(at: docs.appendingPathComponent(f))
+                      }
+                  }
+                  UserDefaults.standard.removeObject(forKey: "natsuk1PairingHostAltIRK")
+                  UserDefaults.standard.removeObject(forKey: "natsuk1PairingPath")
+                  setState(.idle)
+                  setStatus("")
+                  setPIN(nil)
+              }
+
+              func runExploit() {
+                  let pairingPath = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairingPath) else {
+                      setState(.done(ok: false, message: "No pairing file"))
+                      return
+                  }
+                  setState(.running)
+                  DispatchQueue.main.async {
+                      self.loggedLines.removeAll()
+                      self.exploitLog = []
+                  }
+                  let t = target
+                  let bridge = self
+                  bridge.appendLog("[exploit] path=\(pairingPath) target=\(t)")
+                  Task.detached {
+                      var outJson: UnsafeMutablePointer<CChar>? = nil
+                      var outError: UnsafeMutablePointer<CChar>? = nil
+                      let rc: Int32 = pairingPath.withCString { pc in
+                          t.withCString { tc in
+                              al_exploit_run(pc, tc, nil, nil, &outJson, &outError)
+                          }
+                      }
+                      let jsonStr = outJson.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
+                      let errStr = outError.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
+                      if rc == 0 {
+                          let msg = jsonStr ?? "OK"
+                          bridge.appendLog("[exploit] ok: \(msg)")
+                          bridge.setState(.done(ok: true, message: msg))
+                      } else {
+                          let msg = errStr ?? "rc=\(rc)"
+                          bridge.appendLog("[exploit] fail: \(msg)")
+                          bridge.setState(.done(ok: false, message: msg))
+                      }
+                  }
+              }
+
+              func cancelExploit() {
+                  appendLog("[exploit] cancel requested")
+                  setState(.done(ok: false, message: "cancelled"))
+              }
+
+              func respring() {
+                  let pairingPath = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairingPath) else {
+                      appendLog("[respring] no pairing file")
+                      return
+                  }
+                  let bridge = self
+                  Task.detached {
+                      var outError: UnsafeMutablePointer<CChar>? = nil
+                      let rc: Int32 = pairingPath.withCString { pc in
+                          al_device_respring(pc, nil, nil, &outError)
+                      }
+                      let errStr = outError.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
+                      if rc == 0 {
+                          bridge.appendLog("[respring] ok")
+                      } else {
+                          bridge.appendLog("[respring] rc=\(rc) \(errStr ?? "")")
+                      }
+                  }
+              }
+
+              func findContainer(bundleID: String) async -> String? {
+                  let pairingPath = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairingPath) else { return nil }
+                  return await withCheckedContinuation { cont in
+                      DispatchQueue.global(qos: .userInitiated).async {
+                          var outContainer: UnsafeMutablePointer<CChar>? = nil
+                          var outError: UnsafeMutablePointer<CChar>? = nil
+                          let rc: Int32 = pairingPath.withCString { pc in
+                              bundleID.withCString { bc in
+                                  al_find_app_container(pc, bc, nil, nil, &outContainer, &outError)
+                              }
+                          }
+                          let containerStr = outContainer.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
+                          if let p = outError { al_string_free(p) }
+                          if rc == 0, let c = containerStr { cont.resume(returning: c) }
+                          else { cont.resume(returning: nil) }
+                      }
+                  }
+              }
+          }
+          SWIFT_EOF
+
       - name: Write CarrierLabBridge
         run: |
           set -euo pipefail
           mkdir -p natsuk1/CarrierLab
-          rm -f natsuk1/CarrierLab/CarrierLabCore.swift
           cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'SWIFT_EOF'
           import Foundation
 
@@ -308,493 +650,6 @@ jobs:
           }
           SWIFT_EOF
 
-      - name: Write CarrierLabView
-        run: |
-          set -euo pipefail
-          cat > natsuk1/CarrierLab/CarrierLabView.swift <<'SWIFT_EOF'
-          import SwiftUI
-
-          struct CarrierLabView: View {
-              @ObservedObject private var clState = CarrierLabState.shared
-
-              private let ticker = Timer.publish(every: 5.0, on: .main, in: .common).autoconnect()
-
-              var body: some View {
-                  List {
-                      airliftSection
-                      pairingHintSection
-                      resourcesSection
-                      statusSection
-                      actionsSection
-                      logSection
-                  }
-                  .listStyle(.insetGrouped)
-                  .navigationTitle("CarrierLab")
-                  .navigationBarTitleDisplayMode(.inline)
-                  .onAppear { runCheck() }
-                  .onReceive(ticker) { _ in
-                      if !clState.busy { runCheck(silent: true) }
-                  }
-              }
-
-              private var airliftSection: some View {
-                  Section {
-                      HStack(spacing: 12) {
-                          Image(systemName: clState.airliftOK ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                              .font(.system(size: 22))
-                              .foregroundStyle(clState.airliftOK ? .green : .orange)
-                              .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.45), radius: 3)
-                          VStack(alignment: .leading, spacing: 3) {
-                              Text("Airlift")
-                              Text(clState.airliftOK ? "Connected" : "Not ready")
-                                  .font(.subheadline)
-                                  .foregroundStyle(clState.airliftOK ? .green : .orange)
-                                  .shadow(color: (clState.airliftOK ? Color.green : Color.orange).opacity(0.45), radius: 3)
-                              if !clState.airliftOK {
-                                  Text(clState.airliftMessage)
-                                      .font(.footnote)
-                                      .foregroundStyle(.secondary)
-                                      .lineLimit(4)
-                              }
-                          }
-                          Spacer()
-                      }
-                      .padding(.vertical, 4)
-                  } header: { Label("Airlift", systemImage: "antenna.radiowaves.left.and.right") }
-              }
-
-              @ViewBuilder
-              private var pairingHintSection: some View {
-                  if !clState.airliftOK {
-                      Section {
-                          VStack(alignment: .leading, spacing: 6) {
-                              Label("Pairing is done in Airlift only", systemImage: "info.circle")
-                                  .font(.footnote)
-                                  .foregroundStyle(.secondary)
-                              Text("CarrierLab never creates a pairing file. Open Tools / Airlift, run Start Pairing, then return here.")
-                                  .font(.caption)
-                                  .foregroundStyle(.secondary)
-                              Text("If pairing file exists but Install is blocked, tap Delete Pairing in Airlift, then Start Pairing again to regenerate merged file.")
-                                  .font(.caption2)
-                                  .foregroundStyle(.orange)
-                          }
-                      }
-                  }
-              }
-
-              private var resourcesSection: some View {
-                  Section {
-                      HStack {
-                          Text("CarrierAssets")
-                          Spacer()
-                          Text(clState.resourcesOK ? "Bundled" : "Missing")
-                              .foregroundStyle(clState.resourcesOK ? .green : .red)
-                              .shadow(color: (clState.resourcesOK ? Color.green : Color.red).opacity(0.45), radius: 3)
-                      }
-                  } header: { Label("Resources", systemImage: "shippingbox") }
-              }
-
-              private var statusSection: some View {
-                  Section {
-                      HStack {
-                          Text("Status")
-                          Spacer()
-                          Text(statusText)
-                              .font(.system(.body, design: .monospaced))
-                              .foregroundStyle(statusColor)
-                              .shadow(color: statusColor.opacity(0.45), radius: 3)
-                      }
-                      if let s = clState.session {
-                          HStack {
-                              Text("Started")
-                              Spacer()
-                              Text(s.startedAt.formatted())
-                                  .font(.system(.body, design: .monospaced))
-                                  .foregroundStyle(.secondary)
-                          }
-                          if let e = s.lastError {
-                              Text(e)
-                                  .font(.footnote)
-                                  .foregroundStyle(.red)
-                          }
-                      }
-                  } header: { Label("CarrierLab", systemImage: "shippingbox") }
-              }
-
-              private var actionsSection: some View {
-                  Section {
-                      Button { runCheck() } label: { Text("Check") }
-                          .disabled(clState.busy)
-                      Button { runInstall() } label: { Text("Install") }
-                          .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
-                      Button { runReload() } label: { Text("Reload") }
-                          .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
-                      Button { runFinish() } label: { Text("Finish") }
-                          .disabled(clState.busy)
-                      Button(role: .destructive) { runReset() } label: { Text("Reset") }
-                          .disabled(clState.busy)
-                  } header: { Label("Actions", systemImage: "wrench") }
-              }
-
-              @ViewBuilder
-              private var logSection: some View {
-                  if !clState.logText.isEmpty {
-                      Section {
-                          ScrollView {
-                              Text(clState.logText)
-                                  .font(.system(size: 10, design: .monospaced))
-                                  .frame(maxWidth: .infinity, alignment: .leading)
-                          }
-                          .frame(minHeight: 120, maxHeight: 300)
-                      } header: { Label("Log", systemImage: "terminal") }
-                  }
-              }
-
-              private var statusText: String {
-                  clState.session?.status.rawValue ?? "clean"
-              }
-
-              private var statusColor: Color {
-                  switch clState.session?.status {
-                  case .placed, .finished: return .green
-                  case .placing: return .orange
-                  case .failed: return .red
-                  default: return .secondary
-                  }
-              }
-
-              private func runCheck(silent: Bool = false) {
-                  if clState.busy { return }
-                  clState.setBusy(true)
-                  DispatchQueue.global(qos: .userInitiated).async {
-                      let r = CarrierLabInstaller.shared.check()
-                      CarrierLabState.shared.setAirlift(ok: r.probe.ok, message: r.probe.message)
-                      CarrierLabState.shared.setResources(r.resourcesBundled)
-                      if !silent {
-                          CarrierLabState.shared.appendLog("[check] airlift=\(r.probe.ok) msg=\(r.probe.message)")
-                      }
-                      CarrierLabState.shared.setBusy(false)
-                  }
-              }
-
-              private func runInstall() {
-                  if clState.busy { return }
-                  clState.setBusy(true)
-                  DispatchQueue.global(qos: .userInitiated).async {
-                      let r = CarrierLabInstaller.shared.install()
-                      CarrierLabState.shared.appendLog(r.ok ? "[install] ok" : "[install] failed: \(r.message)")
-                      CarrierLabState.shared.setBusy(false)
-                  }
-              }
-
-              private func runReload() {
-                  if clState.busy { return }
-                  clState.setBusy(true)
-                  DispatchQueue.global(qos: .userInitiated).async {
-                      let r = CarrierLabInstaller.shared.reload()
-                      CarrierLabState.shared.appendLog(r.ok ? "[reload] ok" : "[reload] failed: \(r.message)")
-                      CarrierLabState.shared.setBusy(false)
-                  }
-              }
-
-              private func runFinish() {
-                  if clState.busy { return }
-                  clState.setBusy(true)
-                  DispatchQueue.global(qos: .userInitiated).async {
-                      CarrierLabInstaller.shared.finish()
-                      CarrierLabState.shared.appendLog("[finish] ok")
-                      CarrierLabState.shared.setBusy(false)
-                  }
-              }
-
-              private func runReset() {
-                  if clState.busy { return }
-                  clState.setBusy(true)
-                  DispatchQueue.global(qos: .userInitiated).async {
-                      CarrierLabInstaller.shared.reset()
-                      CarrierLabState.shared.clearLog()
-                      CarrierLabState.shared.appendLog("[reset] ok")
-                      CarrierLabState.shared.setBusy(false)
-                  }
-              }
-          }
-          SWIFT_EOF
-
-      - name: Write AirliftView
-        run: |
-          set -euo pipefail
-          cat > natsuk1/Views/AirliftView.swift <<'SWIFT_EOF'
-          import SwiftUI
-          import UIKit
-          import Combine
-
-          struct AirliftView: View {
-              @EnvironmentObject var airlift: AirliftBridge
-              @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()
-              @State private var tunnelIP: String? = NetworkStatus.tunnelIP()
-              @State private var deviceIP: String? = NetworkStatus.deviceIP()
-              @State private var copied = false
-              @State private var pairedTick = 0
-
-              private let ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
-
-              var body: some View {
-                  List {
-                      statusSection
-                      sessionSection
-                      pairingStatusSection
-                      pairingButtonsSection
-                      targetSection
-                      exploitSection
-                      logSection
-                      logActionsSection
-                  }
-                  .listStyle(.insetGrouped)
-                  .navigationTitle("Airlift")
-                  .navigationBarTitleDisplayMode(.inline)
-                  .onAppear { refresh(); pairedTick &+= 1 }
-                  .onReceive(ticker) { _ in refresh() }
-                  .onChange(of: airlift.state) { _, _ in pairedTick &+= 1 }
-                  .refreshable { refresh(); pairedTick &+= 1 }
-              }
-
-              private var statusSection: some View {
-                  Section {
-                      HStack(spacing: 12) {
-                          Image(systemName: loopbackVPNUp ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                              .font(.system(size: 22))
-                              .foregroundStyle(loopbackVPNUp ? .green : .orange)
-                              .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.45), radius: 3)
-                          VStack(alignment: .leading, spacing: 3) {
-                              Text("LocalDevVPN")
-                              Text(loopbackVPNUp ? "Connected" : "Not connected")
-                                  .font(.subheadline)
-                                  .foregroundStyle(loopbackVPNUp ? .green : .orange)
-                                  .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.45), radius: 3)
-                          }
-                          Spacer()
-                      }
-                      .padding(.vertical, 4)
-                  } header: { Label("VPN", systemImage: "shield.lefthalf.filled") }
-              }
-
-              private var sessionSection: some View {
-                  Section {
-                      HStack {
-                          Text("Tunnel IP")
-                          Spacer()
-                          Text(tunnelIP ?? "\u{2014}")
-                              .font(.system(.body, design: .monospaced))
-                              .foregroundStyle(tunnelIP != nil ? .green : .secondary)
-                              .shadow(color: tunnelIP != nil ? Color.green.opacity(0.45) : Color.clear, radius: 3)
-                      }
-                      HStack {
-                          Text("Device IP")
-                          Spacer()
-                          Text(deviceIP ?? "\u{2014}")
-                              .font(.system(.body, design: .monospaced))
-                              .foregroundStyle(deviceIP != nil ? .green : .secondary)
-                              .shadow(color: deviceIP != nil ? Color.green.opacity(0.45) : Color.clear, radius: 3)
-                      }
-                  } header: { Label("Session details", systemImage: "network") }
-              }
-
-              private var pairingStatusSection: some View {
-                  Section {
-                      if let pin = airlift.pairPIN {
-                          pinCard(pin: pin)
-                      } else {
-                          HStack(spacing: 12) {
-                              Image(systemName: pairingIcon)
-                                  .font(.system(size: 22))
-                                  .foregroundStyle(pairingColor)
-                              VStack(alignment: .leading, spacing: 3) {
-                                  Text(pairingTitle)
-                                  Text(pairingSubtitle)
-                                      .font(.subheadline)
-                                      .foregroundStyle(pairingColor)
-                                      .shadow(color: pairingColor.opacity(0.45), radius: 3)
-                                      .lineLimit(3)
-                              }
-                              Spacer()
-                          }
-                          .padding(.vertical, 4)
-                      }
-                  } header: { Label("Pairing", systemImage: "link.circle") }
-              }
-
-              @ViewBuilder
-              private func pinCard(pin: String) -> some View {
-                  VStack(alignment: .leading, spacing: 14) {
-                      HStack(spacing: 6) {
-                          Image(systemName: "lock.shield.fill")
-                              .foregroundStyle(.orange)
-                              .shadow(color: Color.orange.opacity(0.45), radius: 3)
-                          Text("Enter this PIN in Settings")
-                              .font(.footnote)
-                              .foregroundStyle(.secondary)
-                      }
-                      HStack(spacing: 10) {
-                          ForEach(Array(pin.enumerated()), id: \.offset) { _, ch in
-                              Text(String(ch))
-                                  .font(.system(size: 32, weight: .semibold, design: .rounded))
-                                  .foregroundStyle(.orange)
-                                  .shadow(color: Color.orange.opacity(0.45), radius: 3)
-                                  .frame(width: 44, height: 56)
-                                  .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                          }
-                          Spacer()
-                      }
-                      Button {
-                          if let url = URL(string: UIApplication.openSettingsURLString) {
-                              UIApplication.shared.open(url)
-                          }
-                      } label: {
-                          Text("Open Settings").frame(maxWidth: .infinity)
-                      }
-                      .buttonStyle(.borderedProminent)
-                      .tint(.orange)
-                      .controlSize(.large)
-                      .shadow(color: Color.orange.opacity(0.45), radius: 3)
-                      Text("Privacy & Security - Developer Mode - Pair with natsuk1")
-                          .font(.caption2)
-                          .foregroundStyle(.secondary)
-                  }
-                  .padding(.vertical, 6)
-              }
-
-              private var pairingButtonsSection: some View {
-                  Section {
-                      Button { airlift.runPairing() } label: {
-                          Text(isPaired ? "Already Paired" : "Start Pairing")
-                      }
-                      .disabled(isPairing || isPaired)
-                      Button(role: .destructive) { airlift.cancelPairing() } label: {
-                          Text("Cancel Pairing")
-                      }
-                      .disabled(!isPairing)
-                      Button(role: .destructive) { airlift.deletePairing(); pairedTick &+= 1 } label: {
-                          Text("Delete Pairing")
-                      }
-                      .disabled(!isPaired)
-                  }
-              }
-
-              private var targetSection: some View {
-                  Section {
-                      HStack {
-                          Text("Target")
-                          Spacer()
-                          TextField("/var/mobile/Library/SpringBoard", text: Binding(
-                              get: { airlift.target }, set: { airlift.target = $0 }))
-                              .font(.system(.footnote, design: .monospaced))
-                              .multilineTextAlignment(.trailing)
-                              .autocorrectionDisabled()
-                              .textInputAutocapitalization(.never)
-                      }
-                  } header: { Label("Target", systemImage: "scope") }
-              }
-
-              private var exploitSection: some View {
-                  Section {
-                      Button { airlift.runExploit() } label: {
-                          HStack {
-                              Text("Run Exploit")
-                              Spacer()
-                              if airlift.state == .running { ProgressView() }
-                          }
-                      }
-                      .disabled(airlift.state == .running || !loopbackVPNUp || !isPaired)
-                      Button(role: .destructive) { airlift.cancelExploit() } label: {
-                          Text("Cancel Exploit")
-                      }
-                      .disabled(airlift.state != .running)
-                  } header: { Label("Exploit", systemImage: "cpu") }
-              }
-
-              @ViewBuilder
-              private var logSection: some View {
-                  if !airlift.exploitLog.isEmpty {
-                      Section {
-                          ScrollView {
-                              Text(airlift.exploitLog.joined(separator: "\n"))
-                                  .font(.system(size: 10, design: .monospaced))
-                                  .frame(maxWidth: .infinity, alignment: .leading)
-                          }
-                          .frame(minHeight: 200, maxHeight: 400)
-                      } header: { Label("Log", systemImage: "terminal") }
-                  }
-              }
-
-              @ViewBuilder
-              private var logActionsSection: some View {
-                  if !airlift.exploitLog.isEmpty {
-                      Section {
-                          Button {
-                              UIPasteboard.general.string = airlift.exploitLog.joined(separator: "\n")
-                              copied = true
-                              DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
-                          } label: {
-                              Text(copied ? "Copied" : "Copy All")
-                          }
-                          Button(role: .destructive) { airlift.clearLog() } label: {
-                              Text("Clear")
-                          }
-                      } header: { Label("Log Actions", systemImage: "document.on.document") }
-                  }
-              }
-
-              private func refresh() {
-                  let vpn = NetworkStatus.loopbackVPNUp()
-                  let tun = NetworkStatus.tunnelIP()
-                  let dev = NetworkStatus.deviceIP()
-                  if loopbackVPNUp != vpn { loopbackVPNUp = vpn }
-                  if tunnelIP != tun { tunnelIP = tun }
-                  if deviceIP != dev { deviceIP = dev }
-              }
-
-              private var isPairing: Bool {
-                  if case .pairing = airlift.state { return true }
-                  return false
-              }
-
-              private var isPaired: Bool {
-                  _ = pairedTick
-                  return airlift.hasPairing()
-              }
-
-              private var pairingColor: Color {
-                  if isPaired { return .green }
-                  if isPairing { return .orange }
-                  if case .done(false, _) = airlift.state { return .red }
-                  return .secondary
-              }
-
-              private var pairingIcon: String {
-                  if isPaired { return "checkmark.circle.fill" }
-                  if isPairing { return "link.circle.fill" }
-                  if case .done(false, _) = airlift.state { return "xmark.circle.fill" }
-                  return "link.circle"
-              }
-
-              private var pairingTitle: String {
-                  if isPaired { return "Paired" }
-                  if isPairing { return "Pairing" }
-                  if case .done(false, _) = airlift.state { return "Failed" }
-                  return "Not Paired"
-              }
-
-              private var pairingSubtitle: String {
-                  if isPaired { return "Credentials saved" }
-                  if isPairing {
-                      return airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus
-                  }
-                  if case .done(false, let msg) = airlift.state { return msg }
-                  return "Open Settings to pair"
-              }
-          }
-          SWIFT_EOF
-
       - name: Commit
         run: |
           set -euo pipefail
@@ -804,7 +659,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: RPPairing-only detection, PIN card restored, cleanup [skip ci]"
+            git commit -m "fix: idevice-ffi for merged pairing, restore PIN, cleanup [skip ci]"
             git push
           fi
 
