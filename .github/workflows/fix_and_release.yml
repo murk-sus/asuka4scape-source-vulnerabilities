@@ -47,6 +47,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           python3 - <<'PY'
+          import re
+
           def drop_fn(src, sig):
               i = src.find(sig)
               if i < 0:
@@ -69,7 +71,7 @@ jobs:
                   start -= 1
               return src[:start] + src[end:]
 
-          def edit(path, sigs, reps=()):
+          def edit(path, sigs=(), reps=()):
               try:
                   s = open(path).read()
               except FileNotFoundError:
@@ -84,23 +86,40 @@ jobs:
                   print("edited " + path)
 
           edit("natsuk1/Helpers/NetworkStatus.swift",
-               ["static func summarize(deviceIP:",
-                "static func tunnelHostCandidates(",
-                "static func host(_ value:",
-                "static func isOwnAddress(_ deviceIP:"],
-               [("        let netmask: String?\n", ""),
-                (", netmask: cur.pointee.ifa_netmask.flatMap(numericHost))", ")")])
+               sigs=["static func summarize(deviceIP:",
+                     "static func tunnelHostCandidates(",
+                     "static func host(_ value:",
+                     "static func isOwnAddress(_ deviceIP:"])
+
+          p = "natsuk1/Helpers/NetworkStatus.swift"
+          try:
+              s = open(p).read()
+          except FileNotFoundError:
+              s = None
+          if s is not None:
+              orig = s
+              s = re.sub(
+                  r",\s*\n?\s*netmask:\s*cur\.pointee\.ifa_netmask\.flatMap\(numericHost\)\s*\)",
+                  ")", s)
+              s = re.sub(r"\n\s*let netmask:\s*String\?", "", s)
+              if s != orig:
+                  open(p, "w").write(s)
+                  print("edited " + p)
 
           edit("natsuk1/Helpers/DeviceName.swift",
-               ["static func full()"])
+               sigs=["static func full()"])
 
           edit("natsuk1/Helpers/OffsetsStore.swift",
-               ["nonisolated static var activeVersion"])
+               sigs=["nonisolated static var activeVersion"])
 
           edit("natsuk1/Views/DeviceInfoView.swift",
-               ["private func machineID()"],
-               [('row("Identifier", machineID())',
-                 'row("Identifier", DeviceName.machineID())')])
+               sigs=["private func machineID()"],
+               reps=[('row("Identifier", machineID())',
+                      'row("Identifier", DeviceName.machineID())')])
+
+          edit("natsuk1/Views/AirliftView.swift",
+               reps=[("if let pin = airlift.pairPIN {",
+                      "if airlift.pairPIN != nil {")])
           PY
 
           oxipng -o max --strip safe natsuk1/Resources/Assets.xcassets/AppIcon.appiconset/1024x1024.png || true
@@ -113,7 +132,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "chore: remove dead code, shrink icon [skip ci]"
+            git commit -m "chore: fix NetworkStatus call site, drop dead code [skip ci]"
             git push
           fi
 
