@@ -102,7 +102,7 @@ struct AirliftView: View {
                         .font(.subheadline)
                         .foregroundStyle(pairingColor)
                         .lineLimit(2)
-                    if airlift.pairPIN != nil {
+                    if let pin = airlift.pairPIN {
                         Text("PIN \(pin)")
                             .font(.system(size: 20, weight: .black, design: .monospaced))
                             .foregroundStyle(.orange)
@@ -118,7 +118,7 @@ struct AirliftView: View {
 
     private var pairingButtonsSection: some View {
         Section {
-            if airlift.pairPIN != nil {
+            if let pin = airlift.pairPIN {
                 Button {
                     if let url = URL(string: UIApplication.openSettingsURLString) {
                         UIApplication.shared.open(url)
