@@ -2,15 +2,13 @@ import SwiftUI
 
 struct CarrierLabView: View {
     @ObservedObject private var clState = CarrierLabState.shared
-    @State private var logText: String = ""
-    @State private var busy: Bool = false
-    @State private var airliftOK: Bool = false
-    @State private var airliftMessage: String = "checking..."
-    @State private var resourcesOK: Bool = false
+
+    private let ticker = Timer.publish(every: 2.5, on: .main, in: .common).autoconnect()
 
     var body: some View {
         List {
             airliftSection
+            pairingHintSection
             resourcesSection
             statusSection
             actionsSection
@@ -20,34 +18,53 @@ struct CarrierLabView: View {
         .navigationTitle("CarrierLab")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { runCheck() }
+        .onReceive(ticker) { _ in
+            if !clState.busy { runCheck() }
+        }
     }
 
     private var airliftSection: some View {
         Section {
             HStack(alignment: .top) {
-                Image(systemName: airliftOK ? "checkmark.seal.fill" : "xmark.seal.fill")
-                    .foregroundStyle(airliftOK ? .green : .red)
+                Image(systemName: clState.airliftOK ? "checkmark.seal.fill" : "xmark.seal.fill")
+                    .foregroundStyle(clState.airliftOK ? .green : .red)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Airlift")
-                    Text(airliftMessage)
+                    Text(clState.airliftMessage)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(airliftOK ? .green : .red)
-                        .lineLimit(4)
+                        .foregroundStyle(clState.airliftOK ? .green : .red)
+                        .lineLimit(5)
                 }
             }
         } header: { Label("Airlift", systemImage: "antenna.radiowaves.left.and.right") }
     }
 
+    @ViewBuilder
+    private var pairingHintSection: some View {
+        if !clState.airliftOK {
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Pairing is done in Airlift only", systemImage: "info.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text("CarrierLab never creates a pairing file. Open Tools → Airlift, run Start Pairing, then return here.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     private var resourcesSection: some View {
         Section {
             HStack {
-                Image(systemName: resourcesOK ? "checkmark.seal.fill" : "xmark.seal.fill")
-                    .foregroundStyle(resourcesOK ? .green : .red)
+                Image(systemName: clState.resourcesOK ? "checkmark.seal.fill" : "xmark.seal.fill")
+                    .foregroundStyle(clState.resourcesOK ? .green : .red)
                 Text("CarrierAssets in bundle")
                 Spacer()
-                Text(resourcesOK ? "ok" : "missing")
+                Text(clState.resourcesOK ? "ok" : "missing")
                     .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(resourcesOK ? .green : .red)
+                    .foregroundStyle(clState.resourcesOK ? .green : .red)
             }
         } header: { Label("Resources", systemImage: "shippingbox") }
     }
@@ -76,18 +93,20 @@ struct CarrierLabView: View {
 
     private var actionsSection: some View {
         Section {
-            Button { runCheck() } label: { Text("Check") }.disabled(busy)
-            Button { runInstall() } label: { Text("Install") }.disabled(busy || !airliftOK || !resourcesOK)
-            Button { runReload() } label: { Text("Reload") }.disabled(busy || !airliftOK || !resourcesOK)
-            Button { runFinish() } label: { Text("Finish") }.disabled(busy)
-            Button(role: .destructive) { runReset() } label: { Text("Reset") }.disabled(busy)
+            Button { runCheck() } label: { Text("Check") }.disabled(clState.busy)
+            Button { runInstall() } label: { Text("Install") }
+                .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+            Button { runReload() } label: { Text("Reload") }
+                .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
+            Button { runFinish() } label: { Text("Finish") }.disabled(clState.busy)
+            Button(role: .destructive) { runReset() } label: { Text("Reset") }.disabled(clState.busy)
         } header: { Label("Actions", systemImage: "wrench") }
     }
 
     private var logSection: some View {
         Section {
             ScrollView {
-                Text(logText.isEmpty ? "no output" : logText)
+                Text(clState.logText.isEmpty ? "no output" : clState.logText)
                     .font(.system(size: 10, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -109,103 +128,61 @@ struct CarrierLabView: View {
     }
 
     private func runCheck() {
-        if busy { return }
-        busy = true
+        if clState.busy { return }
+        clState.setBusy(true)
         DispatchQueue.global(qos: .userInitiated).async {
-            var ok = false
-            var msg = ""
-            var resOK = false
-            var lines: [String] = []
-            do {
-                let r = try CarrierLabInstaller.shared.check()
-                ok = r.probe.ok
-                msg = r.probe.message
-                resOK = r.resourcesBundled
-                lines.append("[check] airlift=\(r.probe.ok) msg=\(r.probe.message)")
-                lines.append("[check] carrierRoot=\(r.carrierRootExists) bundleLinks=\(r.bundleLinksExists) resourcesBundled=\(r.resourcesBundled) backup=\(r.backupPresent) status=\(r.status.rawValue)")
-            } catch {
-                msg = error.localizedDescription
-                lines.append("[check] error: \(error.localizedDescription)")
-            }
-            DispatchQueue.main.async {
-                self.airliftOK = ok
-                self.airliftMessage = msg
-                self.resourcesOK = resOK
-                for l in lines { self.logText += l + "\n" }
-                self.busy = false
-            }
+            let r = CarrierLabInstaller.shared.check()
+            let lines = [
+                "[check] airlift=\(r.probe.ok) msg=\(r.probe.message)",
+                "[check] carrierRoot=\(r.carrierRootExists) bundleLinks=\(r.bundleLinksExists) resourcesBundled=\(r.resourcesBundled) backup=\(r.backupPresent) status=\(r.status.rawValue)"
+            ]
+            CarrierLabState.shared.setAirlift(ok: r.probe.ok, message: r.probe.message)
+            CarrierLabState.shared.setResources(r.resourcesBundled)
+            for l in lines { CarrierLabState.shared.appendLog(l) }
+            CarrierLabState.shared.setBusy(false)
         }
     }
 
     private func runInstall() {
-        if busy { return }
-        busy = true
+        if clState.busy { return }
+        clState.setBusy(true)
         DispatchQueue.global(qos: .userInitiated).async {
-            var lines: [String] = []
-            do {
-                try CarrierLabInstaller.shared.install()
-                lines.append("[install] ok")
-            } catch {
-                lines.append("[install] error: \(error.localizedDescription)")
-            }
-            DispatchQueue.main.async {
-                for l in lines { self.logText += l + "\n" }
-                self.busy = false
-            }
+            let r = CarrierLabInstaller.shared.install()
+            let line = r.ok ? "[install] ok" : "[install] failed: \(r.message)"
+            CarrierLabState.shared.appendLog(line)
+            CarrierLabState.shared.setBusy(false)
         }
     }
 
     private func runReload() {
-        if busy { return }
-        busy = true
+        if clState.busy { return }
+        clState.setBusy(true)
         DispatchQueue.global(qos: .userInitiated).async {
-            var lines: [String] = []
-            do {
-                try CarrierLabInstaller.shared.reload()
-                lines.append("[reload] ok")
-            } catch {
-                lines.append("[reload] error: \(error.localizedDescription)")
-            }
-            DispatchQueue.main.async {
-                for l in lines { self.logText += l + "\n" }
-                self.busy = false
-            }
+            let r = CarrierLabInstaller.shared.reload()
+            let line = r.ok ? "[reload] ok" : "[reload] failed: \(r.message)"
+            CarrierLabState.shared.appendLog(line)
+            CarrierLabState.shared.setBusy(false)
         }
     }
 
     private func runFinish() {
-        if busy { return }
-        busy = true
+        if clState.busy { return }
+        clState.setBusy(true)
         DispatchQueue.global(qos: .userInitiated).async {
-            var lines: [String] = []
-            do {
-                try CarrierLabInstaller.shared.finish()
-                lines.append("[finish] ok")
-            } catch {
-                lines.append("[finish] error: \(error.localizedDescription)")
-            }
-            DispatchQueue.main.async {
-                for l in lines { self.logText += l + "\n" }
-                self.busy = false
-            }
+            CarrierLabInstaller.shared.finish()
+            CarrierLabState.shared.appendLog("[finish] ok")
+            CarrierLabState.shared.setBusy(false)
         }
     }
 
     private func runReset() {
-        if busy { return }
-        busy = true
+        if clState.busy { return }
+        clState.setBusy(true)
         DispatchQueue.global(qos: .userInitiated).async {
-            var lines: [String] = []
-            do {
-                try CarrierLabInstaller.shared.reset()
-                lines.append("[reset] ok")
-            } catch {
-                lines.append("[reset] error: \(error.localizedDescription)")
-            }
-            DispatchQueue.main.async {
-                for l in lines { self.logText += l + "\n" }
-                self.busy = false
-            }
+            CarrierLabInstaller.shared.reset()
+            CarrierLabState.shared.clearLog()
+            CarrierLabState.shared.appendLog("[reset] ok")
+            CarrierLabState.shared.setBusy(false)
         }
     }
 }

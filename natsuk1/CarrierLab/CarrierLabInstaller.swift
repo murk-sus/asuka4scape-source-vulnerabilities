@@ -23,7 +23,7 @@ final class CarrierLabInstaller: @unchecked Sendable {
         Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/Docomo_jp.bundle")
     }
 
-    func check() throws -> CheckResult {
+    func check() -> CheckResult {
         let fm = FileManager.default
         let probe = bridge.probe()
         return CheckResult(
@@ -36,18 +36,17 @@ final class CarrierLabInstaller: @unchecked Sendable {
         )
     }
 
-    func install() throws {
+    func install() -> CarrierLabBridge.ProbeResult {
         let carrierBundle = carrierBundleURL()
         let docomoBundle = docomoBundleURL()
         guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
-            throw NSError(domain: "carrierlab", code: 3,
-                          userInfo: [NSLocalizedDescriptionKey: "CarrierLab.bundle missing from app bundle"])
+            return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle missing"),
+                                                detail: "missing")
         }
         guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
-            throw NSError(domain: "carrierlab", code: 3,
-                          userInfo: [NSLocalizedDescriptionKey: "Docomo_jp.bundle missing from app bundle"])
+            return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"),
+                                                detail: "missing")
         }
-
         let s = CarrierLabState.Session(
             status: .placing,
             startedAt: Date(),
@@ -60,53 +59,46 @@ final class CarrierLabInstaller: @unchecked Sendable {
 
         let r1 = bridge.writeFile(source: carrierBundle.path,
                                   target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
-        guard r1.ok else {
+        if !r1.ok {
             var bad = s
             bad.status = .failed
             bad.lastError = r1.message
             state.save(bad)
-            throw NSError(domain: "carrierlab", code: 4,
-                          userInfo: [NSLocalizedDescriptionKey: r1.message])
+            return r1
         }
-
         let r2 = bridge.writeFile(source: docomoBundle.path,
                                   target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
-        guard r2.ok else {
+        if !r2.ok {
             var bad = s
             bad.status = .failed
             bad.lastError = r2.message
             state.save(bad)
-            throw NSError(domain: "carrierlab", code: 4,
-                          userInfo: [NSLocalizedDescriptionKey: r2.message])
+            return r2
         }
-
         var done = s
         done.status = .placed
         state.save(done)
+        return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed")
     }
 
-    func reload() throws {
+    func reload() -> CarrierLabBridge.ProbeResult {
         guard let s = state.session, s.status == .placed || s.status == .finished else {
-            throw NSError(domain: "carrierlab", code: 2,
-                          userInfo: [NSLocalizedDescriptionKey: "Nothing to reload. Install first."])
-        }
-        let r = bridge.writeFile(source: docomoBundleURL().path,
-                                 target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
-        guard r.ok else {
-            throw NSError(domain: "carrierlab", code: 4,
-                          userInfo: [NSLocalizedDescriptionKey: r.message])
+            return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."),
+                                                detail: "no session")
         }
         _ = s
+        return bridge.writeFile(source: docomoBundleURL().path,
+                                target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
     }
 
-    func finish() throws {
+    func finish() {
         guard let s = state.session else { return }
         var done = s
         done.status = .finished
         state.save(done)
     }
 
-    func reset() throws {
+    func reset() {
         state.clear()
     }
 }
