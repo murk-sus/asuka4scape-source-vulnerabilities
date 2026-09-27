@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v17-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v17-
+          key: nk-v18-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v18-
 
       - name: Install tools
         run: |
@@ -65,7 +65,7 @@ jobs:
           done
           find "$ROOT" -type f -exec sh -c 'printf "%8d  %s\n" "$(stat -f%z "$1")" "$1"' _ {} \;
 
-      - name: Update project.yml
+      - name: Write project.yml
         run: |
           set -euo pipefail
           cat > project.yml <<'PROJECT_EOF'
@@ -169,12 +169,8 @@ jobs:
                   ASSETCATALOG_COMPILER_OPTIMIZATION: space
                   ENABLE_ONLY_ACTIVE_RESOURCES: YES
           PROJECT_EOF
-          xcodegen --spec project.yml --quiet generate 2>/dev/null || true
-          rm -rf natsuk1.xcodeproj
-          echo "project.yml written:"
-          head -20 project.yml
 
-      - name: Update CarrierLab sources
+      - name: Write CarrierLab sources
         run: |
           set -euo pipefail
           mkdir -p natsuk1/CarrierLab
@@ -196,13 +192,16 @@ jobs:
 
               struct ProbeResult {
                   let state: ProbeState
-                  var ok: Bool { if case .ok = state { return true }; return false }
+                  var ok: Bool {
+                      if case .ok = state { return true }
+                      return false
+                  }
                   var message: String {
                       switch state {
-                      case .ok: return "Airlift готов"
-                      case .noVPN: return "Нет loopback VPN. Включите LocalDevVPN или SideStore WireGuard."
-                      case .noPairing: return "Нет pairing-файла. Откройте Airlift → Start Pairing."
-                      case .pairingTooSmall(let n): return "Pairing-файл повреждён (\(n) байт). Перепарьте в Airlift."
+                      case .ok: return "ready"
+                      case .noVPN: return "no loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
+                      case .noPairing: return "no pairing file. Open Airlift and start pairing."
+                      case .pairingTooSmall(let n): return "pairing file damaged (\(n) bytes). Re-pair in Airlift."
                       case .ffiFailed(let s): return s
                       }
                   }
@@ -226,7 +225,6 @@ jobs:
                   if size < 200 {
                       return ProbeResult(state: .pairingTooSmall(size))
                   }
-
                   let tmp = NSTemporaryDirectory() + "/carrierlab-probe-\(UUID().uuidString).txt"
                   try? "probe".data(using: .utf8)?.write(to: URL(fileURLWithPath: tmp))
                   var outJson: UnsafeMutablePointer<CChar>? = nil
@@ -247,9 +245,9 @@ jobs:
                   return ProbeResult(state: .ok)
               }
 
-              func writeFile(source: String, target: String) throws -> ProbeResult {
-                  let result = probe()
-                  guard result.ok else { return result }
+              func writeFile(source: String, target: String) -> ProbeResult {
+                  let pre = probe()
+                  guard pre.ok else { return pre }
                   var outJson: UnsafeMutablePointer<CChar>? = nil
                   var outErr: UnsafeMutablePointer<CChar>? = nil
                   var rc: Int32 = -1
@@ -313,7 +311,7 @@ jobs:
               }
 
               func save(_ s: Session) {
-                  let apply = {
+                  DispatchQueue.main.async {
                       self.session = s
                       let enc = JSONEncoder()
                       enc.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -322,22 +320,12 @@ jobs:
                           try? d.write(to: self.stateURL, options: .atomic)
                       }
                   }
-                  if Thread.isMainThread {
-                      apply()
-                  } else {
-                      DispatchQueue.main.async(execute: apply)
-                  }
               }
 
               func clear() {
-                  let apply = {
+                  DispatchQueue.main.async {
                       self.session = nil
                       try? FileManager.default.removeItem(at: self.stateURL)
-                  }
-                  if Thread.isMainThread {
-                      apply()
-                  } else {
-                      DispatchQueue.main.async(execute: apply)
                   }
               }
 
@@ -372,6 +360,7 @@ jobs:
               func carrierBundleURL() -> URL {
                   Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/CarrierLab.bundle")
               }
+
               func docomoBundleURL() -> URL {
                   Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/Docomo_jp.bundle")
               }
@@ -379,14 +368,11 @@ jobs:
               func check() throws -> CheckResult {
                   let fm = FileManager.default
                   let probe = bridge.probe()
-                  let carrierBundle = carrierBundleURL()
-                  let root = bridge.carrierRootPath()
-                  let links = bridge.bundleLinksPath()
                   return CheckResult(
                       probe: probe,
-                      carrierRootExists: fm.fileExists(atPath: root),
-                      bundleLinksExists: fm.fileExists(atPath: links),
-                      resourcesBundled: fm.fileExists(atPath: carrierBundle.path),
+                      carrierRootExists: fm.fileExists(atPath: bridge.carrierRootPath()),
+                      bundleLinksExists: fm.fileExists(atPath: bridge.bundleLinksPath()),
+                      resourcesBundled: fm.fileExists(atPath: carrierBundleURL().path),
                       backupPresent: state.hasBackup(),
                       status: state.session?.status ?? .clean
                   )
@@ -397,11 +383,11 @@ jobs:
                   let docomoBundle = docomoBundleURL()
                   guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
                       throw NSError(domain: "carrierlab", code: 3,
-                                    userInfo: [NSLocalizedDescriptionKey: "CarrierLab.bundle отсутствует в бандле"])
+                                    userInfo: [NSLocalizedDescriptionKey: "CarrierLab.bundle missing from app bundle"])
                   }
                   guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
                       throw NSError(domain: "carrierlab", code: 3,
-                                    userInfo: [NSLocalizedDescriptionKey: "Docomo_jp.bundle отсутствует в бандле"])
+                                    userInfo: [NSLocalizedDescriptionKey: "Docomo_jp.bundle missing from app bundle"])
                   }
 
                   let s = CarrierLabState.Session(
@@ -414,9 +400,8 @@ jobs:
                       aliases: nil)
                   state.save(s)
 
-                  let r1 = try bridge.writeFile(
-                      source: carrierBundle.path,
-                      target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
+                  let r1 = bridge.writeFile(source: carrierBundle.path,
+                                            target: bridge.bundleLinksPath() + "/CarrierLab.bundle")
                   guard r1.ok else {
                       var bad = s
                       bad.status = .failed
@@ -426,9 +411,8 @@ jobs:
                                     userInfo: [NSLocalizedDescriptionKey: r1.message])
                   }
 
-                  let r2 = try bridge.writeFile(
-                      source: docomoBundle.path,
-                      target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
+                  let r2 = bridge.writeFile(source: docomoBundle.path,
+                                            target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
                   guard r2.ok else {
                       var bad = s
                       bad.status = .failed
@@ -446,11 +430,10 @@ jobs:
               func reload() throws {
                   guard let s = state.session, s.status == .placed || s.status == .finished else {
                       throw NSError(domain: "carrierlab", code: 2,
-                                    userInfo: [NSLocalizedDescriptionKey: "Нечего перечитывать. Сначала Install."])
+                                    userInfo: [NSLocalizedDescriptionKey: "Nothing to reload. Install first."])
                   }
-                  let r = try bridge.writeFile(
-                      source: docomoBundleURL().path,
-                      target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
+                  let r = bridge.writeFile(source: docomoBundleURL().path,
+                                           target: bridge.carrierRootPath() + "/Docomo_jp.bundle")
                   guard r.ok else {
                       throw NSError(domain: "carrierlab", code: 4,
                                     userInfo: [NSLocalizedDescriptionKey: r.message])
@@ -465,7 +448,9 @@ jobs:
                   state.save(done)
               }
 
-              func reset() throws { state.clear() }
+              func reset() throws {
+                  state.clear()
+              }
           }
           SWIFT_INSTALLER
 
@@ -477,7 +462,7 @@ jobs:
               @State private var logText: String = ""
               @State private var busy: Bool = false
               @State private var airliftOK: Bool = false
-              @State private var airliftMessage: String = "проверка…"
+              @State private var airliftMessage: String = "checking..."
               @State private var resourcesOK: Bool = false
 
               var body: some View {
@@ -491,9 +476,7 @@ jobs:
                   .listStyle(.insetGrouped)
                   .navigationTitle("CarrierLab")
                   .navigationBarTitleDisplayMode(.inline)
-                  .onAppear {
-                      Task { @MainActor in runCheck() }
-                  }
+                  .onAppear { runCheck() }
               }
 
               private var airliftSection: some View {
@@ -517,7 +500,7 @@ jobs:
                       HStack {
                           Image(systemName: resourcesOK ? "checkmark.seal.fill" : "xmark.seal.fill")
                               .foregroundStyle(resourcesOK ? .green : .red)
-                          Text("CarrierAssets в бандле")
+                          Text("CarrierAssets in bundle")
                           Spacer()
                           Text(resourcesOK ? "ok" : "missing")
                               .font(.system(.footnote, design: .monospaced))
@@ -550,16 +533,11 @@ jobs:
 
               private var actionsSection: some View {
                   Section {
-                      Button { Task { @MainActor in runCheck() } } label: { Text("Check") }
-                          .disabled(busy)
-                      Button { Task { @MainActor in runInstall() } } label: { Text("Install") }
-                          .disabled(busy || !airliftOK || !resourcesOK)
-                      Button { Task { @MainActor in runReload() } } label: { Text("Reload") }
-                          .disabled(busy || !airliftOK || !resourcesOK)
-                      Button { Task { @MainActor in runFinish() } } label: { Text("Finish") }
-                          .disabled(busy)
-                      Button(role: .destructive) { Task { @MainActor in runReset() } } label: { Text("Reset") }
-                          .disabled(busy)
+                      Button { runCheck() } label: { Text("Check") }.disabled(busy)
+                      Button { runInstall() } label: { Text("Install") }.disabled(busy || !airliftOK || !resourcesOK)
+                      Button { runReload() } label: { Text("Reload") }.disabled(busy || !airliftOK || !resourcesOK)
+                      Button { runFinish() } label: { Text("Finish") }.disabled(busy)
+                      Button(role: .destructive) { runReset() } label: { Text("Reset") }.disabled(busy)
                   } header: { Label("Actions", systemImage: "wrench") }
               }
 
@@ -577,6 +555,7 @@ jobs:
               private var statusText: String {
                   clState.session?.status.rawValue ?? "clean"
               }
+
               private var statusColor: Color {
                   switch clState.session?.status {
                   case .placed, .finished: return .green
@@ -586,117 +565,152 @@ jobs:
                   }
               }
 
-              @MainActor
-              private func append(_ s: String) { logText += s + "\n" }
-
-              @MainActor
               private func runCheck() {
+                  if busy { return }
                   busy = true
-                  do {
-                      let r = try CarrierLabInstaller.shared.check()
-                      airliftOK = r.probe.ok
-                      airliftMessage = r.probe.message
-                      resourcesOK = r.resourcesBundled
-                      append("[check] airlift=\(r.probe.ok) msg=\(r.probe.message)")
-                      append("[check] carrierRoot=\(r.carrierRootExists) bundleLinks=\(r.bundleLinksExists) resourcesBundled=\(r.resourcesBundled) backup=\(r.backupPresent) status=\(r.status.rawValue)")
-                  } catch {
-                      airliftOK = false
-                      airliftMessage = error.localizedDescription
-                      resourcesOK = false
-                      append("[check] error: \(error.localizedDescription)")
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      var ok = false
+                      var msg = ""
+                      var resOK = false
+                      var lines: [String] = []
+                      do {
+                          let r = try CarrierLabInstaller.shared.check()
+                          ok = r.probe.ok
+                          msg = r.probe.message
+                          resOK = r.resourcesBundled
+                          lines.append("[check] airlift=\(r.probe.ok) msg=\(r.probe.message)")
+                          lines.append("[check] carrierRoot=\(r.carrierRootExists) bundleLinks=\(r.bundleLinksExists) resourcesBundled=\(r.resourcesBundled) backup=\(r.backupPresent) status=\(r.status.rawValue)")
+                      } catch {
+                          msg = error.localizedDescription
+                          lines.append("[check] error: \(error.localizedDescription)")
+                      }
+                      DispatchQueue.main.async {
+                          self.airliftOK = ok
+                          self.airliftMessage = msg
+                          self.resourcesOK = resOK
+                          for l in lines { self.logText += l + "\n" }
+                          self.busy = false
+                      }
                   }
-                  busy = false
               }
 
-              @MainActor
               private func runInstall() {
+                  if busy { return }
                   busy = true
-                  do {
-                      try CarrierLabInstaller.shared.install()
-                      append("[install] ok")
-                  } catch {
-                      append("[install] error: \(error.localizedDescription)")
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      var lines: [String] = []
+                      do {
+                          try CarrierLabInstaller.shared.install()
+                          lines.append("[install] ok")
+                      } catch {
+                          lines.append("[install] error: \(error.localizedDescription)")
+                      }
+                      DispatchQueue.main.async {
+                          for l in lines { self.logText += l + "\n" }
+                          self.busy = false
+                      }
                   }
-                  busy = false
-                  runCheck()
               }
 
-              @MainActor
               private func runReload() {
+                  if busy { return }
                   busy = true
-                  do {
-                      try CarrierLabInstaller.shared.reload()
-                      append("[reload] ok")
-                  } catch {
-                      append("[reload] error: \(error.localizedDescription)")
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      var lines: [String] = []
+                      do {
+                          try CarrierLabInstaller.shared.reload()
+                          lines.append("[reload] ok")
+                      } catch {
+                          lines.append("[reload] error: \(error.localizedDescription)")
+                      }
+                      DispatchQueue.main.async {
+                          for l in lines { self.logText += l + "\n" }
+                          self.busy = false
+                      }
                   }
-                  busy = false
               }
 
-              @MainActor
               private func runFinish() {
+                  if busy { return }
                   busy = true
-                  do {
-                      try CarrierLabInstaller.shared.finish()
-                      append("[finish] ok")
-                  } catch {
-                      append("[finish] error: \(error.localizedDescription)")
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      var lines: [String] = []
+                      do {
+                          try CarrierLabInstaller.shared.finish()
+                          lines.append("[finish] ok")
+                      } catch {
+                          lines.append("[finish] error: \(error.localizedDescription)")
+                      }
+                      DispatchQueue.main.async {
+                          for l in lines { self.logText += l + "\n" }
+                          self.busy = false
+                      }
                   }
-                  busy = false
               }
 
-              @MainActor
               private func runReset() {
+                  if busy { return }
                   busy = true
-                  do {
-                      try CarrierLabInstaller.shared.reset()
-                      append("[reset] ok")
-                  } catch {
-                      append("[reset] error: \(error.localizedDescription)")
+                  DispatchQueue.global(qos: .userInitiated).async {
+                      var lines: [String] = []
+                      do {
+                          try CarrierLabInstaller.shared.reset()
+                          lines.append("[reset] ok")
+                      } catch {
+                          lines.append("[reset] error: \(error.localizedDescription)")
+                      }
+                      DispatchQueue.main.async {
+                          for l in lines { self.logText += l + "\n" }
+                          self.busy = false
+                      }
                   }
-                  busy = false
               }
           }
           SWIFT_VIEW
+
+      - name: Update ai-hints
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if [ -f docs/ai-hints.md ] && ! grep -q '## USER RULES 2026-09' docs/ai-hints.md; then
+            printf '\n## USER RULES 2026-09\n\n' >> docs/ai-hints.md
+            printf -- '- All code, strings and comments in English only.\n' >> docs/ai-hints.md
+            printf -- '- Match existing style: @unchecked Sendable, DispatchQueue.main.async, no @MainActor, no Task { @MainActor }.\n' >> docs/ai-hints.md
+            printf -- '- Never mutate @Published from background. Always DispatchQueue.main.async in setters.\n' >> docs/ai-hints.md
+            printf -- '- Do not touch AirliftBridge.swift or PairingController.swift without explicit request.\n' >> docs/ai-hints.md
+            printf -- '- No "type INSTALL" style confirmations. Buttons act immediately.\n' >> docs/ai-hints.md
+            printf -- '- CarrierLab probe must distinguish: no VPN / no pairing / too-small pairing / FFI error.\n' >> docs/ai-hints.md
+            printf -- '- Read this file before every workflow change. Remove dead steps on every run.\n' >> docs/ai-hints.md
+            printf -- '- project.yml is written in full via cat heredoc, never sed/perl patched.\n' >> docs/ai-hints.md
+          fi
+
+          if [ -f docs/ai-hints.md ] && ! grep -q '## CARRIERLAB' docs/ai-hints.md; then
+            printf '\n## CARRIERLAB\n\n' >> docs/ai-hints.md
+            printf 'iOS port of MTS_CARRIER_FORUM core logic.\n\n' >> docs/ai-hints.md
+            printf -- '- CarrierAssets bundled under Resources/CarrierAssets.\n' >> docs/ai-hints.md
+            printf -- '- Check probes Airlift first.\n' >> docs/ai-hints.md
+            printf -- '- Install writes CarrierLab.bundle and Docomo_jp.bundle via al_exploit_run.\n' >> docs/ai-hints.md
+            printf -- '- Reload re-writes Docomo_jp.bundle to trigger rescan.\n' >> docs/ai-hints.md
+            printf -- '- Reset clears session state.\n' >> docs/ai-hints.md
+          fi
 
           git add -A
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "chore: pin project.yml, refresh CarrierLab sources [skip ci]"
+            git commit -m "feat: CarrierLab english + user style, main-thread publish [skip ci]"
             git push
-          fi
-
-      - name: Update ai-hints
-        run: |
-          set -euo pipefail
-          if [ -f docs/ai-hints.md ] && ! grep -q '## USER WORKFLOW RULES' docs/ai-hints.md; then
-            printf '\n## USER WORKFLOW RULES\n\n' >> docs/ai-hints.md
-            printf -- '- Never use sed/perl to modify project.yml. Rewrite fully via cat heredoc.\n' >> docs/ai-hints.md
-            printf -- '- Never mutate @Published from background thread. Use DispatchQueue.main.async or @MainActor.\n' >> docs/ai-hints.md
-            printf -- '- Do not touch AirliftBridge.swift or PairingController.swift without explicit request.\n' >> docs/ai-hints.md
-            printf -- '- Do not add "type INSTALL" style confirmations.\n' >> docs/ai-hints.md
-            printf -- '- AirLift probe must distinguish: no VPN / no pairing / too-small pairing / FFI error.\n' >> docs/ai-hints.md
-            printf -- '- Read hints before every workflow change. Remove dead steps each run.\n' >> docs/ai-hints.md
-            printf -- '- No comments in code or workflows.\n' >> docs/ai-hints.md
-            git add docs/ai-hints.md
-            if ! git diff --cached --quiet; then
-              git commit -m "docs: workflow rules [skip ci]"
-              git push
-            fi
           fi
 
       - name: Verify resources
         run: |
           set -e
-          echo "check directory"
-          ls -la natsuk1/Resources/CarrierAssets
-          echo "check CarrierLab.bundle"
-          ls -la natsuk1/Resources/CarrierAssets/CarrierLab.bundle
-          echo "check Docomo_jp.bundle"
-          ls -la natsuk1/Resources/CarrierAssets/Docomo_jp.bundle
-          echo "check project.yml"
-          grep -n 'CarrierAssets' project.yml
+          test -d natsuk1/Resources/CarrierAssets/CarrierLab.bundle
+          test -f natsuk1/Resources/CarrierAssets/CarrierLab.bundle/carrier.plist
+          test -f natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/carrier.plist
+          grep -q 'CarrierAssets' project.yml
 
       - name: Generate project
         run: |
