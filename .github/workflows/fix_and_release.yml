@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v31-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v31-
+          key: nk-v32-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v32-
 
       - name: Install tools
         run: |
@@ -1457,18 +1457,20 @@ jobs:
 
           ## PAIRING FILE FORMAT
 
-          AirLift pairing plistob keys:
+          AirLift pairing plist keys:
           - public_key (data)
           - private_key (data)
           - identifier (string)
           - alt_irk (data)
           Validation: at least 3 of 4 keys present. Never check for UDID/HostCertificate/RootCertificate.
           Location: Documents/natsuk1_pairing.plist OR nested Documents/Data/Application/<UUID>/Documents/.
-          FFI might expect .miledevicepairing extension. Search all candidates.
+          FFI might expect .mobiledevicepairing extension. Search all candidates.
           Fallback: any .plist / .mobilepairing / .mobilepair file > 100 bytes in Documents.
           AirliftFFI expects classic lockdown format with DeviceCertificate. RPPairing file alone is not enough.
           SideInstaller merges both RPPairing and lockdown records into one plist.
           Until merged file is generated, install will fail with TunnelFailureRsdUnreachable.
+          SideStore uses file name ALTPairingFile.mobiledevicepairing, not natsuk1_pairing.plist.
+          Always write pairing file with ALTPairingFile.mobiledevicepairing name.
 
           ## CARRIERLAB
 
@@ -1507,6 +1509,8 @@ jobs:
           RPPairing file from PairingController only contains public_key, private_key, identifier, alt_irk.
           Fix: SideInstaller merges both records into one plist. Need to generate merged file.
           Until merged file exists, Install/Reload cannot work. Probe still works for VPN and file check.
+          AirCard-iOS uses loopback priority 127.0.0.1, 10.7.0.1, 10.7.0.3 with adaptive 6s timeouts.
+          SideStore uses ALTPairingFile.mobiledevicepairing file name.
 
           ### extra argument 'netmask' in call
           Cause: sed/perl patch removed struct field but not call site.
@@ -1526,7 +1530,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: pairing file format, remove dead code, apple-style glow [skip ci]"
+            git commit -m "fix: pairing file name ALTPairingFile, cleanup workflow, apple-style glow [skip ci]"
             git push
           fi
 
