@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Opening installer…</title>
+<style>
+  body{font:16px -apple-system,system-ui,sans-serif;background:#0d1117;color:#c9d1d9;
+       display:flex;align-items:center;justify-content:center;min-height:100vh;
+       margin:0;padding:24px;text-align:center}
+  a{color:#58a6ff}
+</style>
+</head>
+<body>
+<div>
+  <p id="msg">Opening installer…</p>
+  <p><a id="fallback" href="#" hidden>Tap here if nothing happens</a></p>
+</div>
+<script>
+(function(){
+  var p = new URLSearchParams(location.search);
+  var s = p.get('scheme');
+  var u = p.get('ipa');
+  var m = document.getElementById('msg');
+  var a = document.getElementById('fallback');
+  if (!s || !u) { m.textContent = 'Missing scheme or ipa parameter.'; return; }
+  if (!/^[a-z][a-z0-9+.-]*$/.test(s)) { m.textContent = 'Bad scheme.'; return; }
+  var target = s + '://install?url=' + encodeURIComponent(u);
+  a.href = target;
+  a.hidden = false;
+  location.replace(target);
+  setTimeout(function(){
+    m.textContent = 'If the app did not open, tap the link below.';
+  }, 1500);
+})();
+</script>
+</body>
+</html>
