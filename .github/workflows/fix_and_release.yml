@@ -30,39 +30,14 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v49-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v49-
+          key: nk-v44-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v44-
 
       - name: Install tools
         run: |
           set -e
           command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
           command -v ldid >/dev/null 2>&1 || brew install ldid
-
-      - name: Fetch carrier assets
-        run: |
-          set -euo pipefail
-          ROOT=natsuk1/Resources/CarrierAssets
-          rm -rf "$ROOT"
-          mkdir -p "$ROOT/CarrierLab.bundle/signatures" "$ROOT/Docomo_jp.bundle/signatures"
-          BASE="https://raw.githubusercontent.com/VCTGomes/ios-carrier-bundle/cecd5594349df0bf51723a247028bad5f40a7965/carrier-bundles/27.0-24A437.V53_V54_V57OS"
-          for f in \
-            "CarrierLab.bundle/Info.plist" \
-            "CarrierLab.bundle/carrier.plist" \
-            "CarrierLab.bundle/overrides_V53_V54_V57.der.pri" \
-            "CarrierLab.bundle/overrides_V53_V54_V57.plist" \
-            "CarrierLab.bundle/signatures/common.plist" \
-            "CarrierLab.bundle/signatures/overrides_V53_V54_V57.plist" \
-            "Docomo_jp.bundle/Info.plist" \
-            "Docomo_jp.bundle/carrier.plist" \
-            "Docomo_jp.bundle/overrides_V53_V54_V57.der.pri" \
-            "Docomo_jp.bundle/overrides_V53_V54_V57.plist" \
-            "Docomo_jp.bundle/profile.mobileconfig" \
-            "Docomo_jp.bundle/signatures/common.plist" \
-            "Docomo_jp.bundle/signatures/overrides_V53_V54_V57.plist" ; do
-            curl -fsSL "$BASE/$f" -o "$ROOT/$f"
-            test -s "$ROOT/$f"
-          done
 
       - name: Write project.yml
         run: |
@@ -77,9 +52,11 @@ jobs:
             groupSortPosition: top
             projectFormat: xcode15_0
             generateEmptyDirectories: false
+
           configs:
             Debug: debug
             Release: release
+
           settings:
             base:
               SWIFT_VERSION: "5.0"
@@ -126,6 +103,7 @@ jobs:
                 STRIPFLAGS: "-S -x"
                 COPY_PHASE_STRIP: YES
                 LLVM_LTO: NO
+
           targets:
             natsuk1:
               type: application
@@ -169,173 +147,11 @@ jobs:
                   ASSETCATALOG_COMPILER_OPTIMIZATION: space
                   ENABLE_ONLY_ACTIVE_RESOURCES: YES
           PROJECT_EOF
-
-      - name: Write App
-        run: |
-          set -euo pipefail
-          mkdir -p natsuk1/App
-          cat > natsuk1/App/natsuk1.swift <<'APP_EOF'
-          import SwiftUI
-          import UIKit
-          import Foundation
-
-          final class LockedBuffer: @unchecked Sendable {
-              static let shared = LockedBuffer()
-              private let lock = NSLock()
-              private var value: String = ""
-              private init() {}
-              func append(_ s: String) {
-                  lock.lock(); value += s + "\n"
-                  if value.count > 10000 { value = String(value.suffix(6000)) }
-                  lock.unlock()
-              }
-              func drain() -> String { lock.lock(); let v = value; value = ""; lock.unlock(); return v }
-              func clear() { lock.lock(); value = ""; lock.unlock() }
-          }
-
-          private let cCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { line in
-              guard let line = line else { return }
-              var bytes: [UInt8] = []
-              var p = line
-              while p.pointee != 0 { bytes.append(UInt8(bitPattern: p.pointee)); p = p.advanced(by: 1) }
-              let _line = String(decoding: bytes, as: UTF8.self)
-              LockedBuffer.shared.append(_line)
-              AppState.shared.parseLogLine(_line)
-          }
-
-          private func osVersionString() -> String {
-              let v = ProcessInfo.processInfo.operatingSystemVersion
-              return "\(v.majorVersion).\(v.minorVersion)"
-          }
-
-          private func appVersionString() -> String {
-              Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-          }
-
-          @main
-          struct natsuk1App: App { var body: some Scene { WindowGroup { RootView() } } }
-
-          struct RootView: View {
-              @StateObject private var state = AppState.shared
-              @StateObject private var offsets = OffsetsStore.shared
-              @StateObject private var airlift = AirliftBridge.shared
-              @AppStorage("auto_run") private var auto_run = false
-              @AppStorage("keep_alive_audio") private var keep_alive_audio = false
-              @AppStorage("keep_alive_location") private var keep_alive_location = false
-              @Environment(\.scenePhase) private var scenePhase
-              init() {
-                  UserDefaults.standard.register(defaults: ["auto_run": false, "keep_alive_audio": false, "keep_alive_location": false, "lang": "en"])
-              }
-              var body: some View {
-                  ContentView()
-                      .environmentObject(state).environmentObject(offsets).environmentObject(airlift)
-                      .onAppear {
-                          nk_set_log(cCallback)
-                          if state.log.isEmpty {
-                              state.append("[*] natsuk1 v\(appVersionString())")
-                              state.append("[*] iOS \(osVersionString()) / arm64e")
-                              state.append("")
-                          }
-                          if keep_alive_audio { KeepAlive.shared.startAudio() }
-                          if keep_alive_location { KeepAlive.shared.startLocation() }
-                          if auto_run { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { state.run() } }
-                      }
-                      .onChange(of: keep_alive_audio) { _, v in if v { KeepAlive.shared.startAudio() } else { KeepAlive.shared.stopAudio() } }
-                      .onChange(of: keep_alive_location) { _, v in if v { KeepAlive.shared.startLocation() } else { KeepAlive.shared.stopLocation() } }
-                      .onChange(of: scenePhase) { _, phase in if phase == .background { } }
-              }
-          }
-
-          final class AppState: ObservableObject, @unchecked Sendable {
-              static let shared = AppState()
-              @Published var slide: String = "-"
-              @Published var base: String = "-"
-              @Published var showCrashLog: Bool = false
-              func parseLogLine(_ line: String) {
-                  if let v = Self.extractHex(line, keys: ["slide=0x", "SLIDE = 0x", "slide = 0x"]) {
-                      if self.slide != v { DispatchQueue.main.async { self.slide = v } }
-                  }
-                  if let v = Self.extractHex(line, keys: ["base=0x", "BASE = 0x", "base = 0x"]) {
-                      if self.base != v { DispatchQueue.main.async { self.base = v } }
-                  }
-              }
-              private static func extractHex(_ s: String, keys: [String]) -> String? {
-                  for k in keys {
-                      if let r = s.range(of: k) {
-                          var hex = ""
-                          for c in s[r.upperBound...] { if c.isHexDigit { hex.append(c) } else { break } }
-                          if !hex.isEmpty { return "0x" + hex }
-                      }
-                  }
-                  return nil
-              }
-              enum Status {
-                  case idle, running, ok, failed
-                  var color: Color {
-                      switch self {
-                      case .idle: return .secondary
-                      case .running: return .orange
-                      case .ok: return .green
-                      case .failed: return .red
-                      }
-                  }
-              }
-              @Published var log: String = ""
-              @Published var status: Status = .idle
-              @Published var running: Bool = false
-              @Published var lang: String { didSet { UserDefaults.standard.set(lang, forKey: "lang") } }
-              private var flusher: Timer?
-              private init() {
-                  self.lang = UserDefaults.standard.string(forKey: "lang") ?? "en"
-                  startFlusher()
-              }
-              func t(_ en: String, _ ru: String) -> String { lang == "ru" ? ru : en }
-              private func startFlusher() {
-                  flusher?.invalidate()
-                  flusher = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-                      guard let self = self else { return }
-                      let chunk = LockedBuffer.shared.drain()
-                      if chunk.isEmpty { return }
-                      var newLog = self.log
-                      newLog += chunk
-                      if newLog.count > 30000 { newLog = String(newLog.suffix(20000)) }
-                      self.log = newLog
-                  }
-              }
-              func append(_ s: String) { LockedBuffer.shared.append(s) }
-              func run() {
-                  if running { return }
-                  running = true; status = .running
-                  Task.detached {
-                      let rc = nk_full_exploit()
-                      await MainActor.run {
-                          AppState.shared.running = false
-                          AppState.shared.status = (rc == 0) ? .ok : .failed
-                      }
-                  }
-              }
-              func respring() {
-                  DispatchQueue.main.async {
-                      guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                            let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first,
-                            let root = window.rootViewController else { return }
-                      let host = UIHostingController(rootView: RespringView().ignoresSafeArea())
-                      host.modalPresentationStyle = .fullScreen
-                      root.present(host, animated: false)
-                  }
-              }
-              func clear() { LockedBuffer.shared.clear(); log = "" }
-              func cancel() {
-                  append("[*] cancel requested")
-              }
-          }
-          APP_EOF
-
       - name: Write PairingGenerator
         run: |
           set -euo pipefail
           mkdir -p natsuk1/Helpers
-          cat > natsuk1/Helpers/PairingGenerator.swift <<'PG_EOF'
+          cat > natsuk1/Helpers/PairingGenerator.swift <<'PAIRING_EOF'
           import Foundation
 
           final class PairingGenerator {
@@ -372,6 +188,7 @@ jobs:
                   guard !plist.isEmpty else {
                       throw GeneratorError.notAPlist("empty plist: \(rppPath)")
                   }
+
                   let canonical = PairingController.syncCanonicalPairingFile(from: rppPath)
                   if outputPath != canonical {
                       do {
@@ -383,13 +200,12 @@ jobs:
                   return canonical
               }
           }
-          PG_EOF
-
+          PAIRING_EOF
       - name: Write CarrierLabBridge
         run: |
           set -euo pipefail
           mkdir -p natsuk1/CarrierLab
-          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'CB_EOF'
+          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'BRIDGE_EOF'
           import Foundation
 
           final class CarrierLabBridge: @unchecked Sendable {
@@ -419,7 +235,7 @@ jobs:
               }
 
               private let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
-              private let bundleLinks = "/var/mobile/Library/Carrier Bundles/BundleLinks"
+              private let bundleLinks = "/var/mobile/Library/Carrier Bundles"
 
               func carrierRootPath() -> String { carrierRoot }
               func bundleLinksPath() -> String { bundleLinks }
@@ -434,7 +250,7 @@ jobs:
                   let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
                   let candidates = [
                       docs.appendingPathComponent("natsuk1_pairing.plist").path,
-                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing").path
+                      docs.appendingPathComponent("ALTPairingFile.mobiledevicepairing").path,
                   ]
                   for c in candidates {
                       if fm.fileExists(atPath: c) {
@@ -476,15 +292,6 @@ jobs:
                   guard pre.ok else { return pre }
                   guard let pairingPath = findPairingFile() else {
                       return ProbeResult(state: .noPairing, detail: "no pairing path")
-                  }
-                  let fm = FileManager.default
-                  var isDir: ObjCBool = false
-                  guard fm.fileExists(atPath: sourceFolder, isDirectory: &isDir), isDir.boolValue else {
-                      return ProbeResult(state: .ffiFailed("source is not a directory: \(sourceFolder)"), detail: "source missing")
-                  }
-                  let contents = (try? fm.contentsOfDirectory(atPath: sourceFolder)) ?? []
-                  guard !contents.isEmpty else {
-                      return ProbeResult(state: .ffiFailed("no files in directory: \(sourceFolder)"), detail: "empty source")
                   }
                   var outError: UnsafeMutablePointer<CChar>? = nil
                   var rc: Int32 = -1
@@ -528,13 +335,12 @@ jobs:
                   return ProbeResult(state: .ok, detail: "ok")
               }
           }
-          CB_EOF
-
+          BRIDGE_EOF
       - name: Write CarrierLabInstaller
         run: |
           set -euo pipefail
           mkdir -p natsuk1/CarrierLab
-          cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'CI_EOF'
+          cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'INSTALLER_EOF'
           import Foundation
 
           final class CarrierLabInstaller: @unchecked Sendable {
@@ -576,16 +382,11 @@ jobs:
               func install() -> CarrierLabBridge.ProbeResult {
                   let carrierBundle = carrierBundleURL()
                   let docomoBundle = docomoBundleURL()
-                  let fm = FileManager.default
-                  guard fm.fileExists(atPath: carrierBundle.path) else {
+                  guard FileManager.default.fileExists(atPath: carrierBundle.path) else {
                       return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle missing"), detail: "missing")
                   }
-                  guard fm.fileExists(atPath: docomoBundle.path) else {
+                  guard FileManager.default.fileExists(atPath: docomoBundle.path) else {
                       return CarrierLabBridge.ProbeResult(state: .ffiFailed("Docomo_jp.bundle missing"), detail: "missing")
-                  }
-                  let carrierContents = (try? fm.contentsOfDirectory(atPath: carrierBundle.path)) ?? []
-                  guard !carrierContents.isEmpty else {
-                      return CarrierLabBridge.ProbeResult(state: .ffiFailed("CarrierLab.bundle is empty"), detail: "empty bundle")
                   }
                   let pre = bridge.probe()
                   guard pre.ok else { return pre }
@@ -597,12 +398,12 @@ jobs:
                       originalBackupPath: state.backupURL().path,
                       ipccTriggerPath: docomoBundle.path,
                       lastError: nil,
-                      aliases: ["25001", "25001_GID1-AA"])
+                      aliases: nil)
                   state.save(s)
 
                   let r1 = bridge.injectFolder(
                       sourceFolder: carrierBundle.path,
-                      targetFolder: bridge.carrierRootPath(),
+                      targetFolder: bridge.bundleLinksPath(),
                       folderName: "CarrierLab.bundle")
                   if !r1.ok {
                       var bad = s
@@ -624,37 +425,9 @@ jobs:
                       return r2
                   }
 
-                  let r3 = bridge.injectFolder(
-                      sourceFolder: carrierBundle.path,
-                      targetFolder: bridge.bundleLinksPath(),
-                      folderName: "25001")
-                  if !r3.ok {
-                      var bad = s
-                      bad.status = .failed
-                      bad.lastError = r3.message
-                      state.save(bad)
-                      return r3
-                  }
-
-                  let r4 = bridge.injectFolder(
-                      sourceFolder: carrierBundle.path,
-                      targetFolder: bridge.bundleLinksPath(),
-                      folderName: "25001_GID1-AA")
-                  if !r4.ok {
-                      var bad = s
-                      bad.status = .failed
-                      bad.lastError = r4.message
-                      state.save(bad)
-                      return r4
-                  }
-
                   var done = s
                   done.status = .placed
                   state.save(done)
-
-                  DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                      AppState.shared.respring()
-                  }
                   return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed")
               }
 
@@ -663,16 +436,10 @@ jobs:
                       return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."), detail: "no session")
                   }
                   _ = s
-                  let r = bridge.injectFolder(
+                  return bridge.injectFolder(
                       sourceFolder: docomoBundleURL().path,
                       targetFolder: bridge.carrierRootPath(),
                       folderName: "Docomo_jp.bundle")
-                  if r.ok {
-                      DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                          AppState.shared.respring()
-                      }
-                  }
-                  return r
               }
 
               func finish() {
@@ -686,15 +453,7 @@ jobs:
                   state.clear()
               }
           }
-          CI_EOF
-
-      - name: Fix OverviewView
-        run: |
-          set -euo pipefail
-          if [ -f natsuk1/Views/OverviewView.swift ]; then
-            perl -i -pe 's/state\.necp_run\(\)/state.run()/g' natsuk1/Views/OverviewView.swift
-          fi
-
+          INSTALLER_EOF
       - name: Commit
         run: |
           set -euo pipefail
@@ -704,7 +463,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: webview respring, bundlelinks copy, empty dir guard [skip ci]"
+            git commit -m "fix: pass-through pairing, inject_folder, no lockdown gate [skip ci]"
             git push
           fi
 
@@ -717,9 +476,12 @@ jobs:
           grep -q 'CarrierAssets' project.yml
           grep -q 'lc++' project.yml
           grep -q 'natsuk1/Support/bridging.h' project.yml
-          grep -q 'no files in directory' natsuk1/CarrierLab/CarrierLabBridge.swift
-          grep -q 'AppState.shared.respring' natsuk1/CarrierLab/CarrierLabInstaller.swift
-          grep -q 'RespringView' natsuk1/App/natsuk1.swift
+          grep -q 'al_exploit_inject_folder' natsuk1/CarrierLab/CarrierLabBridge.swift
+          grep -q 'injectFolder' natsuk1/CarrierLab/CarrierLabInstaller.swift
+          ! grep -q '_silgen_name' natsuk1/CarrierLab/CarrierLabBridge.swift
+          ! grep -q '_silgen_name' natsuk1/CarrierLab/CarrierLabInstaller.swift
+          ! grep -q 'lockdownd' natsuk1/Helpers/PairingGenerator.swift
+          grep -q 'syncCanonicalPairingFile' natsuk1/Helpers/PairingGenerator.swift
           rm -rf natsuk1.xcodeproj
           xcodegen generate
 
@@ -769,7 +531,7 @@ jobs:
           gh release view development >/dev/null 2>&1 && gh release delete development --yes --cleanup-tag || true
           R="${{ github.repository }}"
           IPA="https://github.com/$R/releases/download/development/natsuk1.ipa"
-          NOTES="natsuk1 v49.0 ($((SIZE/1024)) KB)
+          NOTES="natsuk1 v44.0 ($((SIZE/1024)) KB)
 
           **Install**
 
