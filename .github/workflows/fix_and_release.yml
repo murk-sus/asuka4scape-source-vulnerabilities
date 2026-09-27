@@ -59,16 +59,23 @@ jobs:
           perl -0777 -i -pe 's/\n\s*static func full\(\)[^\n]*\{.*?\n\s*\}\n/\n/gs' natsuk1/Helpers/DeviceName.swift 2>/dev/null || true
           perl -0777 -i -pe 's/\n\s*nonisolated static var activeVersion:[^\n]*\{.*?\n\s*\}\n/\n/gs' natsuk1/Helpers/OffsetsStore.swift 2>/dev/null || true
           perl -i -pe 's/row\("Identifier", machineID\(\)\)/row("Identifier", DeviceName.machineID())/' natsuk1/Views/DeviceInfoView.swift 2>/dev/null || true
-          perl -i -pe 's/if let pin = airlift\.pairPIN \{/if airlift.pairPIN != nil {/' natsuk1/Views/AirliftView.swift 2>/dev/null || true
+
+          AV=natsuk1/Views/AirliftView.swift
+          if [ -f "$AV" ]; then
+            perl -i -pe 's/if airlift\.pairPIN != nil \{/if let pin = airlift.pairPIN {/' "$AV"
+          fi
 
           oxipng -o max --strip safe natsuk1/Resources/Assets.xcassets/AppIcon.appiconset/1024x1024.png 2>/dev/null || true
 
           grep -q '.swiftpm/' .gitignore 2>/dev/null || printf '\n# Swift\n*.xcworkspace\n.swiftpm/\n.build/\nPackage.resolved\n\n# Debug\n*.dSYM\n' >> .gitignore
 
           git add -A
-          git diff --cached --quiet && echo "no changes" && exit 0
-          git commit -m "fix: NetworkStatus call site [skip ci]"
-          git push
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "fix: AirliftView optional binding, NetworkStatus call site [skip ci]"
+            git push
+          fi
 
       - name: Generate project
         run: |
