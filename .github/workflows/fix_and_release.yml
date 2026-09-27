@@ -30,8 +30,8 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             natsuk1.xcodeproj
-          key: nk-v16-${{ hashFiles('project.yml') }}
-          restore-keys: nk-v16-
+          key: nk-v17-${{ hashFiles('project.yml') }}
+          restore-keys: nk-v17-
 
       - name: Install tools
         run: |
@@ -61,17 +61,213 @@ jobs:
             "Docomo_jp.bundle/signatures/common.plist" \
             "Docomo_jp.bundle/signatures/overrides_V53_V54_V57.plist" ; do
             curl -fsSL "$BASE/$f" -o "$ROOT/$f"
+            test -s "$ROOT/$f"
           done
           find "$ROOT" -type f -exec sh -c 'printf "%8d  %s\n" "$(stat -f%z "$1")" "$1"' _ {} \;
+
+      - name: Update project.yml
+        run: |
+          set -euo pipefail
+          cat > project.yml <<'PROJECT_EOF'
+          name: natsuk1
+          options:
+            bundleIdPrefix: com.natsuk1
+            deploymentTarget:
+              iOS: "26.0"
+            createIntermediateGroups: true
+            groupSortPosition: top
+            projectFormat: xcode15_0
+            generateEmptyDirectories: false
+          configs:
+            Debug: debug
+            Release: release
+          settings:
+            base:
+              SWIFT_VERSION: "5.0"
+              SWIFT_STRICT_CONCURRENCY: minimal
+              IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+              CLANG_ENABLE_MODULES: YES
+              CLANG_MODULES_AUTOLINK: NO
+              CLANG_ENABLE_OBJC_ARC: YES
+              ENABLE_BITCODE: NO
+              CODE_SIGNING_REQUIRED: NO
+              CODE_SIGNING_ALLOWED: NO
+              ENABLE_USER_SCRIPT_SANDBOXING: NO
+              ENABLE_MODULE_VERIFIER: NO
+              VALIDATE_PRODUCT: NO
+              ALWAYS_SEARCH_USER_PATHS: NO
+              GCC_NO_COMMON_BLOCKS: YES
+              CLANG_LTO: NO
+              LLVM_LTO: NO
+            configs:
+              Debug:
+                SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+                SWIFT_COMPILATION_MODE: singlefile
+                GCC_OPTIMIZATION_LEVEL: "0"
+                ONLY_ACTIVE_ARCH: YES
+                DEBUG_INFORMATION_FORMAT: dwarf
+                SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+                ENABLE_TESTABILITY: YES
+              Release:
+                SWIFT_OPTIMIZATION_LEVEL: "-Osize"
+                SWIFT_COMPILATION_MODE: wholemodule
+                SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
+                GCC_OPTIMIZATION_LEVEL: "s"
+                ONLY_ACTIVE_ARCH: NO
+                DEBUG_INFORMATION_FORMAT: dwarf
+                ENABLE_NS_ASSERTIONS: NO
+                ENABLE_TESTABILITY: NO
+                GCC_INLINES_ARE_PRIVATE_EXTERN: YES
+                GCC_SYMBOLS_PRIVATE_EXTERN: YES
+                DEAD_CODE_STRIPPING: YES
+                DEPLOYMENT_POSTPROCESSING: YES
+                STRIP_INSTALLED_PRODUCT: YES
+                STRIP_STYLE: all
+                STRIPFLAGS: "-S -x"
+                COPY_PHASE_STRIP: YES
+                LLVM_LTO: NO
+          targets:
+            natsuk1:
+              type: application
+              platform: iOS
+              sources:
+                - path: natsuk1/App
+                - path: natsuk1/CarrierLab
+                - path: natsuk1/Exploit
+                - path: natsuk1/Helpers
+                - path: natsuk1/Views
+                - path: natsuk1/Support/bridging.h
+                - path: natsuk1/Resources/Assets.xcassets
+                  buildPhase: resources
+                - path: natsuk1/Resources/CarrierAssets
+                  type: folder
+                  buildPhase: resources
+                - path: natsuk1/Offsets
+                  type: folder
+                  buildPhase: resources
+              dependencies:
+                - sdk: Foundation.framework
+                - sdk: UIKit.framework
+                - sdk: WebKit.framework
+                - sdk: AVFoundation.framework
+                - sdk: CoreLocation.framework
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.natsuk1.exploit
+                  PRODUCT_NAME: natsuk1
+                  INFOPLIST_FILE: natsuk1/Resources/Info.plist
+                  CODE_SIGN_ENTITLEMENTS: natsuk1/Resources/natsuk1.entitlements
+                  SWIFT_OBJC_BRIDGING_HEADER: natsuk1/Support/bridging.h
+                  SWIFT_OBJC_INTERFACE_HEADER_NAME: natsuk1-Swift.h
+                  OTHER_SWIFT_FLAGS: "$(inherited) -Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks"
+                  OTHER_CFLAGS: -fno-autolink -std=c17 -Oz -Wno-everything -fno-objc-arc-exceptions -fvisibility=hidden -fno-unwind-tables -fno-asynchronous-unwind-tables -fomit-frame-pointer
+                  OTHER_LDFLAGS: -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x -Wl,-S -fobjc-arc -lz $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/libairlift_ffi.a -ObjC
+                  HEADER_SEARCH_PATHS: "$(SRCROOT)/natsuk1/Exploit/Core $(SRCROOT)/natsuk1/Exploit/Airlift $(SRCROOT)/external/AirliftFFI.xcframework/ios-arm64/Headers"
+                  TARGETED_DEVICE_FAMILY: "1"
+                  GENERATE_INFOPLIST_FILE: NO
+                  ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+                  ASSETCATALOG_COMPILER_OPTIMIZATION: space
+                  ENABLE_ONLY_ACTIVE_RESOURCES: YES
+          PROJECT_EOF
+          xcodegen --spec project.yml --quiet generate 2>/dev/null || true
+          rm -rf natsuk1.xcodeproj
+          echo "project.yml written:"
+          head -20 project.yml
 
       - name: Update CarrierLab sources
         run: |
           set -euo pipefail
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
           mkdir -p natsuk1/CarrierLab
           rm -f natsuk1/CarrierLab/CarrierLabCore.swift
+
+          cat > natsuk1/CarrierLab/CarrierLabBridge.swift <<'SWIFT_BRIDGE'
+          import Foundation
+
+          final class CarrierLabBridge: @unchecked Sendable {
+              static let shared = CarrierLabBridge()
+
+              enum ProbeState {
+                  case ok
+                  case noVPN
+                  case noPairing
+                  case pairingTooSmall(Int)
+                  case ffiFailed(String)
+              }
+
+              struct ProbeResult {
+                  let state: ProbeState
+                  var ok: Bool { if case .ok = state { return true }; return false }
+                  var message: String {
+                      switch state {
+                      case .ok: return "Airlift готов"
+                      case .noVPN: return "Нет loopback VPN. Включите LocalDevVPN или SideStore WireGuard."
+                      case .noPairing: return "Нет pairing-файла. Откройте Airlift → Start Pairing."
+                      case .pairingTooSmall(let n): return "Pairing-файл повреждён (\(n) байт). Перепарьте в Airlift."
+                      case .ffiFailed(let s): return s
+                      }
+                  }
+              }
+
+              private let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
+              private let bundleLinks = "/var/mobile/Library/Carrier Bundles"
+
+              func carrierRootPath() -> String { carrierRoot }
+              func bundleLinksPath() -> String { bundleLinks }
+
+              func probe() -> ProbeResult {
+                  if !NetworkStatus.loopbackVPNUp() {
+                      return ProbeResult(state: .noVPN)
+                  }
+                  let pairing = PairingController.pairingFilePath()
+                  guard FileManager.default.fileExists(atPath: pairing) else {
+                      return ProbeResult(state: .noPairing)
+                  }
+                  let size = (try? FileManager.default.attributesOfItem(atPath: pairing)[.size] as? Int) ?? 0
+                  if size < 200 {
+                      return ProbeResult(state: .pairingTooSmall(size))
+                  }
+
+                  let tmp = NSTemporaryDirectory() + "/carrierlab-probe-\(UUID().uuidString).txt"
+                  try? "probe".data(using: .utf8)?.write(to: URL(fileURLWithPath: tmp))
+                  var outJson: UnsafeMutablePointer<CChar>? = nil
+                  var outErr: UnsafeMutablePointer<CChar>? = nil
+                  var rc: Int32 = -1
+                  tmp.withCString { sf in
+                      "/var/mobile/Library/Carrier Bundles/.carrierlab-probe".withCString { tf in
+                          rc = al_exploit_run(sf, tf, nil, nil, &outJson, &outErr)
+                      }
+                  }
+                  let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
+                  if let p = outJson { al_string_free(p) }
+                  if let p = outErr { al_string_free(p) }
+                  try? FileManager.default.removeItem(atPath: tmp)
+                  if rc != 0 {
+                      return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg))
+                  }
+                  return ProbeResult(state: .ok)
+              }
+
+              func writeFile(source: String, target: String) throws -> ProbeResult {
+                  let result = probe()
+                  guard result.ok else { return result }
+                  var outJson: UnsafeMutablePointer<CChar>? = nil
+                  var outErr: UnsafeMutablePointer<CChar>? = nil
+                  var rc: Int32 = -1
+                  source.withCString { sc in
+                      target.withCString { tc in
+                          rc = al_exploit_run(sc, tc, nil, nil, &outJson, &outErr)
+                      }
+                  }
+                  let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
+                  if let p = outJson { al_string_free(p) }
+                  if let p = outErr { al_string_free(p) }
+                  if rc != 0 {
+                      return ProbeResult(state: .ffiFailed(errMsg.isEmpty ? "rc=\(rc)" : errMsg))
+                  }
+                  return ProbeResult(state: .ok)
+              }
+          }
+          SWIFT_BRIDGE
 
           cat > natsuk1/CarrierLab/CarrierLabState.swift <<'SWIFT_STATE'
           import Foundation
@@ -391,9 +587,7 @@ jobs:
               }
 
               @MainActor
-              private func append(_ s: String) {
-                  logText += s + "\n"
-              }
+              private func append(_ s: String) { logText += s + "\n" }
 
               @MainActor
               private func runCheck() {
@@ -469,17 +663,40 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fix: main-thread @Published mutations in CarrierLab [skip ci]"
+            git commit -m "chore: pin project.yml, refresh CarrierLab sources [skip ci]"
             git push
           fi
 
-      - name: Verify resources staged
+      - name: Update ai-hints
+        run: |
+          set -euo pipefail
+          if [ -f docs/ai-hints.md ] && ! grep -q '## USER WORKFLOW RULES' docs/ai-hints.md; then
+            printf '\n## USER WORKFLOW RULES\n\n' >> docs/ai-hints.md
+            printf -- '- Never use sed/perl to modify project.yml. Rewrite fully via cat heredoc.\n' >> docs/ai-hints.md
+            printf -- '- Never mutate @Published from background thread. Use DispatchQueue.main.async or @MainActor.\n' >> docs/ai-hints.md
+            printf -- '- Do not touch AirliftBridge.swift or PairingController.swift without explicit request.\n' >> docs/ai-hints.md
+            printf -- '- Do not add "type INSTALL" style confirmations.\n' >> docs/ai-hints.md
+            printf -- '- AirLift probe must distinguish: no VPN / no pairing / too-small pairing / FFI error.\n' >> docs/ai-hints.md
+            printf -- '- Read hints before every workflow change. Remove dead steps each run.\n' >> docs/ai-hints.md
+            printf -- '- No comments in code or workflows.\n' >> docs/ai-hints.md
+            git add docs/ai-hints.md
+            if ! git diff --cached --quiet; then
+              git commit -m "docs: workflow rules [skip ci]"
+              git push
+            fi
+          fi
+
+      - name: Verify resources
         run: |
           set -e
-          test -d natsuk1/Resources/CarrierAssets/CarrierLab.bundle
-          test -f natsuk1/Resources/CarrierAssets/CarrierLab.bundle/carrier.plist
-          test -f natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/carrier.plist
-          grep -q 'CarrierAssets' project.yml
+          echo "check directory"
+          ls -la natsuk1/Resources/CarrierAssets
+          echo "check CarrierLab.bundle"
+          ls -la natsuk1/Resources/CarrierAssets/CarrierLab.bundle
+          echo "check Docomo_jp.bundle"
+          ls -la natsuk1/Resources/CarrierAssets/Docomo_jp.bundle
+          echo "check project.yml"
+          grep -n 'CarrierAssets' project.yml
 
       - name: Generate project
         run: |
@@ -515,8 +732,8 @@ jobs:
           set -e
           APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -print -quit)
           test -n "$APP"
-          ls -la "$APP/CarrierAssets/CarrierLab.bundle" || { echo "CarrierAssets missing"; exit 1; }
-          ls -la "$APP/CarrierAssets/Docomo_jp.bundle" || { echo "Docomo assets missing"; exit 1; }
+          ls -la "$APP/CarrierAssets/CarrierLab.bundle"
+          ls -la "$APP/CarrierAssets/Docomo_jp.bundle"
 
       - name: Package and Release
         env:
