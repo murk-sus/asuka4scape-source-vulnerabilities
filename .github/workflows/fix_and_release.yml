@@ -36,9 +36,86 @@ jobs:
 
       - name: Install tools
         run: |
-          set -e
           command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
-          command -v ldid >/dev/null 2>&1 || brew install ldid
+          command -v ldid     >/dev/null 2>&1 || brew install ldid
+          command -v oxipng   >/dev/null 2>&1 || brew install oxipng
+
+      - name: Cleanup
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          python3 - <<'PY'
+          def drop_fn(src, sig):
+              i = src.find(sig)
+              if i < 0:
+                  return src
+              j = src.find("{", i)
+              depth, k = 0, j
+              while k < len(src):
+                  if src[k] == "{":
+                      depth += 1
+                  elif src[k] == "}":
+                      depth -= 1
+                      if depth == 0:
+                          break
+                  k += 1
+              end = k + 1
+              while end < len(src) and src[end] == "\n":
+                  end += 1
+              start = i
+              while start > 0 and src[start-1] == "\n":
+                  start -= 1
+              return src[:start] + src[end:]
+
+          def edit(path, sigs, reps=()):
+              try:
+                  s = open(path).read()
+              except FileNotFoundError:
+                  return
+              orig = s
+              for sig in sigs:
+                  s = drop_fn(s, sig)
+              for old, new in reps:
+                  s = s.replace(old, new)
+              if s != orig:
+                  open(path, "w").write(s)
+                  print("edited " + path)
+
+          edit("natsuk1/Helpers/NetworkStatus.swift",
+               ["static func summarize(deviceIP:",
+                "static func tunnelHostCandidates(",
+                "static func host(_ value:",
+                "static func isOwnAddress(_ deviceIP:"],
+               [("        let netmask: String?\n", ""),
+                (", netmask: cur.pointee.ifa_netmask.flatMap(numericHost))", ")")])
+
+          edit("natsuk1/Helpers/DeviceName.swift",
+               ["static func full()"])
+
+          edit("natsuk1/Helpers/OffsetsStore.swift",
+               ["nonisolated static var activeVersion"])
+
+          edit("natsuk1/Views/DeviceInfoView.swift",
+               ["private func machineID()"],
+               [('row("Identifier", machineID())',
+                 'row("Identifier", DeviceName.machineID())')])
+          PY
+
+          oxipng -o max --strip safe natsuk1/Resources/Assets.xcassets/AppIcon.appiconset/1024x1024.png || true
+
+          if ! grep -q '.swiftpm/' .gitignore; then
+            printf '\n# Swift\n*.xcworkspace\n.swiftpm/\n.build/\nPackage.resolved\n\n# Debug\n*.dSYM\n' >> .gitignore
+          fi
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "chore: remove dead code, shrink icon [skip ci]"
+            git push
+          fi
 
       - name: Generate project
         run: |
