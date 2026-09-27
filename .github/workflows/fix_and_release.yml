@@ -147,6 +147,48 @@ jobs:
           - NECP: closed at depth-0 sinks on this build. Kept as probe.
           EOF_ARCH
 
+          # --- docs/install.html (redirector for custom URL schemes) ---
+          write_if_changed docs/install.html <<'EOF_INSTALL'
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>Opening installer…</title>
+          <style>
+            body{font:16px -apple-system,system-ui,sans-serif;background:#0d1117;color:#c9d1d9;
+                 display:flex;align-items:center;justify-content:center;min-height:100vh;
+                 margin:0;padding:24px;text-align:center}
+            a{color:#58a6ff}
+          </style>
+          </head>
+          <body>
+          <div>
+            <p id="msg">Opening installer…</p>
+            <p><a id="fallback" href="#" hidden>Tap here if nothing happens</a></p>
+          </div>
+          <script>
+          (function(){
+            var p = new URLSearchParams(location.search);
+            var s = p.get('scheme');
+            var u = p.get('ipa');
+            var m = document.getElementById('msg');
+            var a = document.getElementById('fallback');
+            if (!s || !u) { m.textContent = 'Missing scheme or ipa parameter.'; return; }
+            if (!/^[a-z][a-z0-9+.-]*$/.test(s)) { m.textContent = 'Bad scheme.'; return; }
+            var target = s + '://install?url=' + encodeURIComponent(u);
+            a.href = target;
+            a.hidden = false;
+            location.replace(target);
+            setTimeout(function(){
+              m.textContent = 'If the app did not open, tap the link below.';
+            }, 1500);
+          })();
+          </script>
+          </body>
+          </html>
+          EOF_INSTALL
+
           # --- README.md ---
           write_if_changed README.md <<'EOF_README'
           # natsuk1
@@ -378,21 +420,29 @@ jobs:
             gh release delete development --yes --cleanup-tag
           fi
           R="${{ github.repository }}"
-          U="https://github.com/$R/releases/download/development/natsuk1.ipa"
+          IPA="https://github.com/$R/releases/download/development/natsuk1.ipa"
+          GH_PAGE="https://raw.githack.com/$R/main/docs/install.html"
+          IPA_ENC=$(printf '%s' "$IPA" | python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.stdin.read().strip(),safe=""))')
+
+          mk_link() {
+            printf -- '- %s: [install](%s?scheme=%s&ipa=%s)\n' "$2" "$GH_PAGE" "$1" "$IPA_ENC"
+          }
+
           NOTES="natsuk1 v22.0 ($((SIZE/1024)) KB)
 
           **Install**
 
-          - Direct IPA: $U
-          - LiveContainer: \`livecontainer://install?url=$U\`
-          - SideStore: \`sidestore://install?url=$U\`
-          - AltStore: \`altstore://install?url=$U\`
-          - Scarlet: \`scarlet://install?url=$U\`
-          - ESign: \`esign://install?url=$U\`
+          - Direct IPA: $IPA
+          $(mk_link livecontainer LiveContainer)
+          $(mk_link sidestore SideStore)
+          $(mk_link altstore AltStore)
+          $(mk_link scarlet Scarlet)
+          $(mk_link esign ESign)
 
           **Recent commits**
 
           $(git log -5 --pretty=format:'- %h %s')"
+
           gh release create development natsuk1.ipa \
             --target "${{ github.sha }}" \
             --title "Development" \
