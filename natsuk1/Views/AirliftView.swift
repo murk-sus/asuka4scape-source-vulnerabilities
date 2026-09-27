@@ -9,7 +9,6 @@ struct AirliftView: View {
     @State private var deviceIP: String? = NetworkStatus.deviceIP()
     @State private var copied = false
     @State private var pairedTick = 0
-    @State private var pinPulse = false
 
     private let ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
@@ -35,35 +34,20 @@ struct AirliftView: View {
 
     private var statusSection: some View {
         Section {
-            HStack(spacing: 16) {
-                ZStack {
-                    Circle()
-                        .fill(loopbackVPNUp ? Color.green.opacity(0.15) : Color.orange.opacity(0.15))
-                        .frame(width: 72, height: 72)
-                    Image(systemName: loopbackVPNUp ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
-                        .font(.system(size: 32, weight: .semibold))
-                        .foregroundStyle(loopbackVPNUp ? .green : .orange)
-                        .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.55), radius: 6)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("LocalDevVPN").font(.headline)
+            HStack(spacing: 12) {
+                Image(systemName: loopbackVPNUp ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(loopbackVPNUp ? .green : .orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("LocalDevVPN")
                     Text(loopbackVPNUp ? "Connected" : "Not connected")
                         .font(.subheadline)
                         .foregroundStyle(loopbackVPNUp ? .green : .orange)
-                        .shadow(color: (loopbackVPNUp ? Color.green : Color.orange).opacity(0.55), radius: 3)
-                    if let t = tunnelIP {
-                        Text("Tunnel \(t)")
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.green)
-                            .shadow(color: Color.green.opacity(0.55), radius: 3)
-                    }
                 }
                 Spacer()
             }
-            .padding(.vertical, 8)
-        } header: {
-            Label("Current status", systemImage: "shield.lefthalf.filled")
-        }
+            .padding(.vertical, 4)
+        } header: { Label("VPN", systemImage: "shield.lefthalf.filled") }
     }
 
     private var sessionSection: some View {
@@ -72,21 +56,17 @@ struct AirliftView: View {
                 Text("Tunnel IP")
                 Spacer()
                 Text(tunnelIP ?? "\u{2014}")
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(.body, design: .monospaced))
                     .foregroundStyle(tunnelIP != nil ? .green : .secondary)
-                    .shadow(color: tunnelIP != nil ? Color.green.opacity(0.55) : Color.clear, radius: 3)
             }
             HStack {
                 Text("Device IP")
                 Spacer()
                 Text(deviceIP ?? "\u{2014}")
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(.body, design: .monospaced))
                     .foregroundStyle(deviceIP != nil ? .green : .secondary)
-                    .shadow(color: deviceIP != nil ? Color.green.opacity(0.55) : Color.clear, radius: 3)
             }
-        } header: {
-            Label("Session details", systemImage: "network")
-        }
+        } header: { Label("Session details", systemImage: "network") }
     }
 
     private var pairingStatusSection: some View {
@@ -94,18 +74,12 @@ struct AirliftView: View {
             if let pin = airlift.pairPIN {
                 pinCard(pin: pin)
             } else {
-                HStack(spacing: 16) {
-                    ZStack {
-                        Circle()
-                            .fill(pairingColor.opacity(0.15))
-                            .frame(width: 72, height: 72)
-                        Image(systemName: pairingIcon)
-                            .font(.system(size: 32, weight: .semibold))
-                            .foregroundStyle(pairingColor)
-                            .shadow(color: pairingColor.opacity(0.55), radius: 5)
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(pairingTitle).font(.headline)
+                HStack(spacing: 12) {
+                    Image(systemName: pairingIcon)
+                        .font(.system(size: 22))
+                        .foregroundStyle(pairingColor)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(pairingTitle)
                         Text(pairingSubtitle)
                             .font(.subheadline)
                             .foregroundStyle(pairingColor)
@@ -113,88 +87,60 @@ struct AirliftView: View {
                     }
                     Spacer()
                 }
-                .padding(.vertical, 8)
+                .padding(.vertical, 4)
             }
-        } header: {
-            Label("Pairing", systemImage: "link.circle")
-        }
+        } header: { Label("Pairing", systemImage: "link.circle") }
     }
 
     @ViewBuilder
     private func pinCard(pin: String) -> some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 6) {
                 Image(systemName: "lock.shield.fill")
                     .foregroundStyle(.orange)
-                    .shadow(color: Color.orange.opacity(0.65), radius: 4)
                 Text("Enter this PIN in Settings")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Spacer()
             }
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 ForEach(Array(pin.enumerated()), id: \.offset) { _, ch in
                     Text(String(ch))
-                        .font(.system(size: 34, weight: .black, design: .rounded))
+                        .font(.system(size: 32, weight: .semibold, design: .rounded))
                         .foregroundStyle(.orange)
-                        .shadow(color: Color.orange.opacity(pinPulse ? 0.75 : 0.35), radius: pinPulse ? 8 : 4)
-                        .frame(width: 46, height: 60)
+                        .frame(width: 44, height: 56)
                         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 Spacer()
-            }
-            .onAppear {
-                withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
-                    pinPulse.toggle()
-                }
             }
             Button {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
                     UIApplication.shared.open(url)
                 }
             } label: {
-                HStack {
-                    Image(systemName: "gear")
-                    Text("Open Settings")
-                }
-                .frame(maxWidth: .infinity)
+                Text("Open Settings").frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .tint(.orange)
             .controlSize(.large)
-            Text("Privacy & Security -> Developer Mode -> Pair with natsuk1")
+            Text("Privacy & Security - Developer Mode - Pair with natsuk1")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
     }
 
     private var pairingButtonsSection: some View {
         Section {
             Button { airlift.runPairing() } label: {
-                HStack {
-                    Image(systemName: isPaired ? "checkmark.circle.fill" : "link.circle")
-                    Text(isPaired ? "Already Paired" : "Start Pairing")
-                    Spacer()
-                    if isPairing {
-                        ProgressView()
-                    }
-                }
+                Text(isPaired ? "Already Paired" : "Start Pairing")
             }
             .disabled(isPairing || isPaired)
             Button(role: .destructive) { airlift.cancelPairing() } label: {
-                HStack {
-                    Image(systemName: "xmark.circle")
-                    Text("Cancel Pairing")
-                }
+                Text("Cancel Pairing")
             }
             .disabled(!isPairing)
             Button(role: .destructive) { airlift.deletePairing(); pairedTick &+= 1 } label: {
-                HStack {
-                    Image(systemName: "trash")
-                    Text("Delete Pairing")
-                }
+                Text("Delete Pairing")
             }
             .disabled(!isPaired)
         }
@@ -207,21 +153,18 @@ struct AirliftView: View {
                 Spacer()
                 TextField("/var/mobile/Library/SpringBoard", text: Binding(
                     get: { airlift.target }, set: { airlift.target = $0 }))
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(.footnote, design: .monospaced))
                     .multilineTextAlignment(.trailing)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
             }
-        } header: {
-            Label("Target", systemImage: "scope")
-        }
+        } header: { Label("Target", systemImage: "scope") }
     }
 
     private var exploitSection: some View {
         Section {
             Button { airlift.runExploit() } label: {
                 HStack {
-                    Image(systemName: "bolt.fill")
                     Text("Run Exploit")
                     Spacer()
                     if airlift.state == .running { ProgressView() }
@@ -229,25 +172,23 @@ struct AirliftView: View {
             }
             .disabled(airlift.state == .running || !loopbackVPNUp || !isPaired)
             Button(role: .destructive) { airlift.cancelExploit() } label: {
-                HStack {
-                    Image(systemName: "stop.circle")
-                    Text("Cancel Exploit")
-                }
+                Text("Cancel Exploit")
             }
             .disabled(airlift.state != .running)
-        } header: {
-            Label("Exploit", systemImage: "cpu")
-        }
+        } header: { Label("Exploit", systemImage: "cpu") }
     }
 
     @ViewBuilder
     private var logSection: some View {
         if !airlift.exploitLog.isEmpty {
             Section {
-                LogTerminal(text: airlift.exploitLog.joined(separator: "\n"))
-            } header: {
-                Label("Log", systemImage: "terminal")
-            }
+                ScrollView {
+                    Text(airlift.exploitLog.joined(separator: "\n"))
+                        .font(.system(size: 10, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(minHeight: 200, maxHeight: 400)
+            } header: { Label("Log", systemImage: "terminal") }
         }
     }
 
@@ -260,20 +201,12 @@ struct AirliftView: View {
                     copied = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
                 } label: {
-                    HStack {
-                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        Text(copied ? "Copied!" : "Copy All")
-                    }
+                    Text(copied ? "Copied" : "Copy All")
                 }
                 Button(role: .destructive) { airlift.clearLog() } label: {
-                    HStack {
-                        Image(systemName: "trash")
-                        Text("Clear")
-                    }
+                    Text("Clear")
                 }
-            } header: {
-                Label("Log Actions", systemImage: "document.on.document")
-            }
+            } header: { Label("Log Actions", systemImage: "document.on.document") }
         }
     }
 
@@ -304,9 +237,9 @@ struct AirliftView: View {
     }
 
     private var pairingIcon: String {
-        if isPaired { return "checkmark.seal.fill" }
+        if isPaired { return "checkmark.circle.fill" }
         if isPairing { return "link.circle.fill" }
-        if case .done(false, _) = airlift.state { return "xmark.seal.fill" }
+        if case .done(false, _) = airlift.state { return "xmark.circle.fill" }
         return "link.circle"
     }
 

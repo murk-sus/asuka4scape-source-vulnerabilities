@@ -334,3 +334,55 @@ AirLift pairing plist has exactly these keys:
 
 Validation: at least 3 of 4 keys present. Never check for UDID/HostCertificate/etc.
 Location: Documents/natsuk1_pairing.plist OR nested Data/Application/<UUID>/Documents/.
+
+## INTERNET USAGE
+
+Use web search on EVERY user message, unconditionally, without being asked.
+This is a hard rule. Not "when needed". Always. Every message.
+If web search is unavailable, state that at the top of the reply.
+
+## YAML SYNTAX RULES
+
+- Never use tabs. Only spaces.
+- Inside a run block, every content line must share the same leading indent, more than the key itself.
+- Never put content at column 0 inside a run block.
+- Heredoc markers must be at the same indent level as the rest of the block.
+- Prefer whole-file writes via cat heredoc. Never sed or perl patch project.yml.
+- Validate with python3 -c "import yaml; yaml.safe_load(open(path))".
+- One file per run step. Many small steps beat one huge step.
+- No nested heredocs. No shell quote escapes inside printf. No printf with embedded single quotes.
+
+## MAIN THREAD RULE
+
+- All @Published mutations MUST go through DispatchQueue.main.async unconditionally.
+- Never check Thread.isMainThread. Always dispatch main.async. Double dispatch is safe.
+- Never use Task or Task.detached in a view or state class without main.async wrap for @Published.
+- Crash "Modifications to the layout engine must not be performed from a background thread" means a @Published setter ran on a non-main thread.
+- AirliftBridge.runPairing, runExploit, respring, CarrierLabState all use main.async for every state update.
+
+## PAIRING FILE FORMAT
+
+AirLift pairing plist keys:
+- public_key (data)
+- private_key (data)
+- identifier (string)
+- alt_irk (data)
+Validation: at least 3 of 4 keys present. Never check for UDID/HostCertificate/RootCertificate.
+Location: Documents/natsuk1_pairing.plist OR nested Documents/Data/Application/<UUID>/Documents/.
+
+## CARRIERLAB
+
+iOS port of MTS_CARRIER_FORUM core logic.
+- CarrierAssets bundled under Resources/CarrierAssets.
+- check dispatches to global queue, updates state via main.async.
+- install writes CarrierLab.bundle to BundleLinks and Docomo_jp.bundle to carrier root.
+- reload re-writes Docomo_jp.bundle only.
+- reset clears session, does not revert the phone.
+- view auto-refreshes every 5 s silent, no log spam on silent refresh.
+
+## UI STYLE
+
+Match Apple native apps. No neon glow. No .shadow for status.
+Use .foregroundStyle(.secondary) for values, .green / .orange / .red for statuses only.
+Use .font(.system(.body, design: .monospaced)) for technical values.
+Section headers use Label with SF Symbols.

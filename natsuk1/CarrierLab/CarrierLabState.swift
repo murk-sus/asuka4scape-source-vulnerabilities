@@ -18,7 +18,7 @@ final class CarrierLabState: ObservableObject, @unchecked Sendable {
 
     @Published private(set) var session: Session?
     @Published private(set) var airliftOK: Bool = false
-    @Published private(set) var airliftMessage: String = "checking..."
+    @Published private(set) var airliftMessage: String = "Checking..."
     @Published private(set) var resourcesOK: Bool = false
     @Published private(set) var busy: Bool = false
     @Published private(set) var logText: String = ""

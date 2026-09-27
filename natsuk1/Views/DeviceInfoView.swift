@@ -6,7 +6,7 @@ struct DeviceInfoView: View {
         List {
             Section {
                 row("Model", DeviceName.friendly())
-                row("Identifier", DeviceName.machineID())
+                row("Identifier", machineID())
                 row("Chip", DeviceName.chip())
             } header: { Label("Hardware", systemImage: "cpu") }
 
@@ -35,22 +35,36 @@ struct DeviceInfoView: View {
         HStack {
             Text(key)
             Spacer()
-            Text(value).font(.system(.body, design: .monospaced)).foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.middle)
+            Text(value)
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
     }
-        private func sysctlString(_ name: String) -> String {
+
+    private func machineID() -> String {
+        var sysinfo = utsname(); uname(&sysinfo)
+        return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
+            guard let v = el.value as? Int8, v != 0 else { return id }
+            return id + String(UnicodeScalar(UInt8(v)))
+        }
+    }
+
+    private func sysctlString(_ name: String) -> String {
         var size = 0; sysctlbyname(name, nil, &size, nil, 0)
         var buf = [CChar](repeating: 0, count: size)
         sysctlbyname(name, &buf, &size, nil, 0)
         let bytes = buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
         return String(decoding: bytes, as: UTF8.self)
     }
+
     private func ram() -> String {
         var size: UInt64 = 0; var len = MemoryLayout<UInt64>.size
         if sysctlbyname("hw.memsize", &size, &len, nil, 0) != 0 { return "unknown" }
         return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .memory)
     }
+
     private func arch() -> String {
         #if arch(arm64)
         return "arm64"
@@ -58,13 +72,16 @@ struct DeviceInfoView: View {
         return "unknown"
         #endif
     }
+
     private func localeShort() -> String {
         Locale.current.identifier.split(separator: "_").first.map(String.init)?.uppercased() ?? "—"
     }
+
     private func regionShort() -> String {
         let region = Locale.current.region?.identifier ?? ""
         return region.isEmpty ? "—" : region.uppercased()
     }
+
     private func uptime() -> String {
         let t = ProcessInfo.processInfo.systemUptime
         return "\(Int(t) / 3600)h \((Int(t) % 3600) / 60)m"

@@ -18,8 +18,8 @@ final class CarrierLabBridge: @unchecked Sendable {
         var message: String {
             switch state {
             case .ok: return "ready"
-            case .noVPN: return "no loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
-            case .noPairing: return "no pairing file. Open Tools -> Airlift, run Start Pairing."
+            case .noVPN: return "No loopback VPN. Enable LocalDevVPN or SideStore WireGuard."
+            case .noPairing: return "No pairing file. Open Tools / Airlift and run Start Pairing."
             case .pairingInvalid: return detail
             case .ffiFailed(let s): return s
             }
@@ -76,20 +76,20 @@ final class CarrierLabBridge: @unchecked Sendable {
         guard fm.fileExists(atPath: path) else { return (false, "missing") }
         let attrs = try? fm.attributesOfItem(atPath: path)
         let size = (attrs?[.size] as? Int) ?? 0
-        if size < 100 { return (false, "pairing file too small (\(size) bytes). Re-pair in Tools -> Airlift.") }
+        if size < 100 { return (false, "Pairing file too small (\(size) bytes).") }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
-            return (false, "pairing file unreadable")
+            return (false, "Pairing file unreadable.")
         }
         guard let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
               let dict = obj as? [String: Any] else {
-            return (false, "pairing file not a plist (\(size) bytes). Re-pair in Tools -> Airlift.")
+            return (false, "Pairing file not a plist (\(size) bytes).")
         }
         var present: [String] = []
         for k in expectedKeys where dict[k] != nil { present.append(k) }
         if present.count < 3 {
-            return (false, "pairing file incomplete: \(present.count) of 4 keys (\(present.joined(separator: ","))). Re-pair in Tools -> Airlift.")
+            return (false, "Pairing incomplete: \(present.count) of 4 keys.")
         }
-        return (true, "pairing ok (\(size) bytes)")
+        return (true, "Pairing ok (\(size) bytes)")
     }
 
     func probe() -> ProbeResult {

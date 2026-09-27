@@ -35,9 +35,27 @@ struct PathAccessView: View {
     var body: some View {
         List {
             Section {
-                HStack { Text("Paths"); Spacer(); Text("\(results.filter { $0.exists }.count)/\(results.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
-                HStack { Text("Readable"); Spacer(); Text("\(results.filter { $0.readable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
-                HStack { Text("Writable"); Spacer(); Text("\(results.filter { $0.writable }.count)").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary) }
+                HStack {
+                    Text("Paths")
+                    Spacer()
+                    Text("\(results.filter { $0.exists }.count)/\(results.count)")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Text("Readable")
+                    Spacer()
+                    Text("\(results.filter { $0.readable }.count)")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Text("Writable")
+                    Spacer()
+                    Text("\(results.filter { $0.writable }.count)")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
                 Button { scan() } label: {
                     HStack {
                         Text(busy ? "Scanning..." : "Run Scan")
@@ -45,14 +63,14 @@ struct PathAccessView: View {
                         ProgressView().opacity(busy ? 1 : 0)
                     }
                 }.disabled(busy)
-            } header: {
-                Label("Summary", systemImage: "chart.bar")
-            }
+            } header: { Label("Summary", systemImage: "chart.bar") }
             Section {
                 ForEach(results) { r in
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(r.path).font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(r.exists ? .primary : .secondary).lineLimit(2)
+                        Text(r.path)
+                            .font(.system(.footnote, design: .monospaced))
+                            .foregroundStyle(r.exists ? .primary : .secondary)
+                            .lineLimit(2)
                         HStack(spacing: 6) {
                             badge(r.exists ? "exists" : "missing", color: r.exists ? .green : .red)
                             if r.isDirectory { badge("dir", color: .blue) }
@@ -62,9 +80,7 @@ struct PathAccessView: View {
                         }
                     }
                 }
-            } header: {
-                Label("Paths", systemImage: "folder")
-            }
+            } header: { Label("Paths", systemImage: "folder") }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Path Access")
@@ -73,9 +89,11 @@ struct PathAccessView: View {
     }
 
     private func badge(_ text: String, color: Color) -> some View {
-        Text(text).font(.system(size: 9, design: .monospaced))
-            .padding(.horizontal, 4).padding(.vertical, 1)
-            .background(color.opacity(0.18), in: RoundedRectangle(cornerRadius: 3))
+        Text(text)
+            .font(.system(size: 9, design: .monospaced))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
             .foregroundStyle(color)
     }
 
