@@ -1,55 +1,55 @@
-ndation
+import Foundation
 
-s CarrierLabBridge: @unchecked Sendable {
- let shared = CarrierLabBridge()
+final class CarrierLabBridge: @unchecked Sendable {
+    static let shared = CarrierLabBridge()
 
-arrierError: LocalizedError {
-se noPairing
-se notImplemented(String)
-se remote(String)
+    enum CarrierError: LocalizedError {
+        case noPairing
+        case notImplemented(String)
+        case remote(String)
 
-r errorDescription: String? {
-  switch self {
-  case .noPairing: return "No pairing file. Pair via Airlift first."
-  case .notImplemented(let s): return "Not implemented: " + s
-  case .remote(let s): return s
-  }
+        var errorDescription: String? {
+            switch self {
+            case .noPairing: return "No pairing file. Pair via Airlift first."
+            case .notImplemented(let s): return "Not implemented: " + s
+            case .remote(let s): return s
+            }
+        }
+    }
 
+    private let carrierRoot = "/var/mobile/Library/Carrier Bundles"
+    private let bundleLinks = "/var/mobile/Library/Carrier Bundles/BundleLinks"
 
+    func carrierRootPath() -> String { carrierRoot }
+    func bundleLinksPath() -> String { bundleLinks }
 
-e let carrierRoot = "/var/mobile/Library/Carrier Bundles"
-e let bundleLinks = "/var/mobile/Library/Carrier Bundles/BundleLinks"
+    func writeFile(source: String, target: String) throws {
+        let pairing = PairingController.pairingFilePath()
+        guard FileManager.default.fileExists(atPath: pairing) else { throw CarrierError.noPairing }
+        var outJson: UnsafeMutablePointer<CChar>? = nil
+        var outErr: UnsafeMutablePointer<CChar>? = nil
+        let rc: Int32 = pairing.withCString { pc in
+            source.withCString { sc in
+                target.withCString { tc in
+                    al_exploit_run(pc, tc, nil, nil, &outJson, &outErr)
+                }
+            }
+        }
+        if let p = outJson { al_string_free(p) }
+        let errMsg = outErr.flatMap { String(cString: $0) } ?? ""
+        if let p = outErr { al_string_free(p) }
+        if rc != 0 { throw CarrierError.remote(errMsg.isEmpty ? "rc=\(rc)" : errMsg) }
+    }
 
-arrierRootPath() -> String { carrierRoot }
-undleLinksPath() -> String { bundleLinks }
+    func readFile(path: String) throws -> Data {
+        throw CarrierError.notImplemented("al_read_file")
+    }
 
-riteFile(source: String, target: String) throws {
-t pairing = PairingController.pairingFilePath()
-ard FileManager.default.fileExists(atPath: pairing) else { throw CarrierError.noPairing }
-r outJson: UnsafeMutablePointer<CChar>? = nil
-r outErr: UnsafeMutablePointer<CChar>? = nil
-t rc: Int32 = pairing.withCString { pc in
-  source.withCString { sc in
-      target.withCString { tc in
-          al_exploit_run(pc, tc, nil, nil, &outJson, &outErr)
-      }
-  }
+    func removePath(_ path: String) throws {
+        throw CarrierError.notImplemented("al_remove_path")
+    }
 
- let p = outJson { al_string_free(p) }
-t errMsg = outErr.flatMap { String(cString: $0) } ?? ""
- let p = outErr { al_string_free(p) }
- rc != 0 { throw CarrierError.remote(errMsg.isEmpty ? "rc=\(rc)" : errMsg) }
-
-
-eadFile(path: String) throws -> Data {
-row CarrierError.notImplemented("al_read_file")
-
-
-emovePath(_ path: String) throws {
-row CarrierError.notImplemented("al_remove_path")
-
-
-ymlink(link: String, target: String) throws {
-row CarrierError.notImplemented("al_make_symlink")
-
-
+    func symlink(link: String, target: String) throws {
+        throw CarrierError.notImplemented("al_make_symlink")
+    }
+}

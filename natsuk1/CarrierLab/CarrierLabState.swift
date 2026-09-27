@@ -1,62 +1,62 @@
-ndation
-bine
+import Foundation
+import Combine
 
-s CarrierLabState: ObservableObject, @unchecked Sendable {
- let shared = CarrierLabState()
+final class CarrierLabState: ObservableObject, @unchecked Sendable {
+    static let shared = CarrierLabState()
 
-tatus: String, Codable { case clean, placing, placed, finished, failed }
+    enum Status: String, Codable { case clean, placing, placed, finished, failed }
 
- Session: Codable {
-r status: Status
-r startedAt: Date
-r carrierBundlePath: String?
-r originalBackupPath: String?
-r ipccTriggerPath: String?
-r lastError: String?
+    struct Session: Codable {
+        var status: Status
+        var startedAt: Date
+        var carrierBundlePath: String?
+        var originalBackupPath: String?
+        var ipccTriggerPath: String?
+        var lastError: String?
+    }
 
+    @Published private(set) var session: Session?
 
-shed private(set) var session: Session?
+    private let root: URL
+    private let stateURL: URL
+    private let backupDir: URL
 
-e let root: URL
-e let stateURL: URL
-e let backupDir: URL
+    private init() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        root = docs.appendingPathComponent("carrierlab", isDirectory: true)
+        stateURL = root.appendingPathComponent("state.json")
+        backupDir = root.appendingPathComponent("backup", isDirectory: true)
+        try? FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
+        load()
+    }
 
-e init() {
-t docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-ot = docs.appendingPathComponent("carrierlab", isDirectory: true)
-ateURL = root.appendingPathComponent("state.json")
-ckupDir = root.appendingPathComponent("backup", isDirectory: true)
-y? FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
-ad()
+    func load() {
+        guard let data = try? Data(contentsOf: stateURL),
+              let s = try? JSONDecoder().decode(Session.self, from: data) else {
+            session = nil
+            return
+        }
+        session = s
+    }
 
+    func save(_ s: Session) {
+        session = s
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        enc.dateEncodingStrategy = .iso8601
+        if let d = try? enc.encode(s) { try? d.write(to: stateURL, options: .atomic) }
+    }
 
-oad() {
-ard let data = try? Data(contentsOf: stateURL),
-    let s = try? JSONDecoder().decode(Session.self, from: data) else {
-  session = nil
-  return
+    func clear() {
+        session = nil
+        try? FileManager.default.removeItem(at: stateURL)
+    }
 
-ssion = s
+    func hasBackup() -> Bool {
+        guard let s = session, let p = s.originalBackupPath else { return false }
+        return FileManager.default.fileExists(atPath: p)
+    }
 
-
-ave(_ s: Session) {
-ssion = s
-t enc = JSONEncoder()
-c.outputFormatting = [.prettyPrinted, .sortedKeys]
-c.dateEncodingStrategy = .iso8601
- let d = try? enc.encode(s) { try? d.write(to: stateURL, options: .atomic) }
-
-
-lear() {
-ssion = nil
-y? FileManager.default.removeItem(at: stateURL)
-
-
-asBackup() -> Bool {
-ard let s = session, let p = s.originalBackupPath else { return false }
-turn FileManager.default.fileExists(atPath: p)
-
-
-ackupURL() -> URL { backupDir }
-ootURL() -> URL { root }
-
+    func backupURL() -> URL { backupDir }
+    func rootURL() -> URL { root }
+}
