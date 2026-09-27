@@ -24,8 +24,7 @@ enum NetworkStatus {
             guard addr.pointee.sa_family == sa_family_t(AF_INET) else { continue }
             let name = String(cString: cur.pointee.ifa_name)
             guard let ipv4 = numericHost(addr) else { continue }
-            result.append(Interface(name: name, ipv4: ipv4,
-                                    netmask: cur.pointee.ifa_netmask.flatMap(numericHost)))
+            result.append(Interface(name: name, ipv4: ipv4))
         }
         return result
     }
