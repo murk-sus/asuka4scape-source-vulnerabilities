@@ -9,8 +9,6 @@ xcuserdata/
 *.ipa
 *.tar.gz
 Payload/
-natsuk1-app.tar.gz
-natsuk1.ipa
 
 # IDE / OS
 .DS_Store
@@ -18,7 +16,6 @@ natsuk1.ipa
 .idea/
 
 # Local
-reference/
 *.log
 
 # Swift

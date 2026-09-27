@@ -107,14 +107,5 @@ final class CrashLog: @unchecked Sendable {
         try? handle?.synchronize()
     }
 
-    func recoverPreviousSession() -> String? {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: crashURL.path) else { return nil }
-        guard let data = try? Data(contentsOf: crashURL) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
 
-    func clearPreviousCrash() {
-        try? FileManager.default.removeItem(at: crashURL)
-    }
 }

@@ -49,7 +49,6 @@ struct RootView: View {
             .environmentObject(state).environmentObject(offsets).environmentObject(airlift)
             .onAppear {
                 CrashLog.shared.install()
-                if let prev = CrashLog.shared.recoverPreviousSession(), !prev.isEmpty { AppState.shared.previousCrash = prev }
                 nk_set_log(cCallback)
                 if state.log.isEmpty {
                     state.append("[*] natsuk1 v\(appVersionString())")
@@ -69,8 +68,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
     static let shared = AppState()
     @Published var slide: String = "-"
     @Published var base: String = "-"
-    @Published var previousCrash: String? = nil
-    @Published var showCrashLog: Bool = false
     func parseLogLine(_ line: String) {
         if let v = Self.extractHex(line, keys: ["slide=0x", "SLIDE = 0x", "slide = 0x"]) {
             if self.slide != v { DispatchQueue.main.async { self.slide = v } }
@@ -139,7 +136,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         if running { return }
         running = true; status = .running
         Task.detached {
-            let rc = nk_necp_run()
+            let rc = nk_run()
             await MainActor.run {
                 AppState.shared.running = false
                 AppState.shared.status = (rc == 0) ? .ok : .failed

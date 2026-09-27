@@ -301,3 +301,23 @@ host-side Grappa on iOS. Do NOT treat SyncFailed as fatal.
 - Do not put 0x literals at position 0 of a tuple.
 - Do not put content at column 0 inside a YAML run pipe block.
 - Do not flag unsigned-range-check as INT_OVERFLOW.
+
+## FIX AND RELEASE WORKFLOW
+
+Single workflow `.github/workflows/fix_and_release.yml`.
+
+Rules learned the hard way:
+
+- Never put Python or heredoc over 30 lines inside a run block.
+- Use short perl one-liners for multi-line edits.
+- Every mutation must be idempotent.
+- Commit only if git diff is non-empty, and use skip ci.
+- Release notes carry exactly one https link (direct IPA).
+
+Fixes applied automatically by the workflow:
+
+- NetworkStatus: drop netmask field and argument.
+- AirliftView: if let pin = airlift.pairPIN must stay intact.
+- DeviceInfoView: use DeviceName.machineID().
+- DeviceName.full(), OffsetsStore.activeVersion removed as dead.
+- NECP removed entirely (closed).

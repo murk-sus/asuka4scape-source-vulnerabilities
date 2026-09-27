@@ -119,41 +119,4 @@ final class AirliftBridge: ObservableObject, @unchecked Sendable {
         state = .done(ok: false, message: "cancelled")
     }
 
-    func respring() {
-        let pairingPath = pairingFilePath()
-        let bridge = AirliftBridge.shared
-        guard FileManager.default.fileExists(atPath: pairingPath) else {
-            bridge.appendLog("[respring] no pairing file"); return
-        }
-        Task.detached {
-            var outError: UnsafeMutablePointer<CChar>? = nil
-            let rc: Int32 = pairingPath.withCString { pc in
-                al_device_respring(pc, nil, nil, &outError)
-            }
-            let errStr = outError.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-            await MainActor.run {
-                if rc == 0 { bridge.appendLog("[respring] ok") }
-                else { bridge.appendLog("[respring] rc=\(rc) \(errStr ?? "")") }
-            }
-        }
-    }
-    func findContainer(bundleID: String) async -> String? {
-        let pairingPath = pairingFilePath()
-        guard FileManager.default.fileExists(atPath: pairingPath) else { return nil }
-        return await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                var outContainer: UnsafeMutablePointer<CChar>? = nil
-                var outError: UnsafeMutablePointer<CChar>? = nil
-                let rc: Int32 = pairingPath.withCString { pc in
-                    bundleID.withCString { bc in
-                        al_find_app_container(pc, bc, nil, nil, &outContainer, &outError)
-                    }
-                }
-                let containerStr = outContainer.flatMap { p -> String? in let s = String(cString: p); al_string_free(p); return s }
-                if let p = outError { al_string_free(p) }
-                if rc == 0, let c = containerStr { cont.resume(returning: c) }
-                else { cont.resume(returning: nil) }
-            }
-        }
-    }
 }
