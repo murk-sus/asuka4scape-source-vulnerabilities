@@ -1,4 +1,4 @@
-name: 10
+name: 13
 
 on:
   push:
@@ -18,123 +18,320 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+         fetch-depth: 0
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "26.5"
+         xcode-version: "26.5"
 
       - name: Install tools
         run: |
-          set -e
-          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
-          command -v ldid >/dev/null 2>&1 || brew install ldid
+         set -e
+         command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+         command -v ldid >/dev/null 2>&1 || brew install ldid
 
       - name: Find the last consistent layer-free commit
         run: |
-          set -euo pipefail
-          LAYER='PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting'
-          BASE=""
-          for c in $(git rev-list --max-count=300 HEAD); do
-            git cat-file -e "$c:natsuk1/App/natsuk1.swift" 2>/dev/null || continue
-            [ -n "$(git grep -lE "$LAYER" "$c" -- natsuk1 2>/dev/null)" ] && continue
-            ok=1
-            for m in $(git show "$c:natsuk1/Views/AirliftView.swift" 2>/dev/null | grep -oE "airlift\\.[A-Za-z_]+" | sed "s/airlift\\.//" | sort -u); do
-              git show "$c:natsuk1/Helpers/AirliftBridge.swift" 2>/dev/null | grep -q "$m" || ok=0
-            done
-            [ "$ok" = 1 ] || continue
-            BASE="$c"; break
-          done
-          if [ -z "$BASE" ]; then
-            echo "::error::no commit in the last 300 has a natsuk1 tree that is layer-free and View/Bridge-consistent"
-            exit 1
-          fi
-          echo "last consistent layer-free commit: $BASE"
-          git checkout "$BASE" -- natsuk1 project.yml
-          echo "BASE=$BASE" >> "$GITHUB_ENV"
+         set -euo pipefail
+         LAYER='PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting'
+         BASE=""
+         for c in $(git rev-list --max-count=300 HEAD); do
+           git cat-file -e "$c:natsuk1/App/natsuk1.swift" 2>/dev/null || continue
+           git cat-file -e "$c:project.yml" 2>/dev/null || continue
+           [ -n "$(git grep -lE "$LAYER" "$c" -- natsuk1 2>/dev/null)" ] && continue
+           ok=1
+           for m in $(git show "$c:natsuk1/Views/AirliftView.swift" 2>/dev/null | grep -oE "airlift\\.[A-Za-z_]+" | sed "s/airlift\\.//" | sort -u); do
+             git show "$c:natsuk1/Helpers/AirliftBridge.swift" 2>/dev/null | grep -q "$m" || ok=0
+           done
+           [ "$ok" = 1 ] || continue
+           BASE="$c"; break
+         done
+         if [ -z "$BASE" ]; then
+           echo "::error::no commit in the last 300 has a natsuk1 tree that is layer-free and View/Bridge-consistent"
+           exit 1
+         fi
+         echo "last consistent layer-free commit: $BASE"
+         rm -rf natsuk1 project.yml
+         git checkout "$BASE" -- natsuk1 project.yml
+         echo "BASE=$BASE" >> "$GITHUB_ENV"
+
+      - name: Write NetworkStatus.swift
+        run: |
+         set -euo pipefail
+         cat > natsuk1/Helpers/NetworkStatus.swift <<'NETSTATUS_EOF'
+         import Foundation
+         import Darwin
+
+         /// Loopback-tunnel detection.
+         ///
+         /// An interface is not proof. iOS keeps system `utun`s up with no VPN running at
+         /// all, so "a utun exists" reports connected while nothing routes to the
+         /// device's internal services. The routing table is the authority — the check
+         /// SideInstaller and AirCard-iOS run before they dial RSD on
+         /// `10.7.0.1` / `127.0.0.1`.
+         ///
+         /// Airlift's own diagnostic names the precondition:
+         /// `Ensure a loopback VPN (e.g. LocalDevVPN or SideStore WireGuard) is active.`
+         enum NetworkStatus {
+
+             struct Interface {
+                 let name: String
+                 let ipv4: String
+                 let netmask: String?
+             }
+
+             struct TunnelPair {
+                 let local: String
+                 let peer: String?
+                 let iface: String
+             }
+
+             /// TEST-NET-3 (RFC 5737) is reserved for documentation, so no VPN app routes
+             /// it deliberately: only the default route can claim it. A UDP `connect`
+             /// sends nothing — it resolves the route and selects a source address.
+             private static let defaultRouteProbe = "203.0.113.1"
+
+             /// The peer LocalDevVPN hands out when an interface does not report one.
+             private static let canonicalTunnelPeer = "10.7.0.1"
+
+             // MARK: - Interfaces
+
+             static func interfaces() -> [Interface] {
+                 var result: [Interface] = []
+                 var ifaddr: UnsafeMutablePointer<ifaddrs>?
+                 guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
+                 defer { freeifaddrs(ifaddr) }
+
+                 var ptr: UnsafeMutablePointer<ifaddrs>? = first
+                 while let cur = ptr {
+                     defer { ptr = cur.pointee.ifa_next }
+                     guard let namePtr = cur.pointee.ifa_name,
+                           let addr = cur.pointee.ifa_addr,
+                           addr.pointee.sa_family == sa_family_t(AF_INET),
+                           let ipv4 = numericHost(addr) else { continue }
+                     result.append(Interface(name: String(cString: namePtr),
+                                             ipv4: ipv4,
+                                             netmask: cur.pointee.ifa_netmask.flatMap(numericHost)))
+                 }
+                 return result
+             }
+
+             private static func numericHost(_ addr: UnsafeMutablePointer<sockaddr>) -> String? {
+                 var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                 let len = socklen_t(MemoryLayout<sockaddr_in>.size)
+                 guard getnameinfo(addr, len, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0
+                 else { return nil }
+                 let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                 return String(decoding: bytes, as: UTF8.self)
+             }
+
+             // MARK: - Tunnel interfaces
+
+             /// Local (address, peer) pairs on loopback tunnel interfaces. Used for the
+             /// host candidates and the addresses the Airlift screen prints.
+             static func tunnelPairs() -> [TunnelPair] {
+                 var result: [TunnelPair] = []
+                 var ifaddr: UnsafeMutablePointer<ifaddrs>?
+                 guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
+                 defer { freeifaddrs(ifaddr) }
+
+                 var ptr: UnsafeMutablePointer<ifaddrs>? = first
+                 while let cur = ptr {
+                     defer { ptr = cur.pointee.ifa_next }
+                     guard let namePtr = cur.pointee.ifa_name else { continue }
+                     let name = String(cString: namePtr)
+                     guard isTunnelInterface(name),
+                           let addr = cur.pointee.ifa_addr,
+                           addr.pointee.sa_family == sa_family_t(AF_INET),
+                           let local = numericHost(addr), isLoopbackRange(local) else { continue }
+                     var peer: String? = nil
+                     if let dst = cur.pointee.ifa_dstaddr,
+                        dst.pointee.sa_family == sa_family_t(AF_INET),
+                        let p = numericHost(dst), isLoopbackRange(p), p != local {
+                         peer = p
+                     }
+                     result.append(TunnelPair(local: local, peer: peer, iface: name))
+                 }
+                 return result
+             }
+
+             // MARK: - Route-verified state
+
+             /// True when the loopback tunnel is up *and* the routing table agrees.
+             ///
+             /// Asks the route first. A point-to-point tunnel reaches its peer over a host
+             /// route (LocalDevVPN's `10.7.1.1/32` -> peer `10.7.0.1/32`), so no
+             /// interface's subnet contains the peer and the table is the only witness.
+             ///
+             /// `nil` from the table is not a refusal, so the interface evidence is kept
+             /// rather than reporting a live tunnel as down.
+             static func loopbackVPNUp() -> Bool {
+                 if let routed = routeCarriesTunnel() { return routed }
+                 return !tunnelPairs().isEmpty
+             }
+
+             private static func routeCarriesTunnel() -> Bool? {
+                 let target = tunnelPairs().compactMap { $0.peer }.first ?? canonicalTunnelPeer
+                 guard let source = routeSource(to: target),
+                       let iface = interfaces().first(where: { $0.ipv4 == source }) else { return nil }
+                 guard isTunnelInterface(iface.name) else { return false }
+                 // A full-tunnel VPN routes everything, so the peer must use a different
+                 // route than the default one.
+                 return routeSource(to: defaultRouteProbe) != source
+             }
+
+             /// The local address the kernel would send from when dialling `ip`, or nil
+             /// when it has no route there.
+             private static func routeSource(to ip: String) -> String? {
+                 var remote = sockaddr_in()
+                 remote.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+                 remote.sin_family = sa_family_t(AF_INET)
+                 remote.sin_port = in_port_t(UInt16(9).bigEndian)
+                 guard ip.withCString({ inet_pton(AF_INET, $0, &remote.sin_addr) }) == 1 else { return nil }
+
+                 let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+                 guard fd >= 0 else { return nil }
+                 defer { close(fd) }
+
+                 let dialled = withUnsafePointer(to: remote) {
+                     $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                         Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                     }
+                 }
+                 guard dialled == 0 else { return nil }
+
+                 var local = sockaddr_in()
+                 var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+                 let named = withUnsafeMutablePointer(to: &local) {
+                     $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                         getsockname(fd, $0, &length)
+                     }
+                 }
+                 guard named == 0, local.sin_addr.s_addr != 0 else { return nil }
+                 return withUnsafeMutablePointer(to: &local) {
+                     $0.withMemoryRebound(to: sockaddr.self, capacity: 1, numericHost)
+                 }
+             }
+
+             // MARK: - Reported hosts
+
+             static func tunnelIP() -> String? {
+                 for p in tunnelPairs() { if let peer = p.peer { return peer } }
+                 return nil
+             }
+
+             static func deviceIP() -> String? {
+                 for p in tunnelPairs() { return p.local }
+                 return nil
+             }
+
+             static func isLoopbackRange(_ ip: String) -> Bool {
+                 return ip.hasPrefix("10.7.")
+             }
+
+             static func isTunnelInterface(_ name: String) -> Bool {
+                 name.hasPrefix("utun") || name.hasPrefix("ipsec")
+                     || name.hasPrefix("tap") || name.hasPrefix("ppp")
+             }
+         }
+         NETSTATUS_EOF
 
       - name: Drop layer files that never landed
         run: |
-          set -euo pipefail
-          LAYER='PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting'
-          while IFS= read -r f; do
-            git cat-file -e "$BASE:$f" 2>/dev/null && continue
-            if grep -qE "$LAYER" "$f"; then
-              rm -f "$f"
-              echo "removed un-delivered layer file $f"
-            fi
-          done < <(find natsuk1 -name '*.swift' -type f)
+         set -euo pipefail
+         LAYER='PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting'
+         while IFS= read -r f; do
+           git cat-file -e "$BASE:$f" 2>/dev/null && continue
+           if grep -qE "$LAYER" "$f"; then
+             rm -f "$f"
+             echo "removed un-delivered layer file $f"
+           fi
+         done < <(find natsuk1 -name '*.swift' -type f)
 
-      - name: Verify the tree is exactly that commit
+      - name: Verify sources
         run: |
-          set -euo pipefail
-          fail() { echo "::error::$1"; exit 1; }
-          LAYER='PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting'
-          if grep -rnE '$LAYER' natsuk1/; then
-            fail 'the lockdown layer is still referenced (matches printed above)'
-          fi
-          while IFS= read -r m; do
-            grep -q "$m" natsuk1/Helpers/AirliftBridge.swift || fail "AirliftView uses airlift.$m but AirliftBridge does not define it"
-          done < <(grep -oE "airlift\\.[A-Za-z_]+" natsuk1/Views/AirliftView.swift | sed "s/airlift\\.//" | sort -u)
-          test -f project.yml || fail 'project.yml is missing'
-          for d in natsuk1/App natsuk1/CarrierLab natsuk1/Exploit natsuk1/Helpers natsuk1/Views; do
-            grep -q "path: $d" project.yml || fail 'project.yml no longer compiles $d'
-          done
-          test -d external/AirliftFFI.xcframework || fail 'external/AirliftFFI.xcframework is missing'
-          CHANGED=$(git diff --name-only "$BASE" -- natsuk1 project.yml)
-          if [ -n "$CHANGED" ]; then
-            printf '%s\n' "$CHANGED"
-            fail 'tree differs from the last consistent commit; refusing to build an unverified mix'
-          fi
-          echo "tree is byte-for-byte the last consistent commit ($BASE); building that exact state"
+         set -euo pipefail
+         fail() { echo "::error::$1"; exit 1; }
+         LAYER='PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting'
+         if grep -rnE "$LAYER" natsuk1/; then
+           fail 'the lockdown layer is still referenced (matches printed above)'
+         fi
+         while IFS= read -r m; do
+           grep -q "$m" natsuk1/Helpers/AirliftBridge.swift || fail "AirliftView uses airlift.$m but AirliftBridge does not define it"
+         done < <(grep -oE "airlift\\.[A-Za-z_]+" natsuk1/Views/AirliftView.swift | sed "s/airlift\\.//" | sort -u)
+         grep -q 'func loopbackVPNUp' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func loopbackVPNUp'
+         grep -q 'routeCarriesTunnel' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: routeCarriesTunnel'
+         grep -q 'routeSource' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: routeSource'
+         grep -q 'defaultRouteProbe' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: defaultRouteProbe'
+         grep -q 'func tunnelIP' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func tunnelIP'
+         grep -q 'func deviceIP' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func deviceIP'
+         grep -q 'func tunnelPairs' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func tunnelPairs'
+         grep -q 'hasPairing()' natsuk1/Views/AirliftView.swift || fail 'natsuk1/Views/AirliftView.swift is stale: hasPairing()'
+         grep -q 'func generateMergedPairing' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift is stale: func generateMergedPairing'
+         grep -q 'func injectFolder' natsuk1/CarrierLab/CarrierLabBridge.swift || fail 'natsuk1/CarrierLab/CarrierLabBridge.swift is stale: func injectFolder'
+         test -f project.yml || fail 'project.yml is missing'
+         for d in natsuk1/App natsuk1/CarrierLab natsuk1/Exploit natsuk1/Helpers natsuk1/Views; do
+           grep -q "path: $d" project.yml || fail "project.yml no longer compiles $d"
+         done
+         test -d external/AirliftFFI.xcframework || fail 'external/AirliftFFI.xcframework is missing'
+         while IFS= read -r f; do
+           case "$f" in
+             "natsuk1/Helpers/NetworkStatus.swift") ;;
+             *) fail "$f differs from the last consistent commit; only natsuk1/Helpers/NetworkStatus.swift may change" ;;
+           esac
+         done < <(git diff --name-only "$BASE" -- natsuk1 project.yml)
+         for t in loopbackVPNUp routeCarriesTunnel routeSource defaultRouteProbe; do
+           grep -q "$t" natsuk1/Helpers/NetworkStatus.swift || fail "natsuk1/Helpers/NetworkStatus.swift is missing $t"
+         done
+         echo "tree is the last consistent commit plus the audited NetworkStatus.swift ($BASE)"
 
       - name: Commit
         run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -q -m "fix: build the last consistent layer-free commit [skip ci]"
-          git push || true
+         set -euo pipefail
+         git config user.name "github-actions[bot]"
+         git config user.email "github-actions[bot]@users.noreply.github.com"
+         git add -A
+         if git diff --cached --quiet; then echo "no changes"; exit 0; fi
+         git commit -q -m "fix: route-verified loopback tunnel check [skip ci]"
+         git push || true
 
       - name: Generate project
         run: |
-          set -euo pipefail
-          rm -rf natsuk1.xcodeproj
-          xcodegen generate
+         set -euo pipefail
+         rm -rf natsuk1.xcodeproj
+         xcodegen generate
 
       - name: Build
         run: |
-          set -euo pipefail
-          xcodebuild \
-            -project natsuk1.xcodeproj \
-            -scheme natsuk1 \
-            -configuration Release \
-            -destination "generic/platform=iOS" \
-            -derivedDataPath build \
-            SWIFT_STRICT_CONCURRENCY=minimal \
-            OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
-            build -quiet
+         set -euo pipefail
+         xcodebuild \
+           -project natsuk1.xcodeproj \
+           -scheme natsuk1 \
+           -configuration Release \
+           -destination "generic/platform=iOS" \
+           -derivedDataPath build \
+           SWIFT_STRICT_CONCURRENCY=minimal \
+           OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
+           build -quiet
 
       - name: Package and Publish
         env:
-          GH_TOKEN: ${{ github.token }}
+         GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -print -quit)
-          test -n "$APP"
-          ldid -Snatsuk1/Resources/natsuk1.entitlements "$APP/natsuk1"
-          xcrun strip -S -x "$APP/natsuk1" || true
-          rm -rf Payload natsuk1.ipa
-          mkdir -p Payload
-          cp -R "$APP" Payload/
-          ditto -c -k --sequesterRsrc --keepParent Payload natsuk1.ipa
-          rm -rf Payload
-          TAG="${{ inputs.version }}"
-          if [ -n "$TAG" ]; then
-            gh release create "$TAG" natsuk1.ipa --target "${{ github.sha }}" --title "natsuk1 $TAG" --latest
-          else
-            gh release view development >/dev/null 2>&1 && gh release delete development --yes --cleanup-tag || true
-            gh release create development natsuk1.ipa --target "${{ github.sha }}" --title "Development" --prerelease --latest=false --notes "natsuk1 development"
-          fi
+         set -euo pipefail
+         APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -print -quit)
+         test -n "$APP"
+         ldid -Snatsuk1/Resources/natsuk1.entitlements "$APP/natsuk1"
+         xcrun strip -S -x "$APP/natsuk1" || true
+         rm -rf Payload natsuk1.ipa
+         mkdir -p Payload
+         cp -R "$APP" Payload/
+         ditto -c -k --sequesterRsrc --keepParent Payload natsuk1.ipa
+         rm -rf Payload
+         TAG="${{ inputs.version }}"
+         if [ -n "$TAG" ]; then
+           gh release create "$TAG" natsuk1.ipa --target "${{ github.sha }}" --title "natsuk1 $TAG" --latest
+         else
+           gh release view development >/dev/null 2>&1 && gh release delete development --yes --cleanup-tag || true
+           gh release create development natsuk1.ipa --target "${{ github.sha }}" --title "Development" --prerelease --latest=false --notes "natsuk1 development"
+         fi
