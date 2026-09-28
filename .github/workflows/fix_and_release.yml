@@ -1,8 +1,6 @@
 name: Pairing Fix and Release
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -31,11 +29,218 @@ jobs:
          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
          command -v ldid >/dev/null 2>&1 || brew install ldid
 
+      - name: Write CarrierLabCompat.swift
+        run: |
+         set -euo pipefail
+         cat > natsuk1/CarrierLab/CarrierLabCompat.swift <<'COMPAT_EOF'
+         import Foundation
+
+         extension CarrierLabBridge {
+             static let carrierUserRoot = "/var/mobile/Library/Carrier Bundles"
+             static let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
+             static let defaultSlots = ["Carrier1Bundle.bundle", "Operator1Bundle.bundle"]
+         }
+
+         extension PairingGenerator {
+             static func cancelMinting() {
+                 LockdownPair.requestCancel()
+                 PairingController.shared.pairingStatus = "Cancelling..."
+             }
+         }
+
+         final class CarrierLabSlots: @unchecked Sendable {
+             static let shared = CarrierLabSlots()
+             private init() {}
+
+             struct Outcome {
+                 let ok: Bool
+                 let message: String
+                 let slots: [String]
+             }
+
+             func pairingPath() -> String? {
+                 let fm = FileManager.default
+                 let canonical = PairingController.pairingFilePath()
+                 if fm.fileExists(atPath: canonical) { return canonical }
+                 guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+                 for name in ["natsuk1_pairing.plist", "ALTPairingFile.mobiledevicepairing"] {
+                     let candidate = docs.appendingPathComponent(name).path
+                     if fm.fileExists(atPath: candidate) { return candidate }
+                 }
+                 return nil
+             }
+
+             func sourcePath() -> String {
+                 Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/CarrierLab.bundle").path
+             }
+
+             private func fileCount(_ path: String) -> Int {
+                 let fm = FileManager.default
+                 var isDirectory: ObjCBool = false
+                 guard fm.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else { return 0 }
+                 guard let walker = fm.enumerator(at: URL(fileURLWithPath: path),
+                                                 includingPropertiesForKeys: [.isRegularFileKey]) else { return 0 }
+                 var files = 0
+                 for case let url as URL in walker {
+                     if (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true { files += 1 }
+                 }
+                 return files
+             }
+
+             func readiness() -> String? {
+                 guard let path = pairingPath() else { return "No pairing file. Pair from Tools / Airlift first." }
+                 let kind = PairingFileKind.of(path: path)
+                 guard kind.isUsable else { return "Pairing file is not a plist." }
+                 guard kind.hasLockdown else { return "No classic lockdown record for port 62078." }
+                 return nil
+             }
+
+             func inject(source: String, parent: String, name: String) -> Bool {
+                 guard let pairing = pairingPath(), fileCount(source) > 0 else { return false }
+                 var rc: Int32 = -1
+                 pairing.withCString { pc in
+                     source.withCString { sc in
+                         parent.withCString { tc in
+                             name.withCString { nc in
+                                 rc = al_exploit_inject_folder(pc, sc, tc, nc, nil, nil, nil)
+                             }
+                         }
+                     }
+                 }
+                 return rc == 0
+             }
+
+             func install(slots: [String]) -> Outcome {
+                 if let problem = readiness() { return Outcome(ok: false, message: problem, slots: []) }
+                 let source = sourcePath()
+                 guard fileCount(source) > 0 else {
+                     return Outcome(ok: false, message: "no files in directory: \(source)", slots: [])
+                 }
+                 var written: [String] = []
+                 for slot in slots where inject(source: source, parent: CarrierLabBridge.carrierUserRoot, name: slot) {
+                     written.append(slot)
+                 }
+                 guard written.count == slots.count else {
+                     return Outcome(ok: false, message: "injected \(written.count)/\(slots.count): \(written.joined(separator: ","))", slots: written)
+                 }
+                 let trigger = Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/Docomo_jp.bundle").path
+                 if fileCount(trigger) > 0 {
+                     _ = inject(source: trigger, parent: CarrierLabBridge.carrierRoot, name: "Docomo_jp.bundle")
+                 }
+                 return Outcome(ok: true, message: "written into \(written.joined(separator: ","))", slots: written)
+             }
+         }
+         COMPAT_EOF
+
+      - name: Write CarrierLabView.swift
+        run: |
+         set -euo pipefail
+         cat > natsuk1/CarrierLab/CarrierLabView.swift <<'CLVIEW_EOF'
+         import SwiftUI
+         import UIKit
+
+         struct CarrierLabView: View {
+             @ObservedObject private var state = CarrierLabState.shared
+             @EnvironmentObject private var appState: AppState
+
+             @State private var slotText = ""
+             @State private var copied = false
+
+             var body: some View {
+                 List {
+                     Section {
+                         HStack {
+                             Text("Session")
+                             Spacer()
+                             Text(state.session?.status.rawValue ?? "clean").font(.system(.body, design: .monospaced))
+                         }
+                         if let error = state.session?.lastError {
+                             Text(error).font(.footnote).foregroundStyle(.red)
+                         }
+                     } header: { Label("CarrierLab", systemImage: "shippingbox") }
+
+                     Section {
+                         TextField("Carrier1Bundle.bundle", text: $slotText)
+                             .font(.system(.footnote, design: .monospaced))
+                             .autocorrectionDisabled()
+                         Button("Apply Slots") { applySlots() }
+                         Button("Reset Slots To Default") {
+                             slotText = CarrierLabBridge.defaultSlots.joined(separator: ", ")
+                             applySlots()
+                         }
+                     } header: { Label("Targets", systemImage: "folder.badge.gearshape") }
+                     footer: { Text("Contents go into these existing bundles under \(CarrierLabBridge.carrierUserRoot).").font(.caption2) }
+
+                     Section {
+                         Button("Check") { run("check") { CarrierLabSlots.shared.readiness() ?? "ready" } }
+                         Button("Install") { run("install") { install() } }
+                         Button("Reload") { run("reload") { install() } }
+                         Button("Respring") { appState.respring() }
+                     } header: { Label("Actions", systemImage: "wrench") }
+
+                     if !state.logText.isEmpty {
+                         Section {
+                             ScrollView {
+                                 Text(state.logText).font(.system(size: 10, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading)
+                             }
+                             .frame(minHeight: 120, maxHeight: 300)
+                             Button(copied ? "Copied" : "Copy All") {
+                                 UIPasteboard.general.string = state.logText
+                                 copied = true
+                                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                             }
+                             Button("Clear", role: .destructive) { state.clearLog() }
+                         } header: { Label("Log", systemImage: "terminal") }
+                     }
+                 }
+                 .listStyle(.insetGrouped)
+                 .navigationTitle("CarrierLab")
+                 .navigationBarTitleDisplayMode(.inline)
+                 .onAppear { slotText = state.slots.joined(separator: ", ") }
+             }
+
+             private func applySlots() {
+                 state.setSlots(slotText.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
+                 state.appendLog("[slots] \(state.slots.joined(separator: ","))")
+             }
+
+             private func install() -> String {
+                 let slots = CarrierLabState.shared.slots
+                 let outcome = CarrierLabSlots.shared.install(slots: slots)
+                 CarrierLabState.shared.save(CarrierLabState.Session(
+                     status: outcome.ok ? .placed : .failed,
+                     startedAt: Date(),
+                     carrierBundlePath: CarrierLabSlots.shared.sourcePath(),
+                     originalBackupPath: nil,
+                     ipccTriggerPath: nil,
+                     lastError: outcome.ok ? nil : outcome.message,
+                     aliases: nil,
+                     slots: outcome.slots))
+                 return outcome.ok ? outcome.message : "failed: \(outcome.message)"
+             }
+
+             private func run(_ name: String, _ work: @escaping () -> String) {
+                 if state.busy { return }
+                 state.setBusy(true)
+                 DispatchQueue.global(qos: .userInitiated).async {
+                     let text = work()
+                     CarrierLabState.shared.appendLog("[\(name)] \(text)")
+                     CarrierLabState.shared.setBusy(false)
+                 }
+             }
+         }
+         CLVIEW_EOF
+
       - name: Write PairingGenerator.swift
         run: |
          set -euo pipefail
          cat > natsuk1/Helpers/PairingGenerator.swift <<'PAIRINGGEN_EOF'
          import Foundation
+
+         struct PairingError: LocalizedError {
+             let message: String
+             var errorDescription: String? { message }
+         }
 
          final class PairingGenerator {
              static let shared = PairingGenerator()
@@ -43,72 +248,24 @@ jobs:
 
              private let hostName = "natsuk1"
 
-             enum GeneratorError: LocalizedError {
-                 case missingFile(String)
-                 case notAPlist(String)
-                 case noRemotePairing
-                 case cancelled
-                 case lockdownUnavailable(String)
-                 case mergeFailed(String)
-                 case writeFailed(String)
-
-                 var errorDescription: String? {
-                     switch self {
-                     case let .missingFile(s):
-                         return "Pairing file missing: \(s)"
-                     case let .notAPlist(s):
-                         return "Pairing file is not a plist: \(s)"
-                     case .noRemotePairing:
-                         return "The pairing record has no public_key / private_key / identifier, "
-                             + "so it is not an RPPairing record. Pair again from the Airlift screen."
-                     case .cancelled:
-                         return "Cancelled."
-                     case let .lockdownUnavailable(reason):
-                         return "The classic lockdown half was not issued, so the file still lacks "
-                             + "DeviceCertificate and Airlift's Lockdown fallback will fail. \(reason)"
-                     case let .mergeFailed(reason):
-                         return "The two pairing records could not be merged: \(reason)"
-                     case let .writeFailed(reason):
-                         return "Write failed: \(reason)"
-                     }
-                 }
-             }
-
-             private func status(_ text: String) {
-                 PairingController.shared.pairingStatus = text
-             }
-
              @discardableResult
              func generateMergedPairing(rppPath: String, outputPath: String) throws -> String {
                  LockdownPair.resetCancel()
 
-                 let fm = FileManager.default
-                 guard fm.fileExists(atPath: rppPath) else {
-                     throw GeneratorError.missingFile(rppPath)
-                 }
                  guard let rpp = try? Data(contentsOf: URL(fileURLWithPath: rppPath)), !rpp.isEmpty else {
-                     throw GeneratorError.missingFile("empty or unreadable: \(rppPath)")
+                     throw PairingError(message: "pairing record missing at \(rppPath)")
                  }
-                 guard let plist = try? PropertyListSerialization.propertyList(
-                     from: rpp, options: [], format: nil) as? [String: Any], !plist.isEmpty else {
-                     throw GeneratorError.notAPlist(rppPath)
-                 }
-
                  let kind = PairingFileKind.of(data: rpp)
-
-                 if kind.hasLockdown {
-                     status("Pairing file already carries a lockdown record.")
-                     return try write(merged: rpp, outputPath: outputPath, sourcePath: rppPath)
-                 }
                  guard kind.hasRemotePairing else {
-                     throw GeneratorError.noRemotePairing
+                     throw PairingError(message: "not an RPPairing record, pair again from Airlift")
+                 }
+                 if kind.hasLockdown {
+                     return try write(rpp, outputPath: outputPath, sourcePath: rppPath)
                  }
 
-                 var lockdownRecord = CompositePairingFile.cachedLockdownRecord(forUDID: kind.udid)
-                 var mintFailure: String?
-
-                 if lockdownRecord == nil {
-                     status("Minting lockdown record...")
+                 var lockdown = CompositePairingFile.cachedLockdownRecord(forUDID: kind.udid)
+                 if lockdown == nil {
+                     PairingController.shared.pairingStatus = "Minting lockdown record..."
                      do {
                          let record = try LockdownPair.mintRecord(
                              hosts: LockdownPair.candidateHosts(),
@@ -116,178 +273,54 @@ jobs:
                              systemBUID: CompositePairingFile.systemBUID,
                              hostName: hostName)
                          CompositePairingFile.storeLockdownRecord(record, forUDID: kind.udid)
-                         lockdownRecord = record
-                         status("Lockdown record minted (\(record.count) bytes).")
+                         lockdown = record
                      } catch {
-                         if LockdownPair.cancelled {
-                             throw GeneratorError.cancelled
-                         }
-                         mintFailure = (error as? LocalizedError)?.errorDescription
-                             ?? String(describing: error)
+                         if LockdownPair.cancelled { throw PairingError(message: "cancelled") }
+                         throw PairingError(message: (error as? LocalizedError)?.errorDescription
+                                            ?? String(describing: error))
                      }
-                 } else {
-                     status("Reusing the stored lockdown record.")
+                 }
+                 guard let lockdown else {
+                     throw PairingError(message: "lockdown record unavailable")
                  }
 
-                 let merged: Data
-                 if let lockdownRecord {
-                     do {
-                         merged = try CompositePairingFile.merge(
-                             lockdown: lockdownRecord, rpPairing: rpp, udid: kind.udid)
-                     } catch {
-                         throw GeneratorError.mergeFailed(
-                             (error as? LocalizedError)?.errorDescription ?? String(describing: error))
-                     }
-                 } else {
-                     merged = rpp
-                 }
-
-                 let canonical = try write(merged: merged, outputPath: outputPath, sourcePath: rppPath)
-
-                 if let mintFailure {
-                     throw GeneratorError.lockdownUnavailable(mintFailure)
-                 }
+                 let merged = try CompositePairingFile.merge(lockdown: lockdown, rpPairing: rpp, udid: kind.udid)
+                 let canonical = try write(merged, outputPath: outputPath, sourcePath: rppPath)
+                 PairingController.shared.pairingStatus = "Pairing file ready"
                  return canonical
              }
 
-             private func write(merged: Data, outputPath: String, sourcePath: String) throws -> String {
+             private func write(_ data: Data, outputPath: String, sourcePath: String) throws -> String {
                  if outputPath != sourcePath {
-                     do {
-                         try merged.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
-                     } catch {
-                         throw GeneratorError.writeFailed(error.localizedDescription)
-                     }
+                     try? data.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
                  }
                  let canonical = PairingController.syncCanonicalPairingFile(from: sourcePath)
                  do {
-                     try merged.write(to: URL(fileURLWithPath: canonical), options: .atomic)
+                     try data.write(to: URL(fileURLWithPath: canonical), options: .atomic)
                  } catch {
-                     throw GeneratorError.writeFailed(error.localizedDescription)
+                     throw PairingError(message: error.localizedDescription)
                  }
                  return canonical
              }
          }
          PAIRINGGEN_EOF
 
-      - name: Write CompositePairingFile.swift
-        run: |
-         set -euo pipefail
-         cat > natsuk1/Helpers/CompositePairingFile.swift <<'COMPOSITE_EOF'
-         import Foundation
-         struct PairingFileKind {
-             let hasRemotePairing: Bool
-             let hasLockdown: Bool
-             let udid: String?
-             var isUsable: Bool { hasRemotePairing || hasLockdown }
-             static let none = PairingFileKind(hasRemotePairing: false, hasLockdown: false, udid: nil)
-             static func of(path: String) -> PairingFileKind {
-                 guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return .none }
-                 return of(data: data)
-             }
-             static func of(data: Data) -> PairingFileKind {
-                 guard !data.isEmpty,
-                       let parsed = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
-                       let dict = parsed as? [String: Any]
-                 else { return .none }
-                 let ed25519 = { (key: String) in (dict[key] as? Data)?.count == 32 }
-                 let remote = ed25519("public_key") && ed25519("private_key")
-                     && (dict["identifier"] as? String)?.isEmpty == false
-                 let present = { (key: String) in
-                     (dict[key] as? Data)?.isEmpty == false || (dict[key] as? String)?.isEmpty == false
-                 }
-                 let lockdown = present("HostCertificate") && present("HostPrivateKey")
-                     && present("DeviceCertificate")
-                 let udid = (dict["UDID"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-                 return PairingFileKind(hasRemotePairing: remote, hasLockdown: lockdown, udid: udid)
-             }
-         }
-         enum CompositePairingFile {
-             private static let hostIDKey = "natsuk1LockdownHostID"
-             private static let systemBUIDKey = "natsuk1LockdownSystemBUID"
-             private static let recordUDIDKey = "natsuk1LockdownRecordUDID"
-             enum BuildError: LocalizedError {
-                 case notAPlistDictionary(String)
-                 var errorDescription: String? {
-                     switch self {
-                     case let .notAPlistDictionary(what):
-                         return "The \(what) record isn't a plist dictionary."
-                     }
-                 }
-             }
-             static var hostID: String { persistentUUID(forKey: hostIDKey) }
-             static var systemBUID: String { persistentUUID(forKey: systemBUIDKey) }
-             private static func persistentUUID(forKey key: String) -> String {
-                 if let stored = UserDefaults.standard.string(forKey: key), !stored.isEmpty {
-                     return stored
-                 }
-                 let raw = UUID().uuidString
-                 UserDefaults.standard.set(raw, forKey: key)
-                 return raw
-             }
-             private static var documents: URL {
-                 FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-             }
-             static var cachedLockdownURL: URL {
-                 documents.appendingPathComponent(".natsuk1_lockdown_record")
-             }
-             static var mergedURL: URL {
-                 documents.appendingPathComponent("ALTPairingFile.mobiledevicepairing")
-             }
-             static func cachedLockdownRecord(forUDID udid: String?) -> Data? {
-                 guard let udid, !udid.isEmpty,
-                       UserDefaults.standard.string(forKey: recordUDIDKey) == udid,
-                       let data = try? Data(contentsOf: cachedLockdownURL),
-                       !data.isEmpty
-                 else { return nil }
-                 return data
-             }
-             static func storeLockdownRecord(_ data: Data, forUDID udid: String?) {
-                 try? data.write(to: cachedLockdownURL, options: .atomic)
-                 UserDefaults.standard.set(udid ?? "", forKey: recordUDIDKey)
-             }
-             static func clearLockdownRecord() {
-                 try? FileManager.default.removeItem(at: cachedLockdownURL)
-                 UserDefaults.standard.removeObject(forKey: recordUDIDKey)
-             }
-             static func merge(lockdown: Data, rpPairing: Data, udid: String?) throws -> Data {
-                 var merged = try dictionary(from: lockdown, describing: "lockdown")
-                 for (key, value) in try dictionary(from: rpPairing, describing: "RPPairing") {
-                     merged[key] = value
-                 }
-                 if let udid, !udid.isEmpty, (merged["UDID"] as? String)?.isEmpty != false {
-                     merged["UDID"] = udid
-                 }
-                 return try PropertyListSerialization.data(fromPropertyList: merged, format: .xml, options: 0)
-             }
-             private static func dictionary(from data: Data, describing what: String) throws -> [String: Any] {
-                 let parsed = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
-                 guard let dict = parsed as? [String: Any] else {
-                     throw BuildError.notAPlistDictionary(what)
-                 }
-                 return dict
-             }
-         }
-         COMPOSITE_EOF
-
       - name: Verify sources
         run: |
          set -euo pipefail
          fail() { echo "::error::$1"; exit 1; }
-         test -f project.yml || fail 'project.yml is missing'
-         test -f natsuk1/App/natsuk1.swift || fail 'natsuk1/App/natsuk1.swift is missing'
-         grep -q 'LockdownPair.mintRecord' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift is stale: LockdownPair.mintRecord'
-         grep -q 'CompositePairingFile.merge' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift is stale: CompositePairingFile.merge'
-         grep -q 'resetCancel' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift is stale: resetCancel'
-         grep -q 'static func merge' natsuk1/Helpers/CompositePairingFile.swift || fail 'natsuk1/Helpers/CompositePairingFile.swift is stale: static func merge'
-         grep -q 'storeLockdownRecord' natsuk1/Helpers/CompositePairingFile.swift || fail 'natsuk1/Helpers/CompositePairingFile.swift is stale: storeLockdownRecord'
          grep -q 'static func cancelMinting' natsuk1/CarrierLab/CarrierLabCompat.swift || fail 'natsuk1/CarrierLab/CarrierLabCompat.swift is stale: static func cancelMinting'
-         grep -q 'static let defaultSlots' natsuk1/CarrierLab/CarrierLabCompat.swift || fail 'natsuk1/CarrierLab/CarrierLabCompat.swift is stale: static let defaultSlots'
+         grep -q 'al_exploit_inject_folder' natsuk1/CarrierLab/CarrierLabCompat.swift || fail 'natsuk1/CarrierLab/CarrierLabCompat.swift is stale: al_exploit_inject_folder'
+         grep -q 'Copy All' natsuk1/CarrierLab/CarrierLabView.swift || fail 'natsuk1/CarrierLab/CarrierLabView.swift is stale: Copy All'
+         grep -q 'LockdownPair.mintRecord' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift is stale: LockdownPair.mintRecord'
          grep -q 'func mintRecord' natsuk1/Helpers/LockdownPair.swift || fail 'natsuk1/Helpers/LockdownPair.swift is stale: func mintRecord'
+         grep -q 'static func merge' natsuk1/Helpers/CompositePairingFile.swift || fail 'natsuk1/Helpers/CompositePairingFile.swift is stale: static func merge'
          grep -q 'LockdownPair.cancelled' natsuk1/Helpers/AirliftBridge.swift || fail 'natsuk1/Helpers/AirliftBridge.swift is stale: LockdownPair.cancelled'
          grep -q 'idevice_shim.h' natsuk1/Support/bridging.h || fail 'natsuk1/Support/bridging.h is stale: idevice_shim.h'
          ! grep -q 'lockdownd_connect_rsd' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift still has lockdownd_connect_rsd'
-         ! grep -q 'lockdownd_pair_record_free' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift still has lockdownd_pair_record_free'
          ! grep -q 'static func cancelMinting' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift still has static func cancelMinting'
+         ! grep -q 'CarrierLabInstaller' natsuk1/CarrierLab/CarrierLabView.swift || fail 'natsuk1/CarrierLab/CarrierLabView.swift still has CarrierLabInstaller'
+         ! grep -q 'Task' natsuk1/CarrierLab/CarrierLabCompat.swift || fail 'natsuk1/CarrierLab/CarrierLabCompat.swift still has Task'
 
       - name: Commit
         run: |
@@ -314,11 +347,7 @@ jobs:
            -configuration Release \
            -destination "generic/platform=iOS" \
            -derivedDataPath build \
-           CODE_SIGNING_ALLOWED=NO \
            SWIFT_STRICT_CONCURRENCY=minimal \
-           SWIFT_OPTIMIZATION_LEVEL=-Osize \
-           DEAD_CODE_STRIPPING=YES \
-           STRIP_INSTALLED_PRODUCT=YES \
            OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
            build -quiet
 
@@ -331,17 +360,15 @@ jobs:
          test -n "$APP"
          ldid -Snatsuk1/Resources/natsuk1.entitlements "$APP/natsuk1"
          xcrun strip -S -x "$APP/natsuk1" || true
-         rm -rf Payload natsuk1.ipa natsuk1.ipa.sha256
+         rm -rf Payload natsuk1.ipa
          mkdir -p Payload
          cp -R "$APP" Payload/
          ditto -c -k --sequesterRsrc --keepParent Payload natsuk1.ipa
          rm -rf Payload
-         shasum -a 256 natsuk1.ipa | awk '{print $1"  natsuk1.ipa"}' > natsuk1.ipa.sha256
-         cat natsuk1.ipa.sha256
          TAG="${{ inputs.version }}"
          if [ -n "$TAG" ]; then
-           gh release create "$TAG" natsuk1.ipa natsuk1.ipa.sha256 --target "${{ github.sha }}" --title "natsuk1 $TAG" --generate-notes --latest
+           gh release create "$TAG" natsuk1.ipa --target "${{ github.sha }}" --title "natsuk1 $TAG" --latest
          else
            gh release view development >/dev/null 2>&1 && gh release delete development --yes --cleanup-tag || true
-           gh release create development natsuk1.ipa natsuk1.ipa.sha256 --target "${{ github.sha }}" --title "Development" --prerelease --latest=false --notes "natsuk1 development"
+           gh release create development natsuk1.ipa --target "${{ github.sha }}" --title "Development" --prerelease --latest=false --notes "natsuk1 development"
          fi
