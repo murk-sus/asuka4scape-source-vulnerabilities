@@ -52,15 +52,49 @@ final class CarrierLabSlots: @unchecked Sendable {
         return files
     }
 
-    func readiness() -> String? {
-        guard let path = pairingPath() else { return "No pairing file. Pair from Tools / Airlift first." }
+    func status() -> String {
+        guard let path = pairingPath() else { return "no pairing file, pair from Tools / Airlift" }
         let kind = PairingFileKind.of(path: path)
-        guard kind.isUsable else { return "Pairing file is not a plist." }
-        guard kind.hasLockdown else { return "No classic lockdown record for port 62078." }
-        return nil
+        if kind.hasLockdown { return "ready" }
+        if kind.hasRemotePairing { return "needs a lockdown record, press Pair Lockdown Record" }
+        return "pairing file is not an RPPairing plist"
     }
 
-    func inject(source: String, parent: String, name: String) -> Bool {
+    @discardableResult
+    func ensureLockdownRecord() -> String? {
+        guard let path = pairingPath() else { return "No pairing file. Pair from Tools / Airlift first." }
+        let kind = PairingFileKind.of(path: path)
+        if kind.hasLockdown { return nil }
+        guard kind.isUsable else { return "Pairing file is not a plist." }
+        guard kind.hasRemotePairing else {
+            return "No public_key/private_key in the pairing file, pair again from Airlift."
+        }
+
+        PairingController.shared.pairingStatus = "Minting lockdown record, tap Trust on the iPhone..."
+        do {
+            let record = try LockdownPair.mintRecord(
+                hosts: LockdownPair.candidateHosts(),
+                hostID: CompositePairingFile.hostID,
+                systemBUID: CompositePairingFile.systemBUID,
+                hostName: "natsuk1")
+            let rpp = try Data(contentsOf: URL(fileURLWithPath: path))
+            let merged = try CompositePairingFile.merge(lockdown: record, rpPairing: rpp, udid: kind.udid)
+            CompositePairingFile.storeLockdownRecord(record, forUDID: kind.udid)
+            let canonical = PairingController.syncCanonicalPairingFile(from: path)
+            try merged.write(to: URL(fileURLWithPath: canonical), options: .atomic)
+            guard PairingFileKind.of(path: canonical).hasLockdown else {
+                return "Minted \(record.count) bytes but the merged file still has no DeviceCertificate."
+            }
+            PairingController.shared.pairingStatus = "Lockdown record stored"
+            return nil
+        } catch {
+            let text = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            PairingController.shared.pairingStatus = text
+            return text
+        }
+    }
+
+    private func inject(source: String, parent: String, name: String) -> Bool {
         guard let pairing = pairingPath(), fileCount(source) > 0 else { return false }
         var rc: Int32 = -1
         pairing.withCString { pc in
@@ -76,7 +110,9 @@ final class CarrierLabSlots: @unchecked Sendable {
     }
 
     func install(slots: [String]) -> Outcome {
-        if let problem = readiness() { return Outcome(ok: false, message: problem, slots: []) }
+        if let problem = ensureLockdownRecord() {
+            return Outcome(ok: false, message: problem, slots: [])
+        }
         let source = sourcePath()
         guard fileCount(source) > 0 else {
             return Outcome(ok: false, message: "no files in directory: \(source)", slots: [])

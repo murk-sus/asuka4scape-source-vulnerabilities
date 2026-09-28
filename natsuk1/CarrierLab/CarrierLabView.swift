@@ -34,7 +34,8 @@ struct CarrierLabView: View {
             footer: { Text("Contents go into these existing bundles under \(CarrierLabBridge.carrierUserRoot).").font(.caption2) }
 
             Section {
-                Button("Check") { run("check") { CarrierLabSlots.shared.readiness() ?? "ready" } }
+                Button("Check") { run("check") { CarrierLabSlots.shared.status() } }
+                Button("Pair Lockdown Record") { run("pair") { CarrierLabSlots.shared.ensureLockdownRecord() ?? "lockdown record stored" } }
                 Button("Install") { run("install") { install() } }
                 Button("Reload") { run("reload") { install() } }
                 Button("Respring") { appState.respring() }
