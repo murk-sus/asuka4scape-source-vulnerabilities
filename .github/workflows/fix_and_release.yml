@@ -1,4 +1,4 @@
-name: Loopback Tunnel Check and Release
+name: Restore Pass-through Pairing and Release
 
 on:
   workflow_dispatch:
@@ -210,24 +210,53 @@ jobs:
          }
          NETSTATUS_EOF
 
-      - name: Drop the stray lockdown layer
+      - name: Restore the pass-through files from history
+        run: |
+         set -euo pipefail
+         restore() {
+           path="$1"
+           needle="$2"
+           ref=""
+           if [ ! -f "$path" ]; then
+             echo "$path is absent, nothing to restore"
+             return 0
+           fi
+           if ! grep -q "$needle" "$path"; then
+             echo "$path is already pass-through"
+             return 0
+           fi
+           for c in $(git rev-list HEAD -- "$path"); do
+             if git cat-file -e "$c:$path" 2>/dev/null \
+                && ! git show "$c:$path" | grep -q "$needle"; then
+               ref="$c"
+               break
+             fi
+           done
+           if [ -z "$ref" ]; then
+             echo "::error::no version of $path without $needle anywhere in history"
+             return 1
+           fi
+           git checkout "$ref" -- "$path"
+           echo "$path restored from $ref"
+         }
+         restore natsuk1/Helpers/AirliftBridge.swift 'PairingFileKind'
+         restore natsuk1/Helpers/PairingGenerator.swift 'LockdownPair'
+         restore natsuk1/CarrierLab/CarrierLabState.swift 'CarrierLabBridge.defaultSlots'
+         restore natsuk1/CarrierLab/CarrierLabView.swift 'CarrierLabSlots'
+
+      - name: Drop the undelivered lockdown files
         run: |
          set -euo pipefail
          for stray in \
-           natsuk1/CarrierLab/CarrierLabCompat.swift \
            natsuk1/Helpers/LockdownPair.swift \
-           natsuk1/Helpers/CompositePairingFile.swift
+           natsuk1/Helpers/CompositePairingFile.swift \
+           natsuk1/CarrierLab/CarrierLabCompat.swift
          do
-           if git ls-files --error-unmatch "$stray" >/dev/null 2>&1; then
-             git rm -q "$stray"
+           if [ -e "$stray" ]; then
+             rm -f "$stray"
              echo "removed $stray"
            fi
          done
-         if git ls-files --error-unmatch natsuk1/CarrierLab/CarrierLabView.swift >/dev/null 2>&1 \
-            && grep -q 'CarrierLabCompat\|CarrierLabSlots' natsuk1/CarrierLab/CarrierLabView.swift; then
-           git checkout HEAD -- natsuk1/CarrierLab/CarrierLabView.swift
-           echo "restored CarrierLabView.swift from HEAD"
-         fi
 
       - name: Verify sources
         run: |
@@ -235,15 +264,13 @@ jobs:
          fail() { echo "::error::$1"; exit 1; }
          grep -q 'func loopbackVPNUp' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func loopbackVPNUp'
          grep -q 'routeCarriesTunnel' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: routeCarriesTunnel'
-         grep -q 'routeSource' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: routeSource'
          grep -q 'defaultRouteProbe' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: defaultRouteProbe'
          grep -q 'func tunnelIP' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func tunnelIP'
          grep -q 'func deviceIP' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func deviceIP'
-         grep -q 'func tunnelPairs' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func tunnelPairs'
-         grep -q 'func isTunnelInterface' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func isTunnelInterface'
-         ! grep -q 'hasLockdown' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift still has hasLockdown'
-         ! grep -q 'DeviceCertificate' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift still has DeviceCertificate'
-         ! grep -rq 'CarrierLabCompat' natsuk1/ || fail 'CarrierLabCompat is still referenced'
+         grep -q 'func hasPairing' natsuk1/Helpers/AirliftBridge.swift || fail 'natsuk1/Helpers/AirliftBridge.swift is stale: func hasPairing'
+         grep -q 'func generateMergedPairing' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift is stale: func generateMergedPairing'
+         grep -q 'CarrierLabInstaller' natsuk1/CarrierLab/CarrierLabView.swift || fail 'natsuk1/CarrierLab/CarrierLabView.swift is stale: CarrierLabInstaller'
+         ! grep -rqE 'PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting' natsuk1/ || fail 'the lockdown layer is still referenced'
 
       - name: Commit
         run: |
@@ -252,7 +279,7 @@ jobs:
          git config user.email "github-actions[bot]@users.noreply.github.com"
          git add -A
          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-         git commit -q -m "fix: verify the loopback tunnel by route, not by interface [skip ci]"
+         git commit -q -m "fix: restore pass-through pairing, verify the tunnel by route [skip ci]"
          git push || true
 
       - name: Generate project
