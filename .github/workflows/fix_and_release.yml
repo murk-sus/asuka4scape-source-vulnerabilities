@@ -1,4 +1,4 @@
-name: Restore Pass-through Pairing and Release
+name: j
 
 on:
   workflow_dispatch:
@@ -213,38 +213,44 @@ jobs:
       - name: Restore the pass-through files from history
         run: |
          set -euo pipefail
-         restore() {
-           path="$1"
-           needle="$2"
-           ref=""
-           if [ ! -f "$path" ]; then
-             echo "$path is absent, nothing to restore"
-             return 0
-           fi
-           if ! grep -q "$needle" "$path"; then
-             echo "$path is already pass-through"
-             return 0
-           fi
-           for c in $(git rev-list HEAD -- "$path"); do
-             if git cat-file -e "$c:$path" 2>/dev/null \
-                && ! git show "$c:$path" | grep -q "$needle"; then
-               ref="$c"
-               break
+         LAYER='PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting'
+         SOURCES="\
+           natsuk1/Helpers/AirliftBridge.swift \
+           natsuk1/Helpers/PairingGenerator.swift \
+           natsuk1/CarrierLab/CarrierLabBridge.swift \
+           natsuk1/CarrierLab/CarrierLabInstaller.swift \
+           natsuk1/CarrierLab/CarrierLabState.swift \
+           natsuk1/CarrierLab/CarrierLabView.swift"
+         clean() {
+           c="$1"
+           for f in $SOURCES; do
+             git cat-file -e "$c:$f" 2>/dev/null || continue
+             if git show "$c:$f" | grep -qE "$LAYER"; then
+               return 1
              fi
            done
-           if [ -z "$ref" ]; then
-             echo "::error::no version of $path without $needle anywhere in history"
-             return 1
-           fi
-           git checkout "$ref" -- "$path"
-           echo "$path restored from $ref"
+           return 0
          }
-         restore natsuk1/Helpers/AirliftBridge.swift 'PairingFileKind'
-         restore natsuk1/Helpers/PairingGenerator.swift 'LockdownPair'
-         restore natsuk1/CarrierLab/CarrierLabBridge.swift 'PairingFileKind'
-         restore natsuk1/CarrierLab/CarrierLabInstaller.swift 'PairingFileKind'
-         restore natsuk1/CarrierLab/CarrierLabState.swift 'CarrierLabBridge.defaultSlots'
-         restore natsuk1/CarrierLab/CarrierLabView.swift 'CarrierLabSlots'
+         ref=""
+         for c in $(git rev-list --max-count=200 HEAD); do
+           if clean "$c"; then
+             ref="$c"
+             break
+           fi
+         done
+         if [ -z "$ref" ]; then
+           echo "::error::no commit in the last 200 is free of the lockdown layer"
+           exit 1
+         fi
+         echo "layer-free baseline: $ref"
+         for f in $SOURCES; do
+           if git cat-file -e "$ref:$f" 2>/dev/null; then
+             git checkout "$ref" -- "$f"
+             echo "restored $f"
+           else
+             echo "::warning::$f is absent at $ref, left as is"
+           fi
+         done
 
       - name: Drop the undelivered lockdown files
         run: |
@@ -273,6 +279,7 @@ jobs:
          grep -q 'func generateMergedPairing' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift is stale: func generateMergedPairing'
          grep -q 'func injectFolder' natsuk1/CarrierLab/CarrierLabBridge.swift || fail 'natsuk1/CarrierLab/CarrierLabBridge.swift is stale: func injectFolder'
          grep -q 'CarrierLabBridge.shared' natsuk1/CarrierLab/CarrierLabInstaller.swift || fail 'natsuk1/CarrierLab/CarrierLabInstaller.swift is stale: CarrierLabBridge.shared'
+         grep -q 'struct Session' natsuk1/CarrierLab/CarrierLabState.swift || fail 'natsuk1/CarrierLab/CarrierLabState.swift is stale: struct Session'
          grep -q 'CarrierLabInstaller' natsuk1/CarrierLab/CarrierLabView.swift || fail 'natsuk1/CarrierLab/CarrierLabView.swift is stale: CarrierLabInstaller'
          if grep -rnE 'PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting' natsuk1/; then
            fail 'the lockdown layer is still referenced (matches printed above)'
