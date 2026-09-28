@@ -1,4 +1,4 @@
-name: 13
+name: 14
 
 on:
   push:
@@ -248,6 +248,21 @@ jobs:
            fi
          done < <(find natsuk1 -name '*.swift' -type f)
 
+      - name: Bump carrier bundle versions
+        run: |
+         set -euo pipefail
+         PB=/usr/libexec/PlistBuddy
+         test -x "$PB"
+         for b in CarrierLab.bundle Docomo_jp.bundle; do
+           p="natsuk1/Resources/CarrierAssets/$b/Info.plist"
+           test -f "$p"
+           "$PB" -c "Set :CFBundleVersion 99.0" "$p"
+           "$PB" -c "Set :CFBundleShortVersionString 99.0" "$p"
+           v="$("$PB" -c "Print :CFBundleVersion" "$p")"
+           [ "$v" = "99.0" ] || { echo "::error::$b version is $v, expected 99.0"; exit 1; }
+           echo "$b -> CFBundleVersion $v (wins the version race over stock)"
+         done
+
       - name: Verify sources
         run: |
          set -euo pipefail
@@ -276,10 +291,15 @@ jobs:
          test -d external/AirliftFFI.xcframework || fail 'external/AirliftFFI.xcframework is missing'
          while IFS= read -r f; do
            case "$f" in
-             "natsuk1/Helpers/NetworkStatus.swift") ;;
-             *) fail "$f differs from the last consistent commit; only natsuk1/Helpers/NetworkStatus.swift may change" ;;
+             "natsuk1/Helpers/NetworkStatus.swift" | \
+             "natsuk1/Resources/CarrierAssets/CarrierLab.bundle/Info.plist" | \
+             "natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/Info.plist") ;;
+             *) fail "$f differs from the last consistent commit; only the audited NetworkStatus.swift and the two bundle Info.plists may change" ;;
            esac
          done < <(git diff --name-only "$BASE" -- natsuk1 project.yml)
+         for p in "natsuk1/Resources/CarrierAssets/CarrierLab.bundle/Info.plist" "natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/Info.plist"; do
+           grep -q "<string>99.0</string>" "$p" || fail "$p was not bumped to 99.0"
+         done
          for t in loopbackVPNUp routeCarriesTunnel routeSource defaultRouteProbe; do
            grep -q "$t" natsuk1/Helpers/NetworkStatus.swift || fail "natsuk1/Helpers/NetworkStatus.swift is missing $t"
          done
@@ -292,7 +312,7 @@ jobs:
          git config user.email "github-actions[bot]@users.noreply.github.com"
          git add -A
          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-         git commit -q -m "fix: route-verified loopback tunnel check [skip ci]"
+         git commit -q -m "fix: restore natsuk1, route-verified tunnel check, carrier bundle 99.0 [skip ci]"
          git push || true
 
       - name: Generate project
