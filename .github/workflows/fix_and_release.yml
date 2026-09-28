@@ -1,4 +1,4 @@
-name: d
+name: k
 
 on:
   push:
@@ -30,22 +30,20 @@ jobs:
          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
          command -v ldid >/dev/null 2>&1 || brew install ldid
 
-      - name: Restore natsuk1 from the last layer-free commit
+      - name: Restore natsuk1 from the first commit
         run: |
          set -euo pipefail
          LAYER='PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting'
-         BASE=""
-         for c in $(git rev-list --max-count=200 HEAD); do
-           if [ -z "$(git grep -lE "$LAYER" "$c" -- natsuk1 2>/dev/null)" ]; then
-             BASE="$c"
-             break
-           fi
-         done
-         if [ -z "$BASE" ]; then
-           echo "::error::no commit in the last 200 is free of the lockdown layer"
+         BASE=$(git rev-list --max-parents=0 HEAD | tail -1)
+         if ! git cat-file -e "$BASE:natsuk1/App/natsuk1.swift" 2>/dev/null; then
+           echo "::error::the first commit carries no natsuk1 tree"
            exit 1
          fi
-         echo "layer-free baseline: $BASE"
+         if [ -n "$(git grep -lE "$LAYER" "$BASE" -- natsuk1 2>/dev/null)" ]; then
+           echo "::error::the first commit already references the lockdown layer"
+           exit 1
+         fi
+         echo "baseline commit: $BASE"
          git checkout "$BASE" -- natsuk1
          echo "BASE=$BASE" >> "$GITHUB_ENV"
          echo "natsuk1/ restored from $BASE"
@@ -259,6 +257,10 @@ jobs:
          if grep -rnE 'PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting' natsuk1/; then
            fail 'the lockdown layer is still referenced (matches printed above)'
          fi
+         while IFS= read -r m; do
+           grep -q "$m" natsuk1/Helpers/AirliftBridge.swift \
+             || fail "AirliftView uses airlift.$m but AirliftBridge does not define it"
+         done < <(grep -oE 'airlift\.[A-Za-z_]+' natsuk1/Views/AirliftView.swift | sed 's/airlift\.//' | sort -u)
          CHANGED=$(git diff --name-only "$BASE" -- natsuk1)
          EXTRA=$(printf '%s\n' "$CHANGED" | grep -v '^natsuk1/Helpers/NetworkStatus.swift$' || true)
          if [ -n "$EXTRA" ]; then
