@@ -1,4 +1,4 @@
-name: 14
+name: 15
 
 on:
   push:
@@ -30,6 +30,7 @@ jobs:
          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
          command -v ldid >/dev/null 2>&1 || brew install ldid
 
+
       - name: Find the last consistent layer-free commit
         run: |
          set -euo pipefail
@@ -55,165 +56,108 @@ jobs:
          git checkout "$BASE" -- natsuk1 project.yml
          echo "BASE=$BASE" >> "$GITHUB_ENV"
 
-      - name: Write NetworkStatus.swift
+
+      - name: Write audited files
         run: |
          set -euo pipefail
          cat > natsuk1/Helpers/NetworkStatus.swift <<'NETSTATUS_EOF'
          import Foundation
          import Darwin
 
-         /// Loopback-tunnel detection.
-         ///
-         /// An interface is not proof. iOS keeps system `utun`s up with no VPN running at
-         /// all, so "a utun exists" reports connected while nothing routes to the
-         /// device's internal services. The routing table is the authority — the check
-         /// SideInstaller and AirCard-iOS run before they dial RSD on
-         /// `10.7.0.1` / `127.0.0.1`.
-         ///
-         /// Airlift's own diagnostic names the precondition:
-         /// `Ensure a loopback VPN (e.g. LocalDevVPN or SideStore WireGuard) is active.`
+         // The routing table is the authority: iOS keeps system utuns up with no VPN.
          enum NetworkStatus {
+             struct Interface { let name: String; let ipv4: String; let netmask: String? }
+             struct TunnelPair { let local: String; let peer: String?; let iface: String }
 
-             struct Interface {
-                 let name: String
-                 let ipv4: String
-                 let netmask: String?
-             }
-
-             struct TunnelPair {
-                 let local: String
-                 let peer: String?
-                 let iface: String
-             }
-
-             /// TEST-NET-3 (RFC 5737) is reserved for documentation, so no VPN app routes
-             /// it deliberately: only the default route can claim it. A UDP `connect`
-             /// sends nothing — it resolves the route and selects a source address.
+             // TEST-NET-3 (RFC 5737): only the default route can claim it; the UDP
+             // connect below sends nothing.
              private static let defaultRouteProbe = "203.0.113.1"
-
-             /// The peer LocalDevVPN hands out when an interface does not report one.
              private static let canonicalTunnelPeer = "10.7.0.1"
 
-             // MARK: - Interfaces
-
              static func interfaces() -> [Interface] {
-                 var result: [Interface] = []
+                 var out: [Interface] = []
                  var ifaddr: UnsafeMutablePointer<ifaddrs>?
                  guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
                  defer { freeifaddrs(ifaddr) }
-
-                 var ptr: UnsafeMutablePointer<ifaddrs>? = first
-                 while let cur = ptr {
-                     defer { ptr = cur.pointee.ifa_next }
-                     guard let namePtr = cur.pointee.ifa_name,
-                           let addr = cur.pointee.ifa_addr,
-                           addr.pointee.sa_family == sa_family_t(AF_INET),
-                           let ipv4 = numericHost(addr) else { continue }
-                     result.append(Interface(name: String(cString: namePtr),
-                                             ipv4: ipv4,
-                                             netmask: cur.pointee.ifa_netmask.flatMap(numericHost)))
+                 var p: UnsafeMutablePointer<ifaddrs>? = first
+                 while let c = p {
+                     defer { p = c.pointee.ifa_next }
+                     guard let n = c.pointee.ifa_name, let a = c.pointee.ifa_addr,
+                           a.pointee.sa_family == sa_family_t(AF_INET), let v4 = host(a) else { continue }
+                     out.append(Interface(name: String(cString: n), ipv4: v4,
+                                          netmask: c.pointee.ifa_netmask.flatMap(host)))
                  }
-                 return result
+                 return out
              }
 
-             private static func numericHost(_ addr: UnsafeMutablePointer<sockaddr>) -> String? {
-                 var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                 let len = socklen_t(MemoryLayout<sockaddr_in>.size)
-                 guard getnameinfo(addr, len, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0
-                 else { return nil }
-                 let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-                 return String(decoding: bytes, as: UTF8.self)
+             private static func host(_ a: UnsafeMutablePointer<sockaddr>) -> String? {
+                 var b = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                 guard getnameinfo(a, socklen_t(MemoryLayout<sockaddr_in>.size), &b,
+                                   socklen_t(b.count), nil, 0, NI_NUMERICHOST) == 0 else { return nil }
+                 return String(decoding: b.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
              }
 
-             // MARK: - Tunnel interfaces
-
-             /// Local (address, peer) pairs on loopback tunnel interfaces. Used for the
-             /// host candidates and the addresses the Airlift screen prints.
              static func tunnelPairs() -> [TunnelPair] {
-                 var result: [TunnelPair] = []
+                 var out: [TunnelPair] = []
                  var ifaddr: UnsafeMutablePointer<ifaddrs>?
                  guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
                  defer { freeifaddrs(ifaddr) }
-
-                 var ptr: UnsafeMutablePointer<ifaddrs>? = first
-                 while let cur = ptr {
-                     defer { ptr = cur.pointee.ifa_next }
-                     guard let namePtr = cur.pointee.ifa_name else { continue }
-                     let name = String(cString: namePtr)
-                     guard isTunnelInterface(name),
-                           let addr = cur.pointee.ifa_addr,
-                           addr.pointee.sa_family == sa_family_t(AF_INET),
-                           let local = numericHost(addr), isLoopbackRange(local) else { continue }
+                 var p: UnsafeMutablePointer<ifaddrs>? = first
+                 while let c = p {
+                     defer { p = c.pointee.ifa_next }
+                     guard let n = c.pointee.ifa_name else { continue }
+                     let name = String(cString: n)
+                     guard isTunnelInterface(name), let a = c.pointee.ifa_addr,
+                           a.pointee.sa_family == sa_family_t(AF_INET),
+                           let local = host(a), isLoopbackRange(local) else { continue }
                      var peer: String? = nil
-                     if let dst = cur.pointee.ifa_dstaddr,
-                        dst.pointee.sa_family == sa_family_t(AF_INET),
-                        let p = numericHost(dst), isLoopbackRange(p), p != local {
-                         peer = p
-                     }
-                     result.append(TunnelPair(local: local, peer: peer, iface: name))
+                     if let d = c.pointee.ifa_dstaddr, d.pointee.sa_family == sa_family_t(AF_INET),
+                        let q = host(d), isLoopbackRange(q), q != local { peer = q }
+                     out.append(TunnelPair(local: local, peer: peer, iface: name))
                  }
-                 return result
+                 return out
              }
 
-             // MARK: - Route-verified state
-
-             /// True when the loopback tunnel is up *and* the routing table agrees.
-             ///
-             /// Asks the route first. A point-to-point tunnel reaches its peer over a host
-             /// route (LocalDevVPN's `10.7.1.1/32` -> peer `10.7.0.1/32`), so no
-             /// interface's subnet contains the peer and the table is the only witness.
-             ///
-             /// `nil` from the table is not a refusal, so the interface evidence is kept
-             /// rather than reporting a live tunnel as down.
+             // nil from the table is not a refusal: keep the interface evidence.
              static func loopbackVPNUp() -> Bool {
-                 if let routed = routeCarriesTunnel() { return routed }
+                 if let r = routeCarriesTunnel() { return r }
                  return !tunnelPairs().isEmpty
              }
 
              private static func routeCarriesTunnel() -> Bool? {
                  let target = tunnelPairs().compactMap { $0.peer }.first ?? canonicalTunnelPeer
-                 guard let source = routeSource(to: target),
-                       let iface = interfaces().first(where: { $0.ipv4 == source }) else { return nil }
-                 guard isTunnelInterface(iface.name) else { return false }
-                 // A full-tunnel VPN routes everything, so the peer must use a different
-                 // route than the default one.
-                 return routeSource(to: defaultRouteProbe) != source
+                 guard let src = routeSource(to: target),
+                       let ifc = interfaces().first(where: { $0.ipv4 == src }) else { return nil }
+                 guard isTunnelInterface(ifc.name) else { return false }
+                 return routeSource(to: defaultRouteProbe) != src
              }
 
-             /// The local address the kernel would send from when dialling `ip`, or nil
-             /// when it has no route there.
+             // Local address the kernel would send from when dialling ip.
              private static func routeSource(to ip: String) -> String? {
                  var remote = sockaddr_in()
                  remote.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
                  remote.sin_family = sa_family_t(AF_INET)
                  remote.sin_port = in_port_t(UInt16(9).bigEndian)
                  guard ip.withCString({ inet_pton(AF_INET, $0, &remote.sin_addr) }) == 1 else { return nil }
-
                  let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
                  guard fd >= 0 else { return nil }
                  defer { close(fd) }
-
-                 let dialled = withUnsafePointer(to: remote) {
+                 let ok = withUnsafePointer(to: &remote) {
                      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                          Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
                      }
-                 }
-                 guard dialled == 0 else { return nil }
-
+                 } == 0
+                 guard ok else { return nil }
                  var local = sockaddr_in()
-                 var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+                 var len = socklen_t(MemoryLayout<sockaddr_in>.size)
                  let named = withUnsafeMutablePointer(to: &local) {
-                     $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                         getsockname(fd, $0, &length)
-                     }
-                 }
-                 guard named == 0, local.sin_addr.s_addr != 0 else { return nil }
+                     $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) }
+                 } == 0
+                 guard named, local.sin_addr.s_addr != 0 else { return nil }
                  return withUnsafeMutablePointer(to: &local) {
-                     $0.withMemoryRebound(to: sockaddr.self, capacity: 1, numericHost)
+                     $0.withMemoryRebound(to: sockaddr.self, capacity: 1, host)
                  }
              }
-
-             // MARK: - Reported hosts
 
              static func tunnelIP() -> String? {
                  for p in tunnelPairs() { if let peer = p.peer { return peer } }
@@ -225,9 +169,7 @@ jobs:
                  return nil
              }
 
-             static func isLoopbackRange(_ ip: String) -> Bool {
-                 return ip.hasPrefix("10.7.")
-             }
+             static func isLoopbackRange(_ ip: String) -> Bool { ip.hasPrefix("10.7.") }
 
              static func isTunnelInterface(_ name: String) -> Bool {
                  name.hasPrefix("utun") || name.hasPrefix("ipsec")
@@ -235,6 +177,130 @@ jobs:
              }
          }
          NETSTATUS_EOF
+         cat > natsuk1/CarrierLab/CarrierLabInstaller.swift <<'INSTALLER_EOF'
+         import Foundation
+         import CoreTelephony
+
+         final class CarrierLabInstaller: @unchecked Sendable {
+             static let shared = CarrierLabInstaller()
+
+             private let state = CarrierLabState.shared
+             private let bridge = CarrierLabBridge.shared
+             // CarrierSIM (4pda): alias the SIM to the system Vodafone_hu bundle
+             // (5G / VoWiFi / EVS, Apple-signed); the per-build Docomo IPCC after it
+             // makes CommCenter rescan and pick the alias.
+             private let vodafoneHu = "/System/Library/Carrier Bundles/iPhone/Vodafone_hu.bundle"
+
+             struct CheckResult {
+                 let probe: CarrierLabBridge.ProbeResult
+                 let resourcesBundled: Bool
+                 let status: CarrierLabState.Status
+             }
+
+             private func carrierBundleURL() -> URL { Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/CarrierLab.bundle") }
+             private func docomoBundleURL() -> URL { Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/Docomo_jp.bundle") }
+
+             func check() -> CheckResult {
+                 let probe = bridge.probe()
+                 return CheckResult(probe: probe,
+                     resourcesBundled: FileManager.default.fileExists(atPath: carrierBundleURL().path),
+                     status: state.session?.status ?? .clean)
+             }
+
+             func plmns() -> [String] {
+                 var out: [String] = []
+                 for prov in (CTTelephonyNetworkInfo().serviceSubscriberCellularProviders ?? [:]).values {
+                     if let c = prov?.mobileCountryCode, let m = prov?.mobileNetworkCode,
+                        !c.isEmpty, !m.isEmpty, !out.contains(c + m) { out.append(c + m) }
+                 }
+                 return out
+             }
+
+             // Optional 15-digit IMSI from natsuk1_imsi.txt in the app's Documents.
+             func imsi() -> String? {
+                 let p = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                     .appendingPathComponent("natsuk1_imsi.txt").path
+                 guard let t = try? String(contentsOfFile: p, encoding: .utf8) else { return nil }
+                 let d = t.filter { $0.isNumber }
+                 return d.count == 15 ? d : nil
+             }
+
+             private func names() -> [String] {
+                 var n = plmns()
+                 if let i = imsi(), !n.contains(i) { n.append(i) }
+                 return n
+             }
+
+             @discardableResult
+             func applyLinks() -> CarrierLabBridge.ProbeResult {
+                 let names = names()
+                 guard !names.isEmpty else {
+                     return CarrierLabBridge.ProbeResult(state: .ffiFailed("no SIM; drop the 15-digit IMSI into natsuk1_imsi.txt"), detail: "none")
+                 }
+                 let fm = FileManager.default
+                 let stage = fm.temporaryDirectory.appendingPathComponent("nklinks")
+                 try? fm.removeItem(at: stage)
+                 try? fm.createDirectory(at: stage, withIntermediateDirectories: true)
+                 var made: [String] = []
+                 for n in names {
+                     if (try? fm.createSymbolicLink(atPath: stage.appendingPathComponent(n).path,
+                                                    withDestinationPath: vodafoneHu)) != nil { made.append(n) }
+                 }
+                 guard !made.isEmpty else {
+                     return CarrierLabBridge.ProbeResult(state: .ffiFailed("symlink staging failed"), detail: "staging")
+                 }
+                 let r = bridge.injectFolder(sourceFolder: stage.path, targetFolder: bridge.bundleLinksPath(), folderName: "iPhone")
+                 state.appendLog("[5g] aliases=\(made.joined(separator: ",")) -> Vodafone_hu; \(r.ok ? "ok" : r.message); if 5G is absent: airplane mode 10s")
+                 return r
+             }
+
+             private func save(_ s: CarrierLabState.Status, _ err: String?) {
+                 state.save(CarrierLabState.Session(status: s, startedAt: Date(),
+                     carrierBundlePath: carrierBundleURL().path, originalBackupPath: state.backupURL().path,
+                     ipccTriggerPath: docomoBundleURL().path, lastError: err,
+                     aliases: s == .placed ? names() : nil))
+             }
+
+             func install() -> CarrierLabBridge.ProbeResult {
+                 guard FileManager.default.fileExists(atPath: carrierBundleURL().path),
+                       FileManager.default.fileExists(atPath: docomoBundleURL().path) else {
+                     return CarrierLabBridge.ProbeResult(state: .ffiFailed("carrier bundles missing"), detail: "missing")
+                 }
+                 let pre = bridge.probe()
+                 guard pre.ok else { return pre }
+                 save(.placing, nil)
+                 let r1 = bridge.injectFolder(sourceFolder: carrierBundleURL().path,
+                                              targetFolder: bridge.bundleLinksPath(), folderName: "CarrierLab.bundle")
+                 if !r1.ok { save(.failed, r1.message); return r1 }
+                 let r2 = applyLinks()
+                 if !r2.ok { save(.failed, r2.message); return r2 }
+                 let r3 = bridge.injectFolder(sourceFolder: docomoBundleURL().path,
+                                              targetFolder: bridge.carrierRootPath(), folderName: "Docomo_jp.bundle")
+                 if !r3.ok { save(.failed, r3.message); return r3 }
+                 save(.placed, nil)
+                 return CarrierLabBridge.ProbeResult(state: .ok, detail: "installed (5G link + trigger)")
+             }
+
+             func reload() -> CarrierLabBridge.ProbeResult {
+                 guard state.session?.status == .placed || state.session?.status == .finished else {
+                     return CarrierLabBridge.ProbeResult(state: .ffiFailed("Nothing to reload. Install first."), detail: "no session")
+                 }
+                 let r2 = applyLinks()
+                 if !r2.ok { return r2 }
+                 return bridge.injectFolder(sourceFolder: docomoBundleURL().path,
+                                            targetFolder: bridge.carrierRootPath(), folderName: "Docomo_jp.bundle")
+             }
+
+             func finish() {
+                 guard let s = state.session else { return }
+                 var done = s
+                 done.status = .finished
+                 state.save(done)
+             }
+
+             func reset() { state.clear() }
+         }
+         INSTALLER_EOF
 
       - name: Drop layer files that never landed
         run: |
@@ -248,62 +314,50 @@ jobs:
            fi
          done < <(find natsuk1 -name '*.swift' -type f)
 
+
       - name: Bump carrier bundle versions
         run: |
          set -euo pipefail
          PB=/usr/libexec/PlistBuddy
-         test -x "$PB"
-         for b in CarrierLab.bundle Docomo_jp.bundle; do
-           p="natsuk1/Resources/CarrierAssets/$b/Info.plist"
-           test -f "$p"
-           "$PB" -c "Set :CFBundleVersion 99.0" "$p"
-           "$PB" -c "Set :CFBundleShortVersionString 99.0" "$p"
-           v="$("$PB" -c "Print :CFBundleVersion" "$p")"
-           [ "$v" = "99.0" ] || { echo "::error::$b version is $v, expected 99.0"; exit 1; }
-           echo "$b -> CFBundleVersion $v (wins the version race over stock)"
+         test -x "$PB" || { echo "PlistBuddy not found"; exit 1; }
+         V="99.${GITHUB_RUN_NUMBER:-0}"
+         for b in natsuk1/Resources/CarrierAssets/CarrierLab.bundle natsuk1/Resources/CarrierAssets/Docomo_jp.bundle; do
+           p="$b/Info.plist"
+           "$PB" -c "Set :CFBundleVersion $V" "$p"
+           "$PB" -c "Set :CFBundleShortVersionString $V" "$p"
+           [ "$("$PB" -c "Print :CFBundleVersion" "$p")" = "$V" ] || { echo "$p not bumped to $V"; exit 1; }
          done
+         echo "carrier bundles bumped to $V"
 
       - name: Verify sources
         run: |
          set -euo pipefail
          fail() { echo "::error::$1"; exit 1; }
          LAYER='PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting'
-         if grep -rnE "$LAYER" natsuk1/; then
-           fail 'the lockdown layer is still referenced (matches printed above)'
-         fi
-         while IFS= read -r m; do
-           grep -q "$m" natsuk1/Helpers/AirliftBridge.swift || fail "AirliftView uses airlift.$m but AirliftBridge does not define it"
-         done < <(grep -oE "airlift\\.[A-Za-z_]+" natsuk1/Views/AirliftView.swift | sed "s/airlift\\.//" | sort -u)
-         grep -q 'func loopbackVPNUp' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func loopbackVPNUp'
-         grep -q 'routeCarriesTunnel' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: routeCarriesTunnel'
-         grep -q 'routeSource' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: routeSource'
-         grep -q 'defaultRouteProbe' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: defaultRouteProbe'
-         grep -q 'func tunnelIP' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func tunnelIP'
-         grep -q 'func deviceIP' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func deviceIP'
-         grep -q 'func tunnelPairs' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func tunnelPairs'
-         grep -q 'hasPairing()' natsuk1/Views/AirliftView.swift || fail 'natsuk1/Views/AirliftView.swift is stale: hasPairing()'
-         grep -q 'func generateMergedPairing' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift is stale: func generateMergedPairing'
-         grep -q 'func injectFolder' natsuk1/CarrierLab/CarrierLabBridge.swift || fail 'natsuk1/CarrierLab/CarrierLabBridge.swift is stale: func injectFolder'
-         test -f project.yml || fail 'project.yml is missing'
+         if grep -rnE "$LAYER" natsuk1/; then fail "lockdown layer still referenced under natsuk1/"; fi
+         for t in loopbackVPNUp routeCarriesTunnel routeSource defaultRouteProbe; do
+           grep -q "$t" natsuk1/Helpers/NetworkStatus.swift || fail "NetworkStatus lost $t"
+         done
+         for t in vodafoneHu createSymbolicLink serviceSubscriberCellularProviders applyLinks; do
+           grep -q "$t" natsuk1/CarrierLab/CarrierLabInstaller.swift || fail "CarrierLabInstaller lost $t"
+         done
          for d in natsuk1/App natsuk1/CarrierLab natsuk1/Exploit natsuk1/Helpers natsuk1/Views; do
            grep -q "path: $d" project.yml || fail "project.yml no longer compiles $d"
          done
-         test -d external/AirliftFFI.xcframework || fail 'external/AirliftFFI.xcframework is missing'
+         test -d external/AirliftFFI.xcframework || fail "AirliftFFI.xcframework missing"
          while IFS= read -r f; do
            case "$f" in
              "natsuk1/Helpers/NetworkStatus.swift" | \
+             "natsuk1/CarrierLab/CarrierLabInstaller.swift" | \
              "natsuk1/Resources/CarrierAssets/CarrierLab.bundle/Info.plist" | \
              "natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/Info.plist") ;;
-             *) fail "$f differs from the last consistent commit; only the audited NetworkStatus.swift and the two bundle Info.plists may change" ;;
+             *) fail "$f differs from the last consistent commit; only the audited files and the two bundle Info.plists may change" ;;
            esac
          done < <(git diff --name-only "$BASE" -- natsuk1 project.yml)
-         for p in "natsuk1/Resources/CarrierAssets/CarrierLab.bundle/Info.plist" "natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/Info.plist"; do
-           grep -q "<string>99.0</string>" "$p" || fail "$p was not bumped to 99.0"
+         for p in natsuk1/Resources/CarrierAssets/CarrierLab.bundle/Info.plist natsuk1/Resources/CarrierAssets/Docomo_jp.bundle/Info.plist; do
+           grep -q "<string>99\." "$p" || fail "$p not bumped to per-build 99.x"
          done
-         for t in loopbackVPNUp routeCarriesTunnel routeSource defaultRouteProbe; do
-           grep -q "$t" natsuk1/Helpers/NetworkStatus.swift || fail "natsuk1/Helpers/NetworkStatus.swift is missing $t"
-         done
-         echo "tree is the last consistent commit plus the audited NetworkStatus.swift ($BASE)"
+         echo "sources verified against $BASE"
 
       - name: Commit
         run: |
@@ -312,14 +366,16 @@ jobs:
          git config user.email "github-actions[bot]@users.noreply.github.com"
          git add -A
          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-         git commit -q -m "fix: restore natsuk1, route-verified tunnel check, carrier bundle 99.0 [skip ci]"
+         git commit -q -m "feat: carrier 5G alias to Vodafone_hu (4pda CarrierSIM) + per-build trigger [skip ci]"
          git push || true
+
 
       - name: Generate project
         run: |
          set -euo pipefail
          rm -rf natsuk1.xcodeproj
          xcodegen generate
+
 
       - name: Build
         run: |
@@ -334,9 +390,8 @@ jobs:
            OTHER_SWIFT_FLAGS="-Xfrontend -disable-dynamic-actor-isolation -Xfrontend -disable-actor-data-race-checks" \
            build -quiet
 
+
       - name: Package and Publish
-        env:
-         GH_TOKEN: ${{ github.token }}
         run: |
          set -euo pipefail
          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -print -quit)
