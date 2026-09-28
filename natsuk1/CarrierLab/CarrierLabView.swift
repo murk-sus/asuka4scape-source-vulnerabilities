@@ -2,293 +2,91 @@ import SwiftUI
 import UIKit
 
 struct CarrierLabView: View {
-    @ObservedObject private var clState = CarrierLabState.shared
+    @ObservedObject private var state = CarrierLabState.shared
     @EnvironmentObject private var appState: AppState
 
-    @State private var slotText: String = ""
-    @State private var sourceInfo: String = ""
+    @State private var slotText = ""
     @State private var copied = false
-
-    private let ticker = Timer.publish(every: 5.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         List {
-            airliftSection
-            pairingHintSection
-            resourcesSection
-            targetsSection
-            statusSection
-                      actionsSection
-                      logSection
-                      logActionsSection
-                  }
+            Section {
+                HStack {
+                    Text("Session")
+                    Spacer()
+                    Text(state.session?.status.rawValue ?? "clean").font(.system(.body, design: .monospaced))
+                }
+                if let error = state.session?.lastError {
+                    Text(error).font(.footnote).foregroundStyle(.red)
+                }
+            } header: { Label("CarrierLab", systemImage: "shippingbox") }
+
+            Section {
+                TextField("Carrier1Bundle.bundle", text: $slotText)
+                    .font(.system(.footnote, design: .monospaced))
+                    .autocorrectionDisabled()
+                Button("Apply Slots") { applySlots() }
+                Button("Reset Slots To Default") {
+                    slotText = CarrierLabBridge.defaultSlots.joined(separator: ", ")
+                    applySlots()
+                }
+            } header: { Label("Targets", systemImage: "folder.badge.gearshape") }
+            footer: { Text("Contents go into these existing bundles under \(CarrierLabBridge.carrierUserRoot).").font(.caption2) }
+
+            Section {
+                Button("Check") { run("check") { CarrierLabSlots.shared.readiness() ?? "ready" } }
+                Button("Install") { run("install") { install() } }
+                Button("Reload") { run("reload") { install() } }
+                Button("Respring") { appState.respring() }
+            } header: { Label("Actions", systemImage: "wrench") }
+
+            if !state.logText.isEmpty {
+                Section {
+                    ScrollView {
+                        Text(state.logText).font(.system(size: 10, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(minHeight: 120, maxHeight: 300)
+                    Button(copied ? "Copied" : "Copy All") {
+                        UIPasteboard.general.string = state.logText
+                        copied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                    }
+                    Button("Clear", role: .destructive) { state.clearLog() }
+                } header: { Label("Log", systemImage: "terminal") }
+            }
+        }
         .listStyle(.insetGrouped)
         .navigationTitle("CarrierLab")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            slotText = clState.slots.joined(separator: ", ")
-            runCheck()
-        }
-        .onReceive(ticker) { _ in
-            if !clState.busy { runCheck(silent: true) }
-        }
-    }
-
-    private var airliftSection: some View {
-        Section {
-            HStack(spacing: 12) {
-                Image(systemName: clState.airliftOK ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(clState.airliftOK ? .green : .orange)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Airlift")
-                    Text(clState.airliftOK ? "Connected" : "Not ready")
-                        .font(.subheadline)
-                        .foregroundStyle(clState.airliftOK ? .green : .orange)
-                    if !clState.airliftOK {
-                        Text(clState.airliftMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(6)
-                    }
-                }
-                Spacer()
-            }
-            .padding(.vertical, 4)
-        } header: { Label("Airlift", systemImage: "antenna.radiowaves.left.and.right") }
-    }
-
-    @ViewBuilder
-    private var pairingHintSection: some View {
-        if !clState.airliftOK {
-            Section {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("Pairing is done in Airlift only", systemImage: "info.circle")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Text("CarrierLab never creates a pairing file. Open Tools / Airlift, run Start Pairing, then return here.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text("The file must contain the classic lockdown record. If Install stays blocked, tap Delete Pairing in Airlift, then Start Pairing again and approve both the PIN and the Trust prompt.")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                }
-            }
-        }
-    }
-
-    private var resourcesSection: some View {
-        Section {
-            HStack {
-                Text("CarrierAssets")
-                Spacer()
-                Text(clState.resourcesOK ? "Bundled" : "Missing")
-                    .foregroundStyle(clState.resourcesOK ? .green : .red)
-            }
-            if !sourceInfo.isEmpty {
-                Text(sourceInfo)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-        } header: { Label("Resources", systemImage: "shippingbox") }
-    }
-
-    private var targetsSection: some View {
-        Section {
-            HStack {
-                Text("Slots")
-                Spacer()
-                TextField("Carrier1Bundle.bundle, ...", text: $slotText)
-                    .multilineTextAlignment(.trailing)
-                    .font(.system(.footnote, design: .monospaced))
-                    .autocorrectionDisabled()
-                    .onSubmit { applySlots() }
-            }
-            Button { applySlots() } label: { Text("Apply Slots") }
-                .disabled(clState.busy)
-            Button { slotText = CarrierLabBridge.defaultSlots.joined(separator: ", "); applySlots() } label: {
-                Text("Reset Slots To Default")
-            }
-            .disabled(clState.busy)
-        } header: { Label("Targets", systemImage: "folder.badge.gearshape") }
-        footer: {
-            Text("Contents of CarrierLab.bundle are written into these existing bundles under \(CarrierLabBridge.carrierUserRoot). The app cannot list that directory, so the names must match what is on the device.")
-                .font(.caption2)
-        }
-    }
-
-    private var statusSection: some View {
-        Section {
-            HStack {
-                Text("Status")
-                Spacer()
-                Text(statusText)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(statusColor)
-            }
-            if let s = clState.session {
-                HStack {
-                    Text("Started")
-                    Spacer()
-                    Text(s.startedAt.formatted())
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-                if let slots = s.slots, !slots.isEmpty {
-                    HStack {
-                        Text("Written")
-                        Spacer()
-                        Text(slots.joined(separator: ","))
-                            .font(.system(.footnote, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if let e = s.lastError {
-                    Text(e)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
-            }
-        } header: { Label("CarrierLab", systemImage: "shippingbox") }
-    }
-
-    private var actionsSection: some View {
-        Section {
-            Button { runCheck() } label: { Text("Check") }
-                .disabled(clState.busy)
-            Button { runDiagnose() } label: { Text("Diagnose") }
-                .disabled(clState.busy)
-            Button { runInstall() } label: { Text("Install") }
-                .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
-            Button { runReload() } label: { Text("Reload") }
-                .disabled(clState.busy || !clState.airliftOK || !clState.resourcesOK)
-            Button { runFinish() } label: { Text("Finish") }
-                .disabled(clState.busy)
-            Button { appState.respring() } label: { Text("Respring") }
-                .disabled(clState.busy)
-            Button(role: .destructive) { runReset() } label: { Text("Reset") }
-                .disabled(clState.busy)
-        } header: { Label("Actions", systemImage: "wrench") }
-    }
-
-    @ViewBuilder
-    private var logSection: some View {
-        if !clState.logText.isEmpty {
-            Section {
-                ScrollView {
-                    Text(clState.logText)
-                        .font(.system(size: 10, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(minHeight: 120, maxHeight: 300)
-            } header: { Label("Log", systemImage: "terminal") }
-        }
-    }
-
-    @ViewBuilder
-    private var logActionsSection: some View {
-        if !clState.logText.isEmpty {
-            Section {
-                Button {
-                    UIPasteboard.general.string = clState.logText
-                    copied = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
-                } label: {
-                    Text(copied ? "Copied" : "Copy All")
-                }
-                Button(role: .destructive) { clState.clearLog() } label: {
-                    Text("Clear")
-                }
-            } header: { Label("Log Actions", systemImage: "document.on.document") }
-        }
-    }
-
-    private var statusText: String {
-        clState.session?.status.rawValue ?? "clean"
-    }
-
-    private var statusColor: Color {
-        switch clState.session?.status {
-        case .placed, .finished: return .green
-        case .placing: return .orange
-        case .failed: return .red
-        default: return .secondary
-        }
+        .onAppear { slotText = state.slots.joined(separator: ", ") }
     }
 
     private func applySlots() {
-        let parsed = slotText.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
-        clState.setSlots(parsed)
-        clState.appendLog("[slots] \(clState.slots.joined(separator: ","))")
+        state.setSlots(slotText.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
+        state.appendLog("[slots] \(state.slots.joined(separator: ","))")
     }
 
-    private func runCheck(silent: Bool = false) {
-        if clState.busy { return }
-        clState.setBusy(true)
-        DispatchQueue.global(qos: .userInitiated).async {
-            let r = CarrierLabInstaller.shared.check()
-            CarrierLabState.shared.setAirlift(ok: r.probe.ok, message: r.probe.message)
-            CarrierLabState.shared.setResources(r.resourcesBundled)
-            let info = "source \(r.sourceFiles) file(s), \(r.sourceBytes) bytes · userRoot=\(r.carrierUserRootExists) · iphoneRoot=\(r.carrierRootExists)"
-            DispatchQueue.main.async { sourceInfo = info }
-            if !silent {
-                CarrierLabState.shared.appendLog("[check] airlift=\(r.probe.ok) msg=\(r.probe.message)")
-                CarrierLabState.shared.appendLog("[check] \(info)")
-            }
-            CarrierLabState.shared.setBusy(false)
-        }
+    private func install() -> String {
+        let slots = CarrierLabState.shared.slots
+        let outcome = CarrierLabSlots.shared.install(slots: slots)
+        CarrierLabState.shared.save(CarrierLabState.Session(
+            status: outcome.ok ? .placed : .failed,
+            startedAt: Date(),
+            carrierBundlePath: CarrierLabSlots.shared.sourcePath(),
+            originalBackupPath: nil,
+            ipccTriggerPath: nil,
+            lastError: outcome.ok ? nil : outcome.message,
+            aliases: nil,
+            slots: outcome.slots))
+        return outcome.ok ? outcome.message : "failed: \(outcome.message)"
     }
 
-    private func runDiagnose() {
-        if clState.busy { return }
-        clState.setBusy(true)
+    private func run(_ name: String, _ work: @escaping () -> String) {
+        if state.busy { return }
+        state.setBusy(true)
         DispatchQueue.global(qos: .userInitiated).async {
-            for line in CarrierLabInstaller.shared.diagnose() {
-                CarrierLabState.shared.appendLog(line)
-            }
-            CarrierLabState.shared.setBusy(false)
-        }
-    }
-
-    private func runInstall() {
-        if clState.busy { return }
-        clState.setBusy(true)
-        DispatchQueue.global(qos: .userInitiated).async {
-            let r = CarrierLabInstaller.shared.install()
-            CarrierLabState.shared.appendLog(r.ok
-                ? "[install] ok slots=\(r.slotsWritten.joined(separator: ","))"
-                : "[install] failed: \(r.message)")
-            CarrierLabState.shared.setBusy(false)
-        }
-    }
-
-    private func runReload() {
-        if clState.busy { return }
-        clState.setBusy(true)
-        DispatchQueue.global(qos: .userInitiated).async {
-            let r = CarrierLabInstaller.shared.reload()
-            CarrierLabState.shared.appendLog(r.ok ? "[reload] ok" : "[reload] failed: \(r.message)")
-            CarrierLabState.shared.setBusy(false)
-        }
-    }
-
-    private func runFinish() {
-        if clState.busy { return }
-        clState.setBusy(true)
-        DispatchQueue.global(qos: .userInitiated).async {
-            CarrierLabInstaller.shared.finish()
-            CarrierLabState.shared.appendLog("[finish] ok")
-            CarrierLabState.shared.setBusy(false)
-        }
-    }
-
-    private func runReset() {
-        if clState.busy { return }
-        clState.setBusy(true)
-        DispatchQueue.global(qos: .userInitiated).async {
-            CarrierLabInstaller.shared.reset()
-            CarrierLabState.shared.clearLog()
-            CarrierLabState.shared.appendLog("[reset] ok")
+            let text = work()
+            CarrierLabState.shared.appendLog("[\(name)] \(text)")
             CarrierLabState.shared.setBusy(false)
         }
     }
