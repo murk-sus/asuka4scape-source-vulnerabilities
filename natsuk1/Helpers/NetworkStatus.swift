@@ -1,13 +1,10 @@
 import Foundation
 import Darwin
 
-// The routing table is the authority: iOS keeps system utuns up with no VPN.
 enum NetworkStatus {
     struct Interface { let name: String; let ipv4: String; let netmask: String? }
     struct TunnelPair { let local: String; let peer: String?; let iface: String }
 
-    // TEST-NET-3 (RFC 5737): only the default route can claim it; the UDP
-    // connect below sends nothing.
     private static let defaultRouteProbe = "203.0.113.1"
     private static let canonicalTunnelPeer = "10.7.0.1"
 
@@ -55,7 +52,6 @@ enum NetworkStatus {
         return out
     }
 
-    // nil from the table is not a refusal: keep the interface evidence.
     static func loopbackVPNUp() -> Bool {
         if let r = routeCarriesTunnel() { return r }
         return !tunnelPairs().isEmpty
@@ -69,7 +65,6 @@ enum NetworkStatus {
         return routeSource(to: defaultRouteProbe) != src
     }
 
-    // Local address the kernel would send from when dialling ip.
     private static func routeSource(to ip: String) -> String? {
         var remote = sockaddr_in()
         remote.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)

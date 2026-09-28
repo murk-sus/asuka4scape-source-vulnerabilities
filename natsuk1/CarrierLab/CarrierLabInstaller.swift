@@ -1,14 +1,12 @@
 import Foundation
 import CoreTelephony
+import UIKit
 
 final class CarrierLabInstaller: @unchecked Sendable {
     static let shared = CarrierLabInstaller()
 
     private let state = CarrierLabState.shared
     private let bridge = CarrierLabBridge.shared
-    // CarrierSIM (4pda): alias the SIM to the system Vodafone_hu bundle
-    // (5G / VoWiFi / EVS, Apple-signed); the per-build Docomo IPCC after it
-    // makes CommCenter rescan and pick the alias.
     private let vodafoneHu = "/System/Library/Carrier Bundles/iPhone/Vodafone_hu.bundle"
 
     struct CheckResult {
@@ -30,19 +28,40 @@ final class CarrierLabInstaller: @unchecked Sendable {
     func plmns() -> [String] {
         var out: [String] = []
         for prov in (CTTelephonyNetworkInfo().serviceSubscriberCellularProviders ?? [:]).values {
-            if let c = prov?.mobileCountryCode, let m = prov?.mobileNetworkCode,
-               !c.isEmpty, !m.isEmpty, !out.contains(c + m) { out.append(c + m) }
+            if let c = prov?.mobileCountryCode, let m = prov?.mobileNetworkCode, !c.isEmpty, !m.isEmpty, !out.contains(c + m) { out.append(c + m) }
         }
         return out
     }
 
-    // Optional 15-digit IMSI from natsuk1_imsi.txt in the app's Documents.
+    private func luhn(_ s: String) -> Bool {
+        var sum = 0, alt = false
+        for ch in s.reversed() { guard let v0 = ch.wholeNumberValue else { return false }; var v = v0; if alt { v = v > 4 ? v * 2 - 9 : v * 2 }; sum += v; alt.toggle() }
+        return sum % 10 == 0
+    }
+
+    private func luhnDigit(_ s: String) -> String {
+        var sum = 0, alt = true
+        for ch in s.reversed() { var v = ch.wholeNumberValue ?? 0; if alt { v = v > 4 ? v * 2 - 9 : v * 2 }; sum += v; alt.toggle() }
+        return String((10 - sum % 10) % 10)
+    }
+
+    // 15-digit IMSI, or ICCID (Settings>About); the check digit is recomputed.
+    private func imsiFrom(_ raw: String) -> String? {
+        let d = raw.filter { $0.isNumber }
+        if d.count == 15 { return luhn(d) ? d : nil }
+        if d.count == 19 || d.count == 20, d.hasPrefix("89") {
+            let c14 = String(d.dropFirst(4).prefix(14))
+            return c14 + luhnDigit(c14)
+        }
+        return nil
+    }
+
+    // Identity: copy the ICCID (Settings>General>About) or the IMSI.
     func imsi() -> String? {
-        let p = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("natsuk1_imsi.txt").path
-        guard let t = try? String(contentsOfFile: p, encoding: .utf8) else { return nil }
-        let d = t.filter { $0.isNumber }
-        return d.count == 15 ? d : nil
+        guard let i = imsiFrom(UIPasteboard.general.string ?? "") else { return nil }
+        let ps = plmns()
+        guard ps.isEmpty || ps.contains(String(i.prefix(5))) else { return nil }
+        return i
     }
 
     private func names() -> [String] {
@@ -55,7 +74,9 @@ final class CarrierLabInstaller: @unchecked Sendable {
     func applyLinks() -> CarrierLabBridge.ProbeResult {
         let names = names()
         guard !names.isEmpty else {
-            return CarrierLabBridge.ProbeResult(state: .ffiFailed("no SIM; drop the 15-digit IMSI into natsuk1_imsi.txt"), detail: "none")
+            return CarrierLabBridge.ProbeResult(
+                state: .ffiFailed("no SIM; copy the ICCID in Settings>About and tap again"),
+                detail: "none")
         }
         let fm = FileManager.default
         let stage = fm.temporaryDirectory.appendingPathComponent("nklinks")
@@ -70,7 +91,7 @@ final class CarrierLabInstaller: @unchecked Sendable {
             return CarrierLabBridge.ProbeResult(state: .ffiFailed("symlink staging failed"), detail: "staging")
         }
         let r = bridge.injectFolder(sourceFolder: stage.path, targetFolder: bridge.bundleLinksPath(), folderName: "iPhone")
-        state.appendLog("[5g] aliases=\(made.joined(separator: ",")) -> Vodafone_hu; \(r.ok ? "ok" : r.message); if 5G is absent: airplane mode 10s")
+        state.appendLog("[5g] \(made.joined(separator: ",")) -> Vodafone_hu; \(r.ok ? "ok" : r.message); if 5G absent: airplane mode 10s")
         return r
     }
 
