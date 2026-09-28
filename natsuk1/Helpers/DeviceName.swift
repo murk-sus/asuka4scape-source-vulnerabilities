@@ -60,15 +60,12 @@ enum DeviceName {
         byID[machineID()]?.chip ?? "unknown"
     }
 
-    static func machineID() -> String {
+        static func machineID() -> String {
         var info = utsname()
         uname(&info)
-        var bytes: [UInt8] = []
-        for el in Mirror(reflecting: info.machine).children {
-            guard let v = el.value as? Int8 else { continue }
-            if v == 0 { break }
-            bytes.append(UInt8(bitPattern: v))
+        return Mirror(reflecting: info.machine).children.reduce("") { id, el in
+            guard let v = el.value as? Int8, v != 0 else { return id }
+            return id + String(UnicodeScalar(UInt8(v)))
         }
-        return String(decoding: bytes, as: UTF8.self)
     }
 }

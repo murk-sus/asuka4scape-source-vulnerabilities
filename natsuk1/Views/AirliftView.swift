@@ -150,7 +150,7 @@ struct AirliftView: View {
             Button(role: .destructive) { airlift.deletePairing(); pairedTick &+= 1 } label: {
                 Text("Delete Pairing")
             }
-            .disabled(!airlift.pairingFileExists())
+            .disabled(!isPaired)
         }
     }
 

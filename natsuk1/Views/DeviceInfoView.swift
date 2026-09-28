@@ -6,7 +6,7 @@ struct DeviceInfoView: View {
         List {
             Section {
                 row("Model", DeviceName.friendly())
-                row("Identifier", DeviceName.machineID())
+                row("Identifier", machineID())
                 row("Chip", DeviceName.chip())
             } header: { Label("Hardware", systemImage: "cpu") }
 
@@ -38,25 +38,31 @@ struct DeviceInfoView: View {
             Text(value)
                 .font(.system(.body, design: .monospaced))
                 .foregroundStyle(.green)
+                .shadow(color: Color.green.opacity(0.45), radius: 3)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
     }
 
+    private func machineID() -> String {
+        var sysinfo = utsname(); uname(&sysinfo)
+        return Mirror(reflecting: sysinfo.machine).children.reduce("") { id, el in
+            guard let v = el.value as? Int8, v != 0 else { return id }
+            return id + String(UnicodeScalar(UInt8(v)))
+        }
+    }
+
     private func sysctlString(_ name: String) -> String {
-        var size = 0
-        guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return "—" }
+        var size = 0; sysctlbyname(name, nil, &size, nil, 0)
         var buf = [CChar](repeating: 0, count: size)
-        guard sysctlbyname(name, &buf, &size, nil, 0) == 0 else { return "—" }
+        sysctlbyname(name, &buf, &size, nil, 0)
         let bytes = buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-        let text = String(decoding: bytes, as: UTF8.self)
-        return text.isEmpty ? "—" : text
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private func ram() -> String {
-        var size: UInt64 = 0
-        var len = MemoryLayout<UInt64>.size
-        guard sysctlbyname("hw.memsize", &size, &len, nil, 0) == 0 else { return "—" }
+        var size: UInt64 = 0; var len = MemoryLayout<UInt64>.size
+        if sysctlbyname("hw.memsize", &size, &len, nil, 0) != 0 { return "unknown" }
         return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .memory)
     }
 
@@ -79,8 +85,6 @@ struct DeviceInfoView: View {
 
     private func uptime() -> String {
         let t = ProcessInfo.processInfo.systemUptime
-        guard t.isFinite, t >= 0, t < Double(Int.max) else { return "—" }
-        let seconds = Int(t)
-        return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
+        return "\(Int(t) / 3600)h \((Int(t) % 3600) / 60)m"
     }
 }
