@@ -1,4 +1,4 @@
-name: Pairing Fix and Release
+name: Loopback Tunnel Check and Release
 
 on:
   workflow_dispatch:
@@ -29,339 +29,221 @@ jobs:
          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
          command -v ldid >/dev/null 2>&1 || brew install ldid
 
-      - name: Write CarrierLabCompat.swift
+      - name: Write NetworkStatus.swift
         run: |
          set -euo pipefail
-         cat > natsuk1/CarrierLab/CarrierLabCompat.swift <<'COMPAT_EOF'
+         cat > natsuk1/Helpers/NetworkStatus.swift <<'NETSTATUS_EOF'
          import Foundation
+         import Darwin
 
-         extension CarrierLabBridge {
-             static let carrierUserRoot = "/var/mobile/Library/Carrier Bundles"
-             static let carrierRoot = "/var/mobile/Library/Carrier Bundles/iPhone"
-             static let defaultSlots = ["Carrier1Bundle.bundle", "Operator1Bundle.bundle"]
-         }
+         /// Loopback-tunnel detection.
+         ///
+         /// An interface is not proof. iOS keeps system `utun`s up with no VPN running at
+         /// all, so "a utun exists" reports connected while nothing routes to the
+         /// device's internal services. The routing table is the authority — the check
+         /// SideInstaller and AirCard-iOS run before they dial RSD on
+         /// `10.7.0.1` / `127.0.0.1`.
+         ///
+         /// Airlift's own diagnostic names the precondition:
+         /// `Ensure a loopback VPN (e.g. LocalDevVPN or SideStore WireGuard) is active.`
+         enum NetworkStatus {
 
-         extension PairingGenerator {
-             static func cancelMinting() {
-                 LockdownPair.requestCancel()
-                 PairingController.shared.pairingStatus = "Cancelling..."
-             }
-         }
-
-         final class CarrierLabSlots: @unchecked Sendable {
-             static let shared = CarrierLabSlots()
-             private init() {}
-
-             struct Outcome {
-                 let ok: Bool
-                 let message: String
-                 let slots: [String]
+             struct Interface {
+                 let name: String
+                 let ipv4: String
+                 let netmask: String?
              }
 
-             func pairingPath() -> String? {
-                 let fm = FileManager.default
-                 let canonical = PairingController.pairingFilePath()
-                 if fm.fileExists(atPath: canonical) { return canonical }
-                 guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
-                 for name in ["natsuk1_pairing.plist", "ALTPairingFile.mobiledevicepairing"] {
-                     let candidate = docs.appendingPathComponent(name).path
-                     if fm.fileExists(atPath: candidate) { return candidate }
+             struct TunnelPair {
+                 let local: String
+                 let peer: String?
+                 let iface: String
+             }
+
+             /// TEST-NET-3 (RFC 5737) is reserved for documentation, so no VPN app routes
+             /// it deliberately: only the default route can claim it. A UDP `connect`
+             /// sends nothing — it resolves the route and selects a source address.
+             private static let defaultRouteProbe = "203.0.113.1"
+
+             /// The peer LocalDevVPN hands out when an interface does not report one.
+             private static let canonicalTunnelPeer = "10.7.0.1"
+
+             // MARK: - Interfaces
+
+             static func interfaces() -> [Interface] {
+                 var result: [Interface] = []
+                 var ifaddr: UnsafeMutablePointer<ifaddrs>?
+                 guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
+                 defer { freeifaddrs(ifaddr) }
+
+                 var ptr: UnsafeMutablePointer<ifaddrs>? = first
+                 while let cur = ptr {
+                     defer { ptr = cur.pointee.ifa_next }
+                     guard let namePtr = cur.pointee.ifa_name,
+                           let addr = cur.pointee.ifa_addr,
+                           addr.pointee.sa_family == sa_family_t(AF_INET),
+                           let ipv4 = numericHost(addr) else { continue }
+                     result.append(Interface(name: String(cString: namePtr),
+                                             ipv4: ipv4,
+                                             netmask: cur.pointee.ifa_netmask.flatMap(numericHost)))
                  }
+                 return result
+             }
+
+             private static func numericHost(_ addr: UnsafeMutablePointer<sockaddr>) -> String? {
+                 var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                 let len = socklen_t(MemoryLayout<sockaddr_in>.size)
+                 guard getnameinfo(addr, len, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0
+                 else { return nil }
+                 let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                 return String(decoding: bytes, as: UTF8.self)
+             }
+
+             // MARK: - Tunnel interfaces
+
+             /// Local (address, peer) pairs on loopback tunnel interfaces. Used for the
+             /// host candidates and the addresses the Airlift screen prints.
+             static func tunnelPairs() -> [TunnelPair] {
+                 var result: [TunnelPair] = []
+                 var ifaddr: UnsafeMutablePointer<ifaddrs>?
+                 guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
+                 defer { freeifaddrs(ifaddr) }
+
+                 var ptr: UnsafeMutablePointer<ifaddrs>? = first
+                 while let cur = ptr {
+                     defer { ptr = cur.pointee.ifa_next }
+                     guard let namePtr = cur.pointee.ifa_name else { continue }
+                     let name = String(cString: namePtr)
+                     guard isTunnelInterface(name),
+                           let addr = cur.pointee.ifa_addr,
+                           addr.pointee.sa_family == sa_family_t(AF_INET),
+                           let local = numericHost(addr), isLoopbackRange(local) else { continue }
+                     var peer: String? = nil
+                     if let dst = cur.pointee.ifa_dstaddr,
+                        dst.pointee.sa_family == sa_family_t(AF_INET),
+                        let p = numericHost(dst), isLoopbackRange(p), p != local {
+                         peer = p
+                     }
+                     result.append(TunnelPair(local: local, peer: peer, iface: name))
+                 }
+                 return result
+             }
+
+             // MARK: - Route-verified state
+
+             /// True when the loopback tunnel is up *and* the routing table agrees.
+             ///
+             /// Asks the route first. A point-to-point tunnel reaches its peer over a host
+             /// route (LocalDevVPN's `10.7.1.1/32` -> peer `10.7.0.1/32`), so no
+             /// interface's subnet contains the peer and the table is the only witness.
+             ///
+             /// `nil` from the table is not a refusal, so the interface evidence is kept
+             /// rather than reporting a live tunnel as down.
+             static func loopbackVPNUp() -> Bool {
+                 if let routed = routeCarriesTunnel() { return routed }
+                 return !tunnelPairs().isEmpty
+             }
+
+             private static func routeCarriesTunnel() -> Bool? {
+                 let target = tunnelPairs().compactMap { $0.peer }.first ?? canonicalTunnelPeer
+                 guard let source = routeSource(to: target),
+                       let iface = interfaces().first(where: { $0.ipv4 == source }) else { return nil }
+                 guard isTunnelInterface(iface.name) else { return false }
+                 // A full-tunnel VPN routes everything, so the peer must use a different
+                 // route than the default one.
+                 return routeSource(to: defaultRouteProbe) != source
+             }
+
+             /// The local address the kernel would send from when dialling `ip`, or nil
+             /// when it has no route there.
+             private static func routeSource(to ip: String) -> String? {
+                 var remote = sockaddr_in()
+                 remote.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+                 remote.sin_family = sa_family_t(AF_INET)
+                 remote.sin_port = in_port_t(UInt16(9).bigEndian)
+                 guard ip.withCString({ inet_pton(AF_INET, $0, &remote.sin_addr) }) == 1 else { return nil }
+
+                 let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+                 guard fd >= 0 else { return nil }
+                 defer { close(fd) }
+
+                 let dialled = withUnsafePointer(to: remote) {
+                     $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                         Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                     }
+                 }
+                 guard dialled == 0 else { return nil }
+
+                 var local = sockaddr_in()
+                 var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+                 let named = withUnsafeMutablePointer(to: &local) {
+                     $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                         getsockname(fd, $0, &length)
+                     }
+                 }
+                 guard named == 0, local.sin_addr.s_addr != 0 else { return nil }
+                 return withUnsafeMutablePointer(to: &local) {
+                     $0.withMemoryRebound(to: sockaddr.self, capacity: 1, numericHost)
+                 }
+             }
+
+             // MARK: - Reported hosts
+
+             static func tunnelIP() -> String? {
+                 for p in tunnelPairs() { if let peer = p.peer { return peer } }
                  return nil
              }
 
-             func sourcePath() -> String {
-                 Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/CarrierLab.bundle").path
+             static func deviceIP() -> String? {
+                 for p in tunnelPairs() { return p.local }
+                 return nil
              }
 
-             private func fileCount(_ path: String) -> Int {
-                 let fm = FileManager.default
-                 var isDirectory: ObjCBool = false
-                 guard fm.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else { return 0 }
-                 guard let walker = fm.enumerator(at: URL(fileURLWithPath: path),
-                                                 includingPropertiesForKeys: [.isRegularFileKey]) else { return 0 }
-                 var files = 0
-                 for case let url as URL in walker {
-                     if (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true { files += 1 }
-                 }
-                 return files
+             static func isLoopbackRange(_ ip: String) -> Bool {
+                 return ip.hasPrefix("10.7.")
              }
 
-             func status() -> String {
-                 guard let path = pairingPath() else { return "no pairing file, pair from Tools / Airlift" }
-                 let kind = PairingFileKind.of(path: path)
-                 if kind.hasLockdown { return "ready" }
-                 if kind.hasRemotePairing { return "needs a lockdown record, press Pair Lockdown Record" }
-                 return "pairing file is not an RPPairing plist"
-             }
-
-             @discardableResult
-             func ensureLockdownRecord() -> String? {
-                 guard let path = pairingPath() else { return "No pairing file. Pair from Tools / Airlift first." }
-                 let kind = PairingFileKind.of(path: path)
-                 if kind.hasLockdown { return nil }
-                 guard kind.isUsable else { return "Pairing file is not a plist." }
-                 guard kind.hasRemotePairing else {
-                     return "No public_key/private_key in the pairing file, pair again from Airlift."
-                 }
-
-                 PairingController.shared.pairingStatus = "Minting lockdown record, tap Trust on the iPhone..."
-                 do {
-                     let record = try LockdownPair.mintRecord(
-                         hosts: LockdownPair.candidateHosts(),
-                         hostID: CompositePairingFile.hostID,
-                         systemBUID: CompositePairingFile.systemBUID,
-                         hostName: "natsuk1")
-                     let rpp = try Data(contentsOf: URL(fileURLWithPath: path))
-                     let merged = try CompositePairingFile.merge(lockdown: record, rpPairing: rpp, udid: kind.udid)
-                     CompositePairingFile.storeLockdownRecord(record, forUDID: kind.udid)
-                     let canonical = PairingController.syncCanonicalPairingFile(from: path)
-                     try merged.write(to: URL(fileURLWithPath: canonical), options: .atomic)
-                     guard PairingFileKind.of(path: canonical).hasLockdown else {
-                         return "Minted \(record.count) bytes but the merged file still has no DeviceCertificate."
-                     }
-                     PairingController.shared.pairingStatus = "Lockdown record stored"
-                     return nil
-                 } catch {
-                     let text = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-                     PairingController.shared.pairingStatus = text
-                     return text
-                 }
-             }
-
-             private func inject(source: String, parent: String, name: String) -> Bool {
-                 guard let pairing = pairingPath(), fileCount(source) > 0 else { return false }
-                 var rc: Int32 = -1
-                 pairing.withCString { pc in
-                     source.withCString { sc in
-                         parent.withCString { tc in
-                             name.withCString { nc in
-                                 rc = al_exploit_inject_folder(pc, sc, tc, nc, nil, nil, nil)
-                             }
-                         }
-                     }
-                 }
-                 return rc == 0
-             }
-
-             func install(slots: [String]) -> Outcome {
-                 if let problem = ensureLockdownRecord() {
-                     return Outcome(ok: false, message: problem, slots: [])
-                 }
-                 let source = sourcePath()
-                 guard fileCount(source) > 0 else {
-                     return Outcome(ok: false, message: "no files in directory: \(source)", slots: [])
-                 }
-                 var written: [String] = []
-                 for slot in slots where inject(source: source, parent: CarrierLabBridge.carrierUserRoot, name: slot) {
-                     written.append(slot)
-                 }
-                 guard written.count == slots.count else {
-                     return Outcome(ok: false, message: "injected \(written.count)/\(slots.count): \(written.joined(separator: ","))", slots: written)
-                 }
-                 let trigger = Bundle.main.bundleURL.appendingPathComponent("CarrierAssets/Docomo_jp.bundle").path
-                 if fileCount(trigger) > 0 {
-                     _ = inject(source: trigger, parent: CarrierLabBridge.carrierRoot, name: "Docomo_jp.bundle")
-                 }
-                 return Outcome(ok: true, message: "written into \(written.joined(separator: ","))", slots: written)
+             static func isTunnelInterface(_ name: String) -> Bool {
+                 name.hasPrefix("utun") || name.hasPrefix("ipsec")
+                     || name.hasPrefix("tap") || name.hasPrefix("ppp")
              }
          }
-         COMPAT_EOF
+         NETSTATUS_EOF
 
-      - name: Write CarrierLabView.swift
+      - name: Drop the stray lockdown layer
         run: |
          set -euo pipefail
-         cat > natsuk1/CarrierLab/CarrierLabView.swift <<'CLVIEW_EOF'
-         import SwiftUI
-         import UIKit
-
-         struct CarrierLabView: View {
-             @ObservedObject private var state = CarrierLabState.shared
-             @EnvironmentObject private var appState: AppState
-
-             @State private var slotText = ""
-             @State private var copied = false
-
-             var body: some View {
-                 List {
-                     Section {
-                         HStack {
-                             Text("Session")
-                             Spacer()
-                             Text(state.session?.status.rawValue ?? "clean").font(.system(.body, design: .monospaced))
-                         }
-                         if let error = state.session?.lastError {
-                             Text(error).font(.footnote).foregroundStyle(.red)
-                         }
-                     } header: { Label("CarrierLab", systemImage: "shippingbox") }
-
-                     Section {
-                         TextField("Carrier1Bundle.bundle", text: $slotText)
-                             .font(.system(.footnote, design: .monospaced))
-                             .autocorrectionDisabled()
-                         Button("Apply Slots") { applySlots() }
-                         Button("Reset Slots To Default") {
-                             slotText = CarrierLabBridge.defaultSlots.joined(separator: ", ")
-                             applySlots()
-                         }
-                     } header: { Label("Targets", systemImage: "folder.badge.gearshape") }
-                     footer: { Text("Contents go into these existing bundles under \(CarrierLabBridge.carrierUserRoot).").font(.caption2) }
-
-                     Section {
-                         Button("Check") { run("check") { CarrierLabSlots.shared.status() } }
-                         Button("Pair Lockdown Record") { run("pair") { CarrierLabSlots.shared.ensureLockdownRecord() ?? "lockdown record stored" } }
-                         Button("Install") { run("install") { install() } }
-                         Button("Reload") { run("reload") { install() } }
-                         Button("Respring") { appState.respring() }
-                     } header: { Label("Actions", systemImage: "wrench") }
-
-                     if !state.logText.isEmpty {
-                         Section {
-                             ScrollView {
-                                 Text(state.logText).font(.system(size: 10, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading)
-                             }
-                             .frame(minHeight: 120, maxHeight: 300)
-                             Button(copied ? "Copied" : "Copy All") {
-                                 UIPasteboard.general.string = state.logText
-                                 copied = true
-                                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
-                             }
-                             Button("Clear", role: .destructive) { state.clearLog() }
-                         } header: { Label("Log", systemImage: "terminal") }
-                     }
-                 }
-                 .listStyle(.insetGrouped)
-                 .navigationTitle("CarrierLab")
-                 .navigationBarTitleDisplayMode(.inline)
-                 .onAppear { slotText = state.slots.joined(separator: ", ") }
-             }
-
-             private func applySlots() {
-                 state.setSlots(slotText.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
-                 state.appendLog("[slots] \(state.slots.joined(separator: ","))")
-             }
-
-             private func install() -> String {
-                 let slots = CarrierLabState.shared.slots
-                 let outcome = CarrierLabSlots.shared.install(slots: slots)
-                 CarrierLabState.shared.save(CarrierLabState.Session(
-                     status: outcome.ok ? .placed : .failed,
-                     startedAt: Date(),
-                     carrierBundlePath: CarrierLabSlots.shared.sourcePath(),
-                     originalBackupPath: nil,
-                     ipccTriggerPath: nil,
-                     lastError: outcome.ok ? nil : outcome.message,
-                     aliases: nil,
-                     slots: outcome.slots))
-                 return outcome.ok ? outcome.message : "failed: \(outcome.message)"
-             }
-
-             private func run(_ name: String, _ work: @escaping () -> String) {
-                 if state.busy { return }
-                 state.setBusy(true)
-                 DispatchQueue.global(qos: .userInitiated).async {
-                     let text = work()
-                     CarrierLabState.shared.appendLog("[\(name)] \(text)")
-                     CarrierLabState.shared.setBusy(false)
-                 }
-             }
-         }
-         CLVIEW_EOF
-
-      - name: Write PairingGenerator.swift
-        run: |
-         set -euo pipefail
-         cat > natsuk1/Helpers/PairingGenerator.swift <<'PAIRINGGEN_EOF'
-         import Foundation
-
-         struct PairingError: LocalizedError {
-             let message: String
-             var errorDescription: String? { message }
-         }
-
-         final class PairingGenerator {
-             static let shared = PairingGenerator()
-             private init() {}
-
-             private let hostName = "natsuk1"
-
-             @discardableResult
-             func generateMergedPairing(rppPath: String, outputPath: String) throws -> String {
-                 LockdownPair.resetCancel()
-
-                 guard let rpp = try? Data(contentsOf: URL(fileURLWithPath: rppPath)), !rpp.isEmpty else {
-                     throw PairingError(message: "pairing record missing at \(rppPath)")
-                 }
-                 let kind = PairingFileKind.of(data: rpp)
-                 guard kind.hasRemotePairing else {
-                     throw PairingError(message: "not an RPPairing record, pair again from Airlift")
-                 }
-                 if kind.hasLockdown {
-                     return try write(rpp, outputPath: outputPath, sourcePath: rppPath)
-                 }
-
-                 var lockdown = CompositePairingFile.cachedLockdownRecord(forUDID: kind.udid)
-                 if lockdown == nil {
-                     PairingController.shared.pairingStatus = "Minting lockdown record..."
-                     do {
-                         let record = try LockdownPair.mintRecord(
-                             hosts: LockdownPair.candidateHosts(),
-                             hostID: CompositePairingFile.hostID,
-                             systemBUID: CompositePairingFile.systemBUID,
-                             hostName: hostName)
-                         CompositePairingFile.storeLockdownRecord(record, forUDID: kind.udid)
-                         lockdown = record
-                     } catch {
-                         if LockdownPair.cancelled { throw PairingError(message: "cancelled") }
-                         throw PairingError(message: (error as? LocalizedError)?.errorDescription
-                                            ?? String(describing: error))
-                     }
-                 }
-                 guard let lockdown else {
-                     throw PairingError(message: "lockdown record unavailable")
-                 }
-
-                 let merged = try CompositePairingFile.merge(lockdown: lockdown, rpPairing: rpp, udid: kind.udid)
-                 let canonical = try write(merged, outputPath: outputPath, sourcePath: rppPath)
-                 PairingController.shared.pairingStatus = "Pairing file ready"
-                 return canonical
-             }
-
-             private func write(_ data: Data, outputPath: String, sourcePath: String) throws -> String {
-                 if outputPath != sourcePath {
-                     try? data.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
-                 }
-                 let canonical = PairingController.syncCanonicalPairingFile(from: sourcePath)
-                 do {
-                     try data.write(to: URL(fileURLWithPath: canonical), options: .atomic)
-                 } catch {
-                     throw PairingError(message: error.localizedDescription)
-                 }
-                 return canonical
-             }
-         }
-         PAIRINGGEN_EOF
+         for stray in \
+           natsuk1/CarrierLab/CarrierLabCompat.swift \
+           natsuk1/Helpers/LockdownPair.swift \
+           natsuk1/Helpers/CompositePairingFile.swift
+         do
+           if git ls-files --error-unmatch "$stray" >/dev/null 2>&1; then
+             git rm -q "$stray"
+             echo "removed $stray"
+           fi
+         done
+         if git ls-files --error-unmatch natsuk1/CarrierLab/CarrierLabView.swift >/dev/null 2>&1 \
+            && grep -q 'CarrierLabCompat\|CarrierLabSlots' natsuk1/CarrierLab/CarrierLabView.swift; then
+           git checkout HEAD -- natsuk1/CarrierLab/CarrierLabView.swift
+           echo "restored CarrierLabView.swift from HEAD"
+         fi
 
       - name: Verify sources
         run: |
          set -euo pipefail
          fail() { echo "::error::$1"; exit 1; }
-         grep -q 'static func cancelMinting' natsuk1/CarrierLab/CarrierLabCompat.swift || fail 'natsuk1/CarrierLab/CarrierLabCompat.swift is stale: static func cancelMinting'
-         grep -q 'al_exploit_inject_folder' natsuk1/CarrierLab/CarrierLabCompat.swift || fail 'natsuk1/CarrierLab/CarrierLabCompat.swift is stale: al_exploit_inject_folder'
-         grep -q 'Copy All' natsuk1/CarrierLab/CarrierLabView.swift || fail 'natsuk1/CarrierLab/CarrierLabView.swift is stale: Copy All'
-         grep -q 'Pair Lockdown Record' natsuk1/CarrierLab/CarrierLabView.swift || fail 'natsuk1/CarrierLab/CarrierLabView.swift is stale: Pair Lockdown Record'
-         grep -q 'func ensureLockdownRecord' natsuk1/CarrierLab/CarrierLabCompat.swift || fail 'natsuk1/CarrierLab/CarrierLabCompat.swift is stale: func ensureLockdownRecord'
-         grep -q 'LockdownPair.mintRecord' natsuk1/CarrierLab/CarrierLabCompat.swift || fail 'natsuk1/CarrierLab/CarrierLabCompat.swift is stale: LockdownPair.mintRecord'
-         grep -q 'CompositePairingFile.merge' natsuk1/CarrierLab/CarrierLabCompat.swift || fail 'natsuk1/CarrierLab/CarrierLabCompat.swift is stale: CompositePairingFile.merge'
-         grep -q 'LockdownPair.mintRecord' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift is stale: LockdownPair.mintRecord'
-         grep -q 'func mintRecord' natsuk1/Helpers/LockdownPair.swift || fail 'natsuk1/Helpers/LockdownPair.swift is stale: func mintRecord'
-         grep -q 'static func merge' natsuk1/Helpers/CompositePairingFile.swift || fail 'natsuk1/Helpers/CompositePairingFile.swift is stale: static func merge'
-         grep -q 'LockdownPair.cancelled' natsuk1/Helpers/AirliftBridge.swift || fail 'natsuk1/Helpers/AirliftBridge.swift is stale: LockdownPair.cancelled'
-         grep -q 'idevice_shim.h' natsuk1/Support/bridging.h || fail 'natsuk1/Support/bridging.h is stale: idevice_shim.h'
-         ! grep -q 'lockdownd_connect_rsd' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift still has lockdownd_connect_rsd'
-         ! grep -q 'static func cancelMinting' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift still has static func cancelMinting'
-         ! grep -q 'CarrierLabInstaller' natsuk1/CarrierLab/CarrierLabView.swift || fail 'natsuk1/CarrierLab/CarrierLabView.swift still has CarrierLabInstaller'
-         ! grep -q 'Task' natsuk1/CarrierLab/CarrierLabCompat.swift || fail 'natsuk1/CarrierLab/CarrierLabCompat.swift still has Task'
+         grep -q 'func loopbackVPNUp' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func loopbackVPNUp'
+         grep -q 'routeCarriesTunnel' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: routeCarriesTunnel'
+         grep -q 'routeSource' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: routeSource'
+         grep -q 'defaultRouteProbe' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: defaultRouteProbe'
+         grep -q 'func tunnelIP' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func tunnelIP'
+         grep -q 'func deviceIP' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func deviceIP'
+         grep -q 'func tunnelPairs' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func tunnelPairs'
+         grep -q 'func isTunnelInterface' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func isTunnelInterface'
+         ! grep -q 'hasLockdown' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift still has hasLockdown'
+         ! grep -q 'DeviceCertificate' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift still has DeviceCertificate'
+         ! grep -rq 'CarrierLabCompat' natsuk1/ || fail 'CarrierLabCompat is still referenced'
 
       - name: Commit
         run: |
@@ -370,7 +252,7 @@ jobs:
          git config user.email "github-actions[bot]@users.noreply.github.com"
          git add -A
          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-         git commit -q -m "fix: on-device lockdown record minting [skip ci]"
+         git commit -q -m "fix: verify the loopback tunnel by route, not by interface [skip ci]"
          git push || true
 
       - name: Generate project
