@@ -241,6 +241,8 @@ jobs:
          }
          restore natsuk1/Helpers/AirliftBridge.swift 'PairingFileKind'
          restore natsuk1/Helpers/PairingGenerator.swift 'LockdownPair'
+         restore natsuk1/CarrierLab/CarrierLabBridge.swift 'PairingFileKind'
+         restore natsuk1/CarrierLab/CarrierLabInstaller.swift 'PairingFileKind'
          restore natsuk1/CarrierLab/CarrierLabState.swift 'CarrierLabBridge.defaultSlots'
          restore natsuk1/CarrierLab/CarrierLabView.swift 'CarrierLabSlots'
 
@@ -269,8 +271,12 @@ jobs:
          grep -q 'func deviceIP' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func deviceIP'
          grep -q 'func hasPairing' natsuk1/Helpers/AirliftBridge.swift || fail 'natsuk1/Helpers/AirliftBridge.swift is stale: func hasPairing'
          grep -q 'func generateMergedPairing' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift is stale: func generateMergedPairing'
+         grep -q 'func injectFolder' natsuk1/CarrierLab/CarrierLabBridge.swift || fail 'natsuk1/CarrierLab/CarrierLabBridge.swift is stale: func injectFolder'
+         grep -q 'CarrierLabBridge.shared' natsuk1/CarrierLab/CarrierLabInstaller.swift || fail 'natsuk1/CarrierLab/CarrierLabInstaller.swift is stale: CarrierLabBridge.shared'
          grep -q 'CarrierLabInstaller' natsuk1/CarrierLab/CarrierLabView.swift || fail 'natsuk1/CarrierLab/CarrierLabView.swift is stale: CarrierLabInstaller'
-         ! grep -rqE 'PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting' natsuk1/ || fail 'the lockdown layer is still referenced'
+         if grep -rnE 'PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting' natsuk1/; then
+           fail 'the lockdown layer is still referenced (matches printed above)'
+         fi
 
       - name: Commit
         run: |
