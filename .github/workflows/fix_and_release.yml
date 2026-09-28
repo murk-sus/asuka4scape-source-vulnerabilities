@@ -1,6 +1,7 @@
-name: j
+name: d
 
 on:
+  push:
   workflow_dispatch:
     inputs:
       version:
@@ -28,6 +29,26 @@ jobs:
          set -e
          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
          command -v ldid >/dev/null 2>&1 || brew install ldid
+
+      - name: Restore natsuk1 from the last layer-free commit
+        run: |
+         set -euo pipefail
+         LAYER='PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting'
+         BASE=""
+         for c in $(git rev-list --max-count=200 HEAD); do
+           if [ -z "$(git grep -lE "$LAYER" "$c" -- natsuk1 2>/dev/null)" ]; then
+             BASE="$c"
+             break
+           fi
+         done
+         if [ -z "$BASE" ]; then
+           echo "::error::no commit in the last 200 is free of the lockdown layer"
+           exit 1
+         fi
+         echo "layer-free baseline: $BASE"
+         git checkout "$BASE" -- natsuk1
+         echo "BASE=$BASE" >> "$GITHUB_ENV"
+         echo "natsuk1/ restored from $BASE"
 
       - name: Write NetworkStatus.swift
         run: |
@@ -210,61 +231,17 @@ jobs:
          }
          NETSTATUS_EOF
 
-      - name: Restore the pass-through files from history
+      - name: Drop layer files that never landed
         run: |
          set -euo pipefail
          LAYER='PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting'
-         SOURCES="\
-           natsuk1/Helpers/AirliftBridge.swift \
-           natsuk1/Helpers/PairingGenerator.swift \
-           natsuk1/CarrierLab/CarrierLabBridge.swift \
-           natsuk1/CarrierLab/CarrierLabInstaller.swift \
-           natsuk1/CarrierLab/CarrierLabState.swift \
-           natsuk1/CarrierLab/CarrierLabView.swift"
-         clean() {
-           c="$1"
-           for f in $SOURCES; do
-             git cat-file -e "$c:$f" 2>/dev/null || continue
-             if git show "$c:$f" | grep -qE "$LAYER"; then
-               return 1
-             fi
-           done
-           return 0
-         }
-         ref=""
-         for c in $(git rev-list --max-count=200 HEAD); do
-           if clean "$c"; then
-             ref="$c"
-             break
+         while IFS= read -r f; do
+           if git cat-file -e "$BASE:$f" 2>/dev/null; then continue; fi
+           if grep -qE "$LAYER" "$f"; then
+             rm -f "$f"
+             echo "removed un-delivered layer file $f"
            fi
-         done
-         if [ -z "$ref" ]; then
-           echo "::error::no commit in the last 200 is free of the lockdown layer"
-           exit 1
-         fi
-         echo "layer-free baseline: $ref"
-         for f in $SOURCES; do
-           if git cat-file -e "$ref:$f" 2>/dev/null; then
-             git checkout "$ref" -- "$f"
-             echo "restored $f"
-           else
-             echo "::warning::$f is absent at $ref, left as is"
-           fi
-         done
-
-      - name: Drop the undelivered lockdown files
-        run: |
-         set -euo pipefail
-         for stray in \
-           natsuk1/Helpers/LockdownPair.swift \
-           natsuk1/Helpers/CompositePairingFile.swift \
-           natsuk1/CarrierLab/CarrierLabCompat.swift
-         do
-           if [ -e "$stray" ]; then
-             rm -f "$stray"
-             echo "removed $stray"
-           fi
-         done
+         done < <(find natsuk1 -name '*.swift' -type f)
 
       - name: Verify sources
         run: |
@@ -276,13 +253,17 @@ jobs:
          grep -q 'func tunnelIP' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func tunnelIP'
          grep -q 'func deviceIP' natsuk1/Helpers/NetworkStatus.swift || fail 'natsuk1/Helpers/NetworkStatus.swift is stale: func deviceIP'
          grep -q 'func hasPairing' natsuk1/Helpers/AirliftBridge.swift || fail 'natsuk1/Helpers/AirliftBridge.swift is stale: func hasPairing'
+         grep -q 'hasPairing()' natsuk1/Views/AirliftView.swift || fail 'natsuk1/Views/AirliftView.swift is stale: hasPairing()'
          grep -q 'func generateMergedPairing' natsuk1/Helpers/PairingGenerator.swift || fail 'natsuk1/Helpers/PairingGenerator.swift is stale: func generateMergedPairing'
          grep -q 'func injectFolder' natsuk1/CarrierLab/CarrierLabBridge.swift || fail 'natsuk1/CarrierLab/CarrierLabBridge.swift is stale: func injectFolder'
-         grep -q 'CarrierLabBridge.shared' natsuk1/CarrierLab/CarrierLabInstaller.swift || fail 'natsuk1/CarrierLab/CarrierLabInstaller.swift is stale: CarrierLabBridge.shared'
-         grep -q 'struct Session' natsuk1/CarrierLab/CarrierLabState.swift || fail 'natsuk1/CarrierLab/CarrierLabState.swift is stale: struct Session'
-         grep -q 'CarrierLabInstaller' natsuk1/CarrierLab/CarrierLabView.swift || fail 'natsuk1/CarrierLab/CarrierLabView.swift is stale: CarrierLabInstaller'
          if grep -rnE 'PairingFileKind|LockdownPair|CompositePairingFile|CarrierLabSlots|carrierUserRoot|defaultSlots|hasLockdown|cancelMinting' natsuk1/; then
            fail 'the lockdown layer is still referenced (matches printed above)'
+         fi
+         CHANGED=$(git diff --name-only "$BASE" -- natsuk1)
+         EXTRA=$(printf '%s\n' "$CHANGED" | grep -v '^natsuk1/Helpers/NetworkStatus.swift$' || true)
+         if [ -n "$EXTRA" ]; then
+           printf '%s\n' "$EXTRA"
+           fail 'files above are not the baseline version, so View and Bridge can disagree'
          fi
 
       - name: Commit
@@ -292,7 +273,7 @@ jobs:
          git config user.email "github-actions[bot]@users.noreply.github.com"
          git add -A
          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-         git commit -q -m "fix: restore pass-through pairing, verify the tunnel by route [skip ci]"
+         git commit -q -m "fix: restore natsuk1 from the last compiling commit [skip ci]"
          git push || true
 
       - name: Generate project
