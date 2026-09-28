@@ -14,7 +14,6 @@ final class CarrierLabState: ObservableObject, @unchecked Sendable {
         var ipccTriggerPath: String?
         var lastError: String?
         var aliases: [String]?
-        var slots: [String]?
     }
 
     @Published private(set) var session: Session?
@@ -23,33 +22,27 @@ final class CarrierLabState: ObservableObject, @unchecked Sendable {
     @Published private(set) var resourcesOK: Bool = false
     @Published private(set) var busy: Bool = false
     @Published private(set) var logText: String = ""
-    @Published private(set) var slots: [String] = CarrierLabBridge.defaultSlots
 
     private let root: URL
     private let stateURL: URL
     private let backupDir: URL
-    private let slotsKey = "natsuk1_carrierlab_slots"
 
     private init() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         root = docs.appendingPathComponent("carrierlab", isDirectory: true)
         stateURL = root.appendingPathComponent("state.json")
         backupDir = root.appendingPathComponent("backup", isDirectory: true)
         try? FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
-        if let stored = UserDefaults.standard.array(forKey: slotsKey) as? [String], !stored.isEmpty {
-            slots = stored
-        }
         load()
     }
 
     func load() {
         guard let data = try? Data(contentsOf: stateURL),
               let s = try? JSONDecoder().decode(Session.self, from: data) else {
-            DispatchQueue.main.async { self.session = nil }
+            session = nil
             return
         }
-        DispatchQueue.main.async { self.session = s }
+        session = s
     }
 
     func save(_ s: Session) {
@@ -91,16 +84,6 @@ final class CarrierLabState: ObservableObject, @unchecked Sendable {
         DispatchQueue.main.async { self.busy = v }
     }
 
-    func setSlots(_ v: [String]) {
-        let cleaned = v.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        let unique = cleaned.reduce(into: [String]()) { acc, s in if !acc.contains(s) { acc.append(s) } }
-        DispatchQueue.main.async {
-            self.slots = unique.isEmpty ? CarrierLabBridge.defaultSlots : unique
-            UserDefaults.standard.set(self.slots, forKey: self.slotsKey)
-        }
-    }
-
     func appendLog(_ s: String) {
         DispatchQueue.main.async {
             self.logText += s + "\n"
@@ -113,4 +96,5 @@ final class CarrierLabState: ObservableObject, @unchecked Sendable {
     }
 
     func backupURL() -> URL { backupDir }
+    func rootURL() -> URL { root }
 }

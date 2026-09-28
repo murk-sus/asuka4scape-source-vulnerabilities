@@ -1,67 +1,47 @@
 import Foundation
 
-struct PairingError: LocalizedError {
-    let message: String
-    var errorDescription: String? { message }
-}
-
 final class PairingGenerator {
     static let shared = PairingGenerator()
     private init() {}
 
-    private let hostName = "natsuk1"
+    enum GeneratorError: LocalizedError {
+        case missingFile(String)
+        case notAPlist(String)
+        case writeFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .missingFile(let s): return "Pairing file missing: \(s)"
+            case .notAPlist(let s): return "Pairing file is not a plist: \(s)"
+            case .writeFailed(let s): return "Write failed: \(s)"
+            }
+        }
+    }
 
     @discardableResult
     func generateMergedPairing(rppPath: String, outputPath: String) throws -> String {
-        LockdownPair.resetCancel()
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: rppPath) else {
+            throw GeneratorError.missingFile(rppPath)
+        }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: rppPath)), !data.isEmpty else {
+            throw GeneratorError.missingFile("empty or unreadable: \(rppPath)")
+        }
+        guard let plist = try? PropertyListSerialization.propertyList(
+            from: data, options: [], format: nil) as? [String: Any] else {
+            throw GeneratorError.notAPlist(rppPath)
+        }
+        guard !plist.isEmpty else {
+            throw GeneratorError.notAPlist("empty plist: \(rppPath)")
+        }
 
-        guard let rpp = try? Data(contentsOf: URL(fileURLWithPath: rppPath)), !rpp.isEmpty else {
-            throw PairingError(message: "pairing record missing at \(rppPath)")
-        }
-        let kind = PairingFileKind.of(data: rpp)
-        guard kind.hasRemotePairing else {
-            throw PairingError(message: "not an RPPairing record, pair again from Airlift")
-        }
-        if kind.hasLockdown {
-            return try write(rpp, outputPath: outputPath, sourcePath: rppPath)
-        }
-
-        var lockdown = CompositePairingFile.cachedLockdownRecord(forUDID: kind.udid)
-        if lockdown == nil {
-            PairingController.shared.pairingStatus = "Minting lockdown record..."
+        let canonical = PairingController.syncCanonicalPairingFile(from: rppPath)
+        if outputPath != canonical {
             do {
-                let record = try LockdownPair.mintRecord(
-                    hosts: LockdownPair.candidateHosts(),
-                    hostID: CompositePairingFile.hostID,
-                    systemBUID: CompositePairingFile.systemBUID,
-                    hostName: hostName)
-                CompositePairingFile.storeLockdownRecord(record, forUDID: kind.udid)
-                lockdown = record
+                try data.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
             } catch {
-                if LockdownPair.cancelled { throw PairingError(message: "cancelled") }
-                throw PairingError(message: (error as? LocalizedError)?.errorDescription
-                                   ?? String(describing: error))
+                throw GeneratorError.writeFailed(error.localizedDescription)
             }
-        }
-        guard let lockdown else {
-            throw PairingError(message: "lockdown record unavailable")
-        }
-
-        let merged = try CompositePairingFile.merge(lockdown: lockdown, rpPairing: rpp, udid: kind.udid)
-        let canonical = try write(merged, outputPath: outputPath, sourcePath: rppPath)
-        PairingController.shared.pairingStatus = "Pairing file ready"
-        return canonical
-    }
-
-    private func write(_ data: Data, outputPath: String, sourcePath: String) throws -> String {
-        if outputPath != sourcePath {
-            try? data.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
-        }
-        let canonical = PairingController.syncCanonicalPairingFile(from: sourcePath)
-        do {
-            try data.write(to: URL(fileURLWithPath: canonical), options: .atomic)
-        } catch {
-            throw PairingError(message: error.localizedDescription)
         }
         return canonical
     }
